@@ -1,8 +1,9 @@
-from uipc.backend import Buffer
-from uipc.backend import BufferView
-import warp as pywarp
 from typing import Any
+
+import warp as pywarp
 import warp.types as wtypes
+
+from uipc.backend import Buffer, BufferView
 
 
 class WarpBuffer:
@@ -22,7 +23,7 @@ class WarpBuffer:
 
     @staticmethod
     def _a2b(a: pywarp.array) -> BufferView:
-        assert a.ndim == 1, "Only 1D arrays are supported, got {}D".format(a.ndim)
+        assert a.ndim == 1, f"Only 1D arrays are supported, got {a.ndim}D"
         ptr: int = 0
         if a.ptr is not None:
             ptr = a.ptr
@@ -35,7 +36,7 @@ class WarpBuffer:
             backend_name=str(a.device),
         )
 
-    def __init__(self, size: int, dtype: Any, device: str = "cpu"):
+    def __init__(self, size: int, dtype: Any, device: pywarp.Device | str = "cpu"):
         """
         Initialize a WarpBuffer with the given size, dtype, and device.
         """
@@ -75,10 +76,8 @@ def buffer_view(array: pywarp.array) -> BufferView:
     return WarpBuffer._a2b(array)
 
 
-def buffer(size: int, dtype: Any, device: str = "cpu") -> WarpBuffer:
+def buffer(size: int, dtype: Any, device: pywarp.Device | str = "cpu") -> WarpBuffer:
     """
     Create a WarpBuffer with the given size, dtype, and device.
     """
     return WarpBuffer(size, dtype, device)
-
-
