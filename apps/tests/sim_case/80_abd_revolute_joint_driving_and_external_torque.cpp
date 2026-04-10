@@ -170,7 +170,7 @@ TEST_CASE("80_abd_revolute_joint_driving_and_external_torque", "[abd][joint][dri
     SceneIO sio{scene};
     sio.write_surface(fmt::format("{}scene_surface{}.obj", output_path, world.frame()));
 
-    while(world.frame() < 50)
+    while(world.frame() < 200)
     {
         world.advance();
         REQUIRE(world.is_valid());

@@ -14,6 +14,7 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
 
     auto output_path = AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE);
 
+    logger::set_level(Logger::Level::warn);
     Engine engine{"cuda", output_path};
     World  world{engine};
 
@@ -22,7 +23,7 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
     config["contact"]["enable"] = true;
     test::Scene::dump_config(config, output_path);
 
-    Scene scene{config};
+    Scene                    scene{config};
     S<SimplicialComplexSlot> joint_geo_slot;
     {
         scene.contact_tabular().default_model(0.5, 1.0_GPa);
@@ -99,9 +100,9 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
 
         abrj.apply_to(joint_mesh, l_geo_slots, l_instance_id, r_geo_slots, r_instance_id, strength_ratios);
 
-        auto joints = scene.objects().create("joint");
+        auto joints        = scene.objects().create("joint");
         auto [jgeo, jrest] = joints->geometries().create(joint_mesh);
-        joint_geo_slot = jgeo;
+        joint_geo_slot     = jgeo;
     }
 
     world.init(scene);

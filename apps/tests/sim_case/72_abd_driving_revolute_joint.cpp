@@ -83,10 +83,10 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
 
         // Each edge defines a joint axis (2 points per edge)
         vector<Vector2i> Es = {{0, 1}, {2, 3}};
-        vector<Vector3>  Vs = {{0, 0, 0.5 - 0.5},   //
-                               {0, 0, 0.5 + 0.5},   //
-                               {0, 0, -0.5 - 0.5},  //
-                               {0, 0, -0.5 + 0.5}};
+        vector<Vector3>  Vs = {{0, 0, 0},  //
+                               {0, 0, 1},  //
+                               {0, 0, 0},  //
+                               {0, 0, -1}};
 
         auto joint_mesh = linemesh(Vs, Es);
         label_surface(joint_mesh);  // visualize the joint
@@ -108,7 +108,7 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
             if(init_angle)
             {
                 auto init_angle_view = view(*init_angle);
-                std::fill(init_angle_view.begin(), init_angle_view.end(), to_radians(10));
+                std::fill(init_angle_view.begin(), init_angle_view.end(), 0);
             }
         }
 

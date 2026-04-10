@@ -8,6 +8,8 @@
 #include <utils/matrix_assembler.h>
 #include <uipc/common/enumerate.h>
 #include <affine_body/utils.h>
+#include <affine_body/affine_body_external_force_reporter.h>
+#include <muda/ext/eigen/atomic.h>
 #include <numbers>
 
 namespace uipc::backend::cuda
@@ -1070,5 +1072,187 @@ Edge             = ({}, {}))",
     U64 get_uid() const noexcept override { return ConstraintUID; }
 };
 REGISTER_SIM_SYSTEM(AffineBodyDrivingPrismaticJoint);
+
+// ============================================================================
+// AffineBodyPrismaticJointExternalForceConstraint
+// Reuses body_ids, rest_ts, init_distances from AffineBodyPrismaticJoint.
+// Only stores external-force-specific data (forces, is_constrained).
+// ============================================================================
+
+class AffineBodyPrismaticJointExternalForceConstraint final : public InterAffineBodyConstraint
+{
+  public:
+    using InterAffineBodyConstraint::InterAffineBodyConstraint;
+    static constexpr U64 ConstraintUID = 667;
+
+    SimSystemSlot<AffineBodyPrismaticJoint> prismatic_joint;
+
+    vector<Float>  h_forces;
+    vector<IndexT> h_is_constrained;
+
+    muda::DeviceBuffer<Float>  forces_buf;
+    muda::DeviceBuffer<IndexT> is_constrained_buf;
+
+    void do_build(BuildInfo& info) override
+    {
+        prismatic_joint = require<AffineBodyPrismaticJoint>();
+    }
+
+    U64 get_uid() const noexcept override { return ConstraintUID; }
+
+    void do_init(InterAffineBodyAnimator::FilteredInfo& info) override
+    {
+        auto geo_slots = world().scene().geometries();
+
+        info.for_each(
+            geo_slots,
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
+            {
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyPrismaticJointExternalForceConstraint: geometry must be SimplicialComplex");
+
+                auto is_constrained = sc->edges().find<IndexT>("external_force/is_constrained");
+                UIPC_ASSERT(is_constrained, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force/is_constrained' attribute on `edges`");
+                auto is_constrained_view = is_constrained->view();
+
+                auto external_force = sc->edges().find<Float>("external_force");
+                UIPC_ASSERT(external_force, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force' attribute on `edges`");
+                auto external_force_view = external_force->view();
+
+                for(SizeT i = 0; i < sc->edges().size(); ++i)
+                {
+                    h_is_constrained.push_back(is_constrained_view[i]);
+                    h_forces.push_back(external_force_view[i]);
+                }
+            });
+
+        SizeT N = h_forces.size();
+        if(N > 0)
+        {
+            forces_buf.copy_from(h_forces);
+            is_constrained_buf.copy_from(h_is_constrained);
+        }
+    }
+
+    void do_step(InterAffineBodyAnimator::FilteredInfo& info) override
+    {
+        auto geo_slots = world().scene().geometries();
+
+        SizeT offset = 0;
+        info.for_each(
+            geo_slots,
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
+            {
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyPrismaticJointExternalForceConstraint: geometry must be SimplicialComplex");
+
+                auto is_constrained = sc->edges().find<IndexT>("external_force/is_constrained");
+                UIPC_ASSERT(is_constrained, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force/is_constrained' attribute on `edges`");
+                auto is_constrained_view = is_constrained->view();
+
+                auto external_force = sc->edges().find<Float>("external_force");
+                UIPC_ASSERT(external_force, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force' attribute on `edges`");
+                auto external_force_view = external_force->view();
+
+                auto Es = sc->edges().topo().view();
+                for(auto&& [i, e] : enumerate(Es))
+                {
+                    h_is_constrained[offset] = is_constrained_view[i];
+                    h_forces[offset]         = external_force_view[i];
+                    ++offset;
+                }
+            });
+
+        SizeT N = h_forces.size();
+        if(N > 0)
+        {
+            is_constrained_buf.copy_from(h_is_constrained);
+            forces_buf.copy_from(h_forces);
+        }
+    }
+
+    void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
+    {
+        info.energy_count(0);
+        info.gradient_count(0);
+        if(!info.gradient_only())
+            info.hessian_count(0);
+    }
+
+    void do_compute_energy(InterAffineBodyAnimator::ComputeEnergyInfo& info) override {}
+    void do_compute_gradient_hessian(InterAffineBodyAnimator::GradientHessianInfo& info) override {}
+};
+REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointExternalForceConstraint);
+
+// ============================================================================
+// AffineBodyPrismaticJointExternalForce
+// Applies external forces along prismatic joint axes.
+// ============================================================================
+
+class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalForceReporter
+{
+  public:
+    static constexpr U64 ReporterUID = 667;
+    using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
+
+    SimSystemSlot<AffineBodyDynamics>                              affine_body_dynamics;
+    SimSystemSlot<AffineBodyPrismaticJointExternalForceConstraint> constraint;
+
+    void do_build(BuildInfo& info) override
+    {
+        affine_body_dynamics = require<AffineBodyDynamics>();
+        constraint           = require<AffineBodyPrismaticJointExternalForceConstraint>();
+    }
+
+    U64 get_uid() const noexcept override { return ReporterUID; }
+
+    void do_init() override {}
+
+    void do_step(ExternalForceInfo& info) override
+    {
+        SizeT force_count = constraint->forces_buf.size();
+        if(force_count == 0)
+            return;
+
+        using namespace muda;
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(force_count,
+                   [external_forces = info.external_forces().viewer().name("external_forces"),
+                    body_ids = constraint->prismatic_joint->body_ids.cviewer().name("body_ids"),
+                    forces   = constraint->forces_buf.cviewer().name("forces"),
+                    rest_tangents = constraint->prismatic_joint->rest_ts.cviewer().name("rest_tangents"),
+                    constrained_flags = constraint->is_constrained_buf.cviewer().name("constrained_flags"),
+                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
+                   {
+                       if(constrained_flags(i) == 0)
+                           return;
+
+                       Vector2i bids = body_ids(i);
+                       Float    f    = forces(i);
+
+                       const Vector6& t_bar = rest_tangents(i);
+
+                       Vector12 q_i = qs(bids(0));
+                       Vector12 q_j = qs(bids(1));
+
+                       ABDJacobi JT[2] = {ABDJacobi{t_bar.segment<3>(0)},
+                                          ABDJacobi{t_bar.segment<3>(3)}};
+                       Vector3   t_i   = JT[0].vec_x(q_i);
+                       Vector3   t_j   = JT[1].vec_x(q_j);
+
+                       // Build 12D force vectors: +f*t to body_i, -f*t to body_j
+                       Vector12 F_i      = Vector12::Zero();
+                       F_i.segment<3>(0) = f * t_i;
+
+                       Vector12 F_j      = Vector12::Zero();
+                       F_j.segment<3>(0) = -f * t_j;
+
+                       eigen::atomic_add(external_forces(bids(0)), F_i);
+                       eigen::atomic_add(external_forces(bids(1)), F_j);
+                   });
+    }
+};
+REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointExternalForce);
 
 }  // namespace uipc::backend::cuda
