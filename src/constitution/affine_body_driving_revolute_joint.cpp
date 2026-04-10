@@ -82,22 +82,6 @@ void AffineBodyDrivingRevoluteJoint::apply_to(geometry::SimplicialComplex& sc,
     }
     auto aim_angle_view = view(*aim_angle);
     std::ranges::fill(aim_angle_view, 0.0);
-
-    auto angle = sc.edges().find<Float>("angle");
-    if(!angle)
-    {
-        angle = sc.edges().create<Float>("angle", 0.0);
-    }
-    auto angle_view = view(*angle);
-    std::ranges::fill(angle_view, 0.0);
-
-    auto init_angle = sc.edges().find<Float>("init_angle");
-    if(!init_angle)
-    {
-        init_angle = sc.edges().create<Float>("init_angle");
-    }
-    auto init_angle_view = view(*init_angle);
-    std::ranges::fill(init_angle_view, 0.0);
 }
 
 

@@ -23,6 +23,7 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
     test::Scene::dump_config(config, output_path);
 
     Scene scene{config};
+    S<SimplicialComplexSlot> joint_geo_slot;
     {
         scene.contact_tabular().default_model(0.5, 1.0_GPa);
 
@@ -99,21 +100,40 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
         abrj.apply_to(joint_mesh, l_geo_slots, l_instance_id, r_geo_slots, r_instance_id, strength_ratios);
 
         auto joints = scene.objects().create("joint");
-        joints->geometries().create(joint_mesh);
+        auto [jgeo, jrest] = joints->geometries().create(joint_mesh);
+        joint_geo_slot = jgeo;
     }
 
     world.init(scene);
     REQUIRE(world.is_valid());
 
+    auto print_angles = [&]()
+    {
+        auto* sc = joint_geo_slot->geometry().as<SimplicialComplex>();
+        if(!sc)
+            return;
+        auto angle = sc->edges().find<Float>("angle");
+        if(!angle)
+            return;
+        auto angle_view = angle->view();
+        for(SizeT i = 0; i < angle_view.size(); ++i)
+        {
+            printf("frame=%llu joint=%zu angle=%.4f\n",
+                   (unsigned long long)world.frame(),
+                   i,
+                   angle_view[i]);
+        }
+    };
+
     SceneIO sio{scene};
-    sio.write_surface(
-        fmt::format("{}scene_surface{}.obj", output_path, world.frame()));
+    sio.write_surface(fmt::format("{}scene_surface{}.obj", output_path, world.frame()));
 
     while(world.frame() < 100)
     {
         world.advance();
         REQUIRE(world.is_valid());
         world.retrieve();
+        print_angles();
         sio.write_surface(
             fmt::format("{}scene_surface{}.obj", output_path, world.frame()));
     }

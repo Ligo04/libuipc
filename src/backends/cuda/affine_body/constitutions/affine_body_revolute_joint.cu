@@ -7,6 +7,8 @@
 #include <affine_body/inter_affine_body_constraint.h>
 #include <affine_body/constitutions/affine_body_revolute_joint_function.h>
 #include <uipc/common/enumerate.h>
+#include <affine_body/utils.h>
+
 namespace uipc::backend::cuda
 {
 class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
@@ -27,24 +29,45 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
     vector<Vector12> h_rest_positions;
     vector<Float>    h_strength_ratio;
 
+    // Angle tracking (for all revolute joints)
+    OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
+    vector<Vector6>               h_rest_axis;
+    vector<Vector6>               h_rest_normals;
+    vector<Float>                 h_init_angles;
+    vector<Float>                 h_current_angles;
+
     muda::DeviceBuffer<Vector2i> body_ids;
     muda::DeviceBuffer<Vector12> rest_positions;
     muda::DeviceBuffer<Float>    strength_ratio;
+
+    muda::DeviceBuffer<Vector6> rest_axis;
+    muda::DeviceBuffer<Vector6> rest_normals;
+    muda::DeviceBuffer<Float>   init_angles;
+    muda::DeviceBuffer<Float>   current_angles;
+
+    BufferDump curr_angles_dump;
 
 
     void do_build(BuildInfo& info) override
     {
         affine_body_dynamics = require<AffineBodyDynamics>();
+        on_write_scene([this]() { write_scene(); });
     }
 
     void do_init(FilteredInfo& info) override
     {
         auto geo_slots = world().scene().geometries();
 
+        h_geo_joint_offsets_counts.resize(info.inter_geo_infos().size());
+
         list<Vector2i> body_ids_list;
         list<Vector12> rest_positions_list;
         list<Float>    strength_ratio_list;
+        list<Vector6>  rest_axis_list;
+        list<Vector6>  rest_normals_list;
+        list<Float>    init_angles_list;
 
+        IndexT geo_index = 0;
         info.for_each(
             geo_slots,
             [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
@@ -58,6 +81,8 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
 
                 auto sc = geo.as<geometry::SimplicialComplex>();
                 UIPC_ASSERT(sc, "AffineBodyRevoluteJoint: Geometry must be a simplicial complex");
+
+                h_geo_joint_offsets_counts.counts()[geo_index] = sc->edges().size();
 
                 auto l_geo_id = sc->edges().find<IndexT>("l_geo_id");
                 UIPC_ASSERT(l_geo_id, "AffineBodyRevoluteJoint: Geometry must have 'l_geo_id' attribute on `edges`");
@@ -78,6 +103,10 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
                 auto strength_ratio = sc->edges().find<Float>("strength_ratio");
                 UIPC_ASSERT(strength_ratio, "AffineBodyRevoluteJoint: Geometry must have 'strength_ratio' attribute on `edges`");
                 auto strength_ratio_view = strength_ratio->view();
+
+                auto init_angle_attr = sc->edges().find<Float>("init_angle");
+                UIPC_ASSERT(init_angle_attr, "AffineBodyRevoluteJoint: Geometry must have 'init_angle' attribute on `edges`");
+                auto init_angle_view = init_angle_attr->view();
 
                 auto Es = sc->edges().topo().view();
                 auto Ps = sc->positions().view();
@@ -119,12 +148,17 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
                     Transform RT{right_sc->transforms().view()[r_iid]};
 
                     Vector12 rest_pos;
+                    Vector3  t;
                     if(use_local)
                     {
                         rest_pos.segment<3>(0) = l_pos0_attr->view()[i];
                         rest_pos.segment<3>(3) = l_pos1_attr->view()[i];
                         rest_pos.segment<3>(6) = r_pos0_attr->view()[i];
                         rest_pos.segment<3>(9) = r_pos1_attr->view()[i];
+
+                        Vector3 lp0 = LT * l_pos0_attr->view()[i];
+                        Vector3 lp1 = LT * l_pos1_attr->view()[i];
+                        t           = (lp1 - lp0).normalized();
                     }
                     else
                     {
@@ -148,20 +182,42 @@ Edge             = ({}, {}))",
                                     e(1));
 
                         Vector3 HalfAxis = Dir.normalized() / 2;
-                        P0 = mid - HalfAxis;
-                        P1 = mid + HalfAxis;
+                        P0               = mid - HalfAxis;
+                        P1               = mid + HalfAxis;
 
                         rest_pos.segment<3>(0) = LT.inverse() * P0;
                         rest_pos.segment<3>(3) = LT.inverse() * P1;
                         rest_pos.segment<3>(6) = RT.inverse() * P0;
                         rest_pos.segment<3>(9) = RT.inverse() * P1;
+
+                        t = (P1 - P0).normalized();
                     }
                     rest_positions_list.push_back(rest_pos);
+
+                    Vector3 n;
+                    Vector3 b;
+                    // Compute rest axis and normal for angle tracking
+                    orthonormal_basis(t, n, b);
+
+                    Vector6 rest_ax;
+                    rest_ax.segment<3>(0) = LT.rotation().inverse() * b;
+                    rest_ax.segment<3>(3) = RT.rotation().inverse() * b;
+                    rest_axis_list.push_back(rest_ax);
+
+                    Vector6 rest_nm;
+                    rest_nm.segment<3>(0) = LT.rotation().inverse() * n;
+                    rest_nm.segment<3>(3) = RT.rotation().inverse() * n;
+                    rest_normals_list.push_back(rest_nm);
+
+                    init_angles_list.push_back(init_angle_view[i]);
                 }
 
                 std::ranges::copy(strength_ratio_view,
                                   std::back_inserter(strength_ratio_list));
+                ++geo_index;
             });
+
+        h_geo_joint_offsets_counts.scan();
 
         h_body_ids.resize(body_ids_list.size());
         std::ranges::move(body_ids_list, h_body_ids.begin());
@@ -172,9 +228,79 @@ Edge             = ({}, {}))",
         h_strength_ratio.resize(strength_ratio_list.size());
         std::ranges::move(strength_ratio_list, h_strength_ratio.begin());
 
+        h_rest_axis.resize(rest_axis_list.size());
+        std::ranges::move(rest_axis_list, h_rest_axis.begin());
+
+        h_rest_normals.resize(rest_normals_list.size());
+        std::ranges::move(rest_normals_list, h_rest_normals.begin());
+
+        h_init_angles.resize(init_angles_list.size());
+        std::ranges::copy(init_angles_list, h_init_angles.begin());
+
+        h_current_angles.resize(h_init_angles.size());
+
         body_ids.copy_from(h_body_ids);
         rest_positions.copy_from(h_rest_positions);
         strength_ratio.copy_from(h_strength_ratio);
+        rest_axis.copy_from(h_rest_axis);
+        rest_normals.copy_from(h_rest_normals);
+        init_angles.copy_from(h_init_angles);
+        current_angles.copy_from(h_current_angles);
+
+        // Compute initial angles from initial body qs
+        compute_current_angles();
+        // Write initial angles to geometry so the first animator step sees correct values
+        write_scene();
+    }
+
+    void compute_current_angles()
+    {
+        using namespace muda;
+        namespace DRJ = sym::affine_body_driving_revolute_joint;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(body_ids.size(),
+                   [body_ids     = body_ids.cviewer().name("body_ids"),
+                    rest_axis    = rest_axis.cviewer().name("rest_axis"),
+                    rest_normals = rest_normals.cviewer().name("rest_normals"),
+                    qs = affine_body_dynamics->qs().cviewer().name("qs"),
+                    current_angles = current_angles.viewer().name("current_angles"),
+                    init_angles = init_angles.cviewer().name("init_angles"),
+                    PI          = std::numbers::pi] __device__(int I)
+                   {
+                       Vector2i bids = body_ids(I);
+
+                       Vector12 q_i        = qs(bids(0));
+                       Vector12 q_j        = qs(bids(1));
+                       Vector6  axis_bar   = rest_axis(I);
+                       Vector6  normal_bar = rest_normals(I);
+
+                       Vector12 F01_q;
+                       DRJ::F01_q<Float>(F01_q,
+                                         axis_bar.segment<3>(0),
+                                         normal_bar.segment<3>(0),
+                                         q_i,
+                                         axis_bar.segment<3>(3),
+                                         normal_bar.segment<3>(3),
+                                         q_j);
+
+                       Float curr_angle;
+                       DRJ::currAngle<Float>(curr_angle, F01_q);
+
+                       Float total_angle = curr_angle - init_angles(I);
+                       // map to [-pi, pi]
+                       auto map2range = [=](Float angle) -> Float
+                       {
+                           if(angle > PI)
+                               angle -= 2 * PI;
+                           else if(angle < -PI)
+                               angle += 2 * PI;
+                           return angle;
+                       };
+
+                       current_angles(I) = map2range(total_angle);
+                   });
     }
 
     void do_report_energy_extent(EnergyExtentInfo& info) override
@@ -304,10 +430,99 @@ Edge             = ({}, {}))",
                 });
     }
 
+    void write_scene()
+    {
+        auto geo_slots = world().scene().geometries();
+
+        current_angles.copy_to(h_current_angles);
+
+        IndexT geo_joint_index = 0;
+
+        this->for_each(geo_slots,
+                       [&](geometry::Geometry& geo)
+                       {
+                           auto sc = geo.as<geometry::SimplicialComplex>();
+                           UIPC_ASSERT(sc, "AffineBodyRevoluteJoint: Geometry must be a simplicial complex");
+
+                           auto angle = sc->edges().find<Float>("angle");
+
+                           if(angle)
+                           {
+                               auto angle_view = view(*angle);
+                               auto [offset, count] =
+                                   h_geo_joint_offsets_counts[geo_joint_index];
+                               UIPC_ASSERT(angle_view.size() == count,
+                                           "AffineBodyRevoluteJoint: angle attribute size {} mismatch with joint count {}",
+                                           angle_view.size(),
+                                           count);
+
+                               auto src = span{h_current_angles}.subspan(offset, count);
+                               std::ranges::copy(src, angle_view.begin());
+                           }
+
+                           ++geo_joint_index;
+                       });
+    }
+
+    bool do_dump(DumpInfo& info) override
+    {
+        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
+        auto frame = info.frame();
+
+        return curr_angles_dump.dump(fmt::format("{}rj_current_angle.{}", path, frame),
+                                     current_angles);
+    }
+
+    bool do_try_recover(RecoverInfo& info) override
+    {
+        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
+        auto frame = info.frame();
+
+        return curr_angles_dump.load(fmt::format("{}rj_current_angle.{}", path, frame));
+    }
+
+    void do_apply_recover(RecoverInfo& info) override
+    {
+        curr_angles_dump.apply_to(current_angles);
+    }
+
+    void do_clear_recover(RecoverInfo& info) override
+    {
+        curr_angles_dump.clean_up();
+    }
+
     U64 get_uid() const noexcept override { return ConstitutionUID; }
 };
 
 REGISTER_SIM_SYSTEM(AffineBodyRevoluteJoint);
+
+class AffineBodyRevoluteJointTimeIntegrator : public TimeIntegrator
+{
+  public:
+    using TimeIntegrator::TimeIntegrator;
+
+    SimSystemSlot<AffineBodyRevoluteJoint> revolute_joint;
+    SimSystemSlot<AffineBodyDynamics>      affine_body_dynamics;
+
+    void do_init(InitInfo& info) override {}
+
+    void do_build(BuildInfo& info) override
+    {
+        revolute_joint       = require<AffineBodyRevoluteJoint>();
+        affine_body_dynamics = require<AffineBodyDynamics>();
+    }
+
+    void do_predict_dof(PredictDofInfo& info) override
+    {
+        // do nothing here
+    }
+
+    void do_update_state(UpdateVelocityInfo& info) override
+    {
+        revolute_joint->compute_current_angles();
+    }
+};
+REGISTER_SIM_SYSTEM(AffineBodyRevoluteJointTimeIntegrator);
 
 class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
 {
@@ -335,7 +550,6 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
 
     vector<Float> h_init_angles;
     vector<Float> h_aim_angles;
-    vector<Float> h_current_angles;
 
     bool is_constrained_changed  = false;
     bool strength_ratios_changed = false;
@@ -351,19 +565,14 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
     muda::DeviceBuffer<IndexT>   is_passive;
     muda::DeviceBuffer<Float>    init_angles;
     muda::DeviceBuffer<Float>    aim_angles;
-    muda::DeviceBuffer<Float>    current_angles;
 
     void do_build(BuildInfo& info) override
     {
-
         revolute_joint = require<AffineBodyRevoluteJoint>();
-
-        on_write_scene([this]() { write_scene(); });
     }
 
     void do_init(InterAffineBodyAnimator::FilteredInfo& info) override
     {
-
         auto geo_slots = world().scene().geometries();
 
         h_geo_joint_offsets_counts.resize(info.anim_inter_geo_infos().size());
@@ -400,7 +609,7 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                                 "AffineBodyDrivingRevoluteJoint: Geometry must have constraint UID {}",
                                 ConstraintUID);
                 }
-                // check consitudtion uid
+                // check constitution uid
                 {
                     auto constitution_uid = geo.meta().find<U64>(builtin::constitution_uid);
                     UIPC_ASSERT(constitution_uid, "AffineBodyDrivingRevoluteJoint: Geometry must have 'constitution_uid' attribute");
@@ -452,9 +661,8 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                 std::ranges::copy(is_passive_view, std::back_inserter(is_passive_list));
 
                 auto init_angles = sc->edges().find<Float>("init_angle");
-                UIPC_ASSERT(init_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'is_constrained' attribute on `edges`");
+                UIPC_ASSERT(init_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'init_angle' attribute on `edges`");
                 auto init_angles_view = init_angles->view();
-                std::ranges::copy(init_angles_view, std::back_inserter(init_angles_list));
 
                 auto aim_angles = sc->edges().find<Float>("aim_angle");
                 UIPC_ASSERT(aim_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'aim_angles' attribute on `edges`");
@@ -469,18 +677,6 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                 auto r_pos0_attr = sc->edges().find<Vector3>("r_position0");
                 auto r_pos1_attr = sc->edges().find<Vector3>("r_position1");
                 bool use_local = l_pos0_attr && l_pos1_attr && r_pos0_attr && r_pos1_attr;
-
-                auto toNormal = [&](const Vector3& W) -> Vector3
-                {
-                    Vector3 ref = abs(W.dot(Vector3(1, 0, 0))) < 0.99 ?
-                                      Vector3(1, 0, 0) :
-                                      Vector3(0, 1, 0);
-
-                    Vector3 U = ref.cross(W).normalized();
-                    Vector3 V = W.cross(U).normalized();
-
-                    return V;
-                };
 
                 for(auto&& [i, e] : enumerate(Es))
                 {
@@ -512,12 +708,12 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                     Transform LT{left_sc->transforms().view()[l_iid]};
                     Transform RT{right_sc->transforms().view()[r_iid]};
 
-                    Vector3 UnitE;
+                    Vector3 t;
                     if(use_local)
                     {
                         Vector3 lp0 = LT * l_pos0_attr->view()[i];
                         Vector3 lp1 = LT * l_pos1_attr->view()[i];
-                        UnitE = (lp1 - lp0).normalized();
+                        t           = (lp1 - lp0).normalized();
                     }
                     else
                     {
@@ -541,25 +737,27 @@ Edge             = ({}, {}))",
                                     e(1));
 
                         Vector3 HalfAxis = Dir.normalized() / 2;
-                        P0 = mid - HalfAxis;
-                        P1 = mid + HalfAxis;
-                        UnitE = (P1 - P0).normalized();
+                        P0               = mid - HalfAxis;
+                        P1               = mid + HalfAxis;
+                        t                = (P1 - P0).normalized();
                     }
 
-                    Vector3 normal = toNormal(UnitE);
-                    Vector3 vec    = normal.cross(UnitE).normalized();
+                    Vector3 n, b;
+                    orthonormal_basis(t, n, b);
 
                     // axis
                     Vector6 rest_axis;
-                    rest_axis.segment<3>(0) = LT.rotation().inverse() * vec;
-                    rest_axis.segment<3>(3) = RT.rotation().inverse() * vec;
+                    rest_axis.segment<3>(0) = LT.rotation().inverse() * b;
+                    rest_axis.segment<3>(3) = RT.rotation().inverse() * b;
                     rest_axis_list.push_back(rest_axis);
 
                     // normal
                     Vector6 rest_normal;
-                    rest_normal.segment<3>(0) = LT.rotation().inverse() * normal;
-                    rest_normal.segment<3>(3) = RT.rotation().inverse() * normal;
+                    rest_normal.segment<3>(0) = LT.rotation().inverse() * n;
+                    rest_normal.segment<3>(3) = RT.rotation().inverse() * n;
                     rest_normals_list.push_back(rest_normal);
+
+                    init_angles_list.push_back(init_angles_view[i]);
                 }
                 joint_offset++;
             });
@@ -598,7 +796,6 @@ Edge             = ({}, {}))",
         is_passive.copy_from(h_is_passive);
         init_angles.copy_from(h_init_angles);
         aim_angles.copy_from(h_aim_angles);
-        current_angles = init_angles;
     }
 
 
@@ -675,41 +872,6 @@ Edge             = ({}, {}))",
             is_passive.copy_from(h_is_passive);
     }
 
-    void write_scene()
-    {
-        auto geo_slots = world().scene().geometries();
-
-        current_angles.copy_to(h_current_angles);
-
-        IndexT geo_joint_index = 0;
-
-        this->for_each(geo_slots,
-                       [&](geometry::Geometry& geo)
-                       {
-                           auto sc = geo.as<geometry::SimplicialComplex>();
-                           UIPC_ASSERT(sc, "AffineBodyDrivingRevoluteJoint: Geometry must be a simplicial complex");
-
-                           auto angle = sc->edges().find<Float>("angle");
-
-                           if(angle)
-                           {
-                               auto angle_view = view(*angle);
-                               auto [offset, count] =
-                                   h_geo_joint_offsets_counts[geo_joint_index];
-                               UIPC_ASSERT(angle_view.size() == count,
-                                           "AffineBodyDrivingRevoluteJoint: angle attribute size {} mismatch with joint count {}",
-                                           angle_view.size(),
-                                           count);
-
-                               auto dst = span{h_current_angles}.subspan(offset, count);
-                               std::ranges::copy(dst, angle_view.begin());
-                           }
-
-                           ++geo_joint_index;
-                       });
-    }
-
-
     void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
     {
         info.energy_count(body_ids.size());
@@ -737,7 +899,7 @@ Edge             = ({}, {}))",
                     is_passive  = is_passive.cviewer().name("is_passive"),
                     init_angles = init_angles.cviewer().name("init_angles"),
                     aim_angles  = aim_angles.cviewer().name("aim_angles"),
-                    current_angles = current_angles.cviewer().name("current_angles"),
+                    current_angles = revolute_joint->current_angles.cviewer().name("current_angles"),
                     qs = info.qs().cviewer().name("qs"),
                     body_masses = info.body_masses().cviewer().name("body_masses"),
                     Es = info.energies().viewer().name("Es")] __device__(int I)
@@ -806,7 +968,7 @@ Edge             = ({}, {}))",
                  is_passive  = is_passive.cviewer().name("is_passive"),
                  init_angles = init_angles.cviewer().name("init_angles"),
                  aim_angles  = aim_angles.cviewer().name("aim_angles"),
-                 current_angles = current_angles.cviewer().name("current_angles"),
+                 current_angles = revolute_joint->current_angles.cviewer().name("current_angles"),
                  qs          = info.qs().cviewer().name("qs"),
                  body_masses = info.body_masses().cviewer().name("body_masses"),
                  G12s        = info.gradients().viewer().name("G12s"),
@@ -891,117 +1053,7 @@ Edge             = ({}, {}))",
     };
 
     U64 get_uid() const noexcept override { return ConstraintUID; }
-
-
-    BufferDump curr_angles_dump;
-
-    bool do_dump(DumpInfo& info) override
-    {
-        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
-        auto frame = info.frame();
-
-        return curr_angles_dump.dump(fmt::format("{}current_angle.{}", path, frame),
-                                     current_angles);
-    }
-
-    bool do_try_recover(RecoverInfo& info) override
-    {
-        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
-        auto frame = info.frame();
-
-        return curr_angles_dump.load(fmt::format("{}current_angle.{}", path, frame));
-    }
-
-    void do_apply_recover(RecoverInfo& info) override
-    {
-        curr_angles_dump.apply_to(current_angles);
-    }
-
-    void do_clear_recover(RecoverInfo& info) override
-    {
-        curr_angles_dump.clean_up();
-    }
 };
 REGISTER_SIM_SYSTEM(AffineBodyDrivingRevoluteJoint);
 
-
-class AffineBodyDrivingRevoluteJointTimeIntegrator : public TimeIntegrator
-{
-  public:
-    using TimeIntegrator::TimeIntegrator;
-
-    SimSystemSlot<AffineBodyDrivingRevoluteJoint> driving_revolute_joint;
-    SimSystemSlot<AffineBodyDynamics>             affine_body_dynamics;
-
-    void do_init(InitInfo& info) override {}
-
-    void do_build(BuildInfo& info) override
-    {
-        driving_revolute_joint = require<AffineBodyDrivingRevoluteJoint>();
-        affine_body_dynamics   = require<AffineBodyDynamics>();
-    }
-
-    void do_predict_dof(PredictDofInfo& info) override
-    {
-        // do nothing here
-    }
-
-    void do_update_state(UpdateVelocityInfo& info) override
-    {
-        using namespace muda;
-        namespace DRJ = sym::affine_body_driving_revolute_joint;
-        auto& drj     = driving_revolute_joint;
-
-        ParallelFor()
-            .file_line(__FILE__, __LINE__)
-            .apply(drj->body_ids.size(),
-                   [body_ids  = drj->body_ids.cviewer().name("body_ids"),
-                    rest_axis = drj->rest_axis.cviewer().name("rest_axis"),
-                    rest_normals = drj->rest_normals.cviewer().name("rest_normals"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs"),
-                    current_angles = drj->current_angles.viewer().name("current_angles"),
-                    init_angles = drj->init_angles.cviewer().name("init_angles"),
-                    PI = std::numbers::pi] __device__(int I)
-                   {
-                       Vector2i bids = body_ids(I);
-
-                       Vector12 q_i        = qs(bids(0));
-                       Vector12 q_j        = qs(bids(1));
-                       Vector6  axis_bar   = rest_axis(I);
-                       Vector6  normal_bar = rest_normals(I);
-
-                       Vector12 F01_q;
-                       DRJ::F01_q<Float>(F01_q,
-                                         axis_bar.segment<3>(0),
-                                         normal_bar.segment<3>(0),
-                                         q_i,
-                                         axis_bar.segment<3>(3),
-                                         normal_bar.segment<3>(3),
-                                         q_j);
-
-                       // Compute current angle
-                       Float curr_angle;
-                       DRJ::currAngle<Float>(curr_angle, F01_q);
-
-
-                       Float total_angle = curr_angle - init_angles(I);
-                       // map to [-pi, pi]
-                       auto map2range = [=](Float angle) -> Float
-                       {
-                           if(angle > PI)
-                           {
-                               angle -= 2 * PI;
-                           }
-                           else if(angle < -PI)
-                           {
-                               angle += 2 * PI;
-                           }
-                           return angle;
-                       };
-
-                       current_angles(I) = map2range(total_angle);
-                   });
-    }
-};
-REGISTER_SIM_SYSTEM(AffineBodyDrivingRevoluteJointTimeIntegrator);
 }  // namespace uipc::backend::cuda

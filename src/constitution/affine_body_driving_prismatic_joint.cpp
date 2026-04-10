@@ -79,22 +79,6 @@ void AffineBodyDrivingPrismaticJoint::apply_to(geometry::SimplicialComplex& sc,
     auto strength_ratio_view = view(*strength_ratio_attr);
     std::ranges::copy(strength_ratio, strength_ratio_view.begin());
 
-    auto distance = sc.edges().find<Float>("distance");
-    if(!distance)
-    {
-        distance = sc.edges().create<Float>("distance", 0.0);
-    }
-    auto distance_view = view(*distance);
-    std::ranges::fill(distance_view, 0.0);
-
-    auto init_distances = sc.edges().find<Float>("init_distance");
-    if(!init_distances)
-    {
-        init_distances = sc.edges().create<Float>("init_distance", 0);
-    }
-    auto init_distances_view = view(*init_distances);
-    std::ranges::fill(init_distances_view, 0);
-
     auto aim_distances = sc.edges().find<Float>("aim_distance");
     if(!aim_distances)
     {

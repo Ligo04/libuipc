@@ -13,6 +13,7 @@ TEST_CASE("71_abd_driving_prismatic_joint", "[abd][joint][driving]")
     namespace fs     = std::filesystem;
     auto output_path = AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE);
 
+    logger::set_level(Logger::Level::critical);
     Engine engine{"cuda", output_path};
     World  world{engine};
 
@@ -103,6 +104,16 @@ TEST_CASE("71_abd_driving_prismatic_joint", "[abd][joint][driving]")
                              span{r_instance_id},
                              span{strength_ratios});
 
+    {
+        // set init_distance to 0
+        auto init_distance = joint_mesh.edges().find<Float>("init_distance");
+        if(init_distance)
+        {
+            auto init_distance_view = view(*init_distance);
+            std::fill(init_distance_view.begin(), init_distance_view.end(), 0);
+        }
+    }
+
     AffineBodyDrivingPrismaticJoint driving_prismatic_joint;
     driving_prismatic_joint.apply_to(joint_mesh, span{strength_ratios});
 
@@ -135,10 +146,10 @@ TEST_CASE("71_abd_driving_prismatic_joint", "[abd][joint][driving]")
                 // Log angle values in degrees for current frame (easier to read)
                 for(size_t i = 0; i < distances_view.size(); ++i)
                 {
-                    spdlog::info("Frame {} Edge {} distance: {:.2f} ",
-                                 info.frame(),
-                                 i,
-                                 distances_view[i]);
+                    printf("Frame %llu Edge %zu distance: %.2f\n",
+                           (unsigned long long)info.frame(),
+                           i,
+                           distances_view[i]);
                 }
 
                 // 1. Enable is_constrained
