@@ -33,8 +33,8 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
 
     // Angle tracking (for all revolute joints)
     OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
-    vector<Vector6>               h_l_basis;  // [n_L, b_L] per joint
-    vector<Vector6>               h_r_basis;  // [n_R, b_R] per joint
+    vector<Vector6>               h_l_basis;  // [b_L, n_L] per joint
+    vector<Vector6>               h_r_basis;  // [b_R, n_R] per joint
     vector<Float>                 h_init_angles;
     vector<Float>                 h_current_angles;
 
@@ -42,8 +42,8 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
     muda::DeviceBuffer<Vector12> rest_positions;
     muda::DeviceBuffer<Float>    strength_ratio;
 
-    muda::DeviceBuffer<Vector6> l_basis;  // [n_L, b_L] per joint
-    muda::DeviceBuffer<Vector6> r_basis;  // [n_R, b_R] per joint
+    muda::DeviceBuffer<Vector6> l_basis;  // [b_L, n_L] per joint
+    muda::DeviceBuffer<Vector6> r_basis;  // [b_R, n_R] per joint
     muda::DeviceBuffer<Float>   init_angles;
     muda::DeviceBuffer<Float>   current_angles;
 
@@ -197,14 +197,17 @@ Edge             = ({}, {}))",
                     Vector3 n, b;
                     orthonormal_basis(t, n, b);
 
+                    // Storage layout: [b, n] per body (swapped from [n, b]) to
+                    // invert the sign of the angle reported by DRJ::currAngle
+                    // while keeping b = t x n right-handed.
                     Vector6 lb;
-                    lb.segment<3>(0) = L_inv_rot * n;
-                    lb.segment<3>(3) = L_inv_rot * b;
+                    lb.segment<3>(0) = L_inv_rot * b;
+                    lb.segment<3>(3) = L_inv_rot * n;
                     l_basis_list.push_back(lb);
 
                     Vector6 rb;
-                    rb.segment<3>(0) = R_inv_rot * n;
-                    rb.segment<3>(3) = R_inv_rot * b;
+                    rb.segment<3>(0) = R_inv_rot * b;
+                    rb.segment<3>(3) = R_inv_rot * n;
                     r_basis_list.push_back(rb);
 
                     init_angles_list.push_back(init_angle_view[i]);
@@ -737,14 +740,16 @@ Edge             = ({}, {}))",
                     Vector3 n, b;
                     orthonormal_basis(t, n, b);
 
+                    // Storage layout: [b, n] per body (matches constitution
+                    // side); see AffineBodyRevoluteJoint::do_init for details.
                     Vector6 lb;
-                    lb.segment<3>(0) = L_inv_rot * n;
-                    lb.segment<3>(3) = L_inv_rot * b;
+                    lb.segment<3>(0) = L_inv_rot * b;
+                    lb.segment<3>(3) = L_inv_rot * n;
                     l_basis_list.push_back(lb);
 
                     Vector6 rb;
-                    rb.segment<3>(0) = R_inv_rot * n;
-                    rb.segment<3>(3) = R_inv_rot * b;
+                    rb.segment<3>(0) = R_inv_rot * b;
+                    rb.segment<3>(3) = R_inv_rot * n;
                     r_basis_list.push_back(rb);
 
                     init_angles_list.push_back(init_angles_view[i]);
@@ -1255,7 +1260,7 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector12 F_j = Vector12::Zero();
                        if(r_sq_j > eps)
                        {
-                           F_j.segment<3>(0) = -tau * e_world_j.cross(r_j) / r_sq_j;
+                           F_j.segment<3>(0) = tau * e_world_j.cross(r_j) / r_sq_j;
                        }
 
                        eigen::atomic_add(external_forces(bids(0)), F_i);

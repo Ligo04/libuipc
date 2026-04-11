@@ -55,8 +55,8 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
             view(left_mesh.transforms())[1] = t1.matrix();
 
             auto is_fixed = left_mesh.instances().find<IndexT>(builtin::is_fixed);
-            view(*is_fixed)[0] = 0;  // instance 0 not fixed
-            view(*is_fixed)[1] = 0;  // instance 1 not fixed
+            view(*is_fixed)[0] = 1;  // instance 0 not fixed
+            view(*is_fixed)[1] = 1;  // instance 1 not fixed
         }
         auto [left_geo_slot, left_rest_geo_slot] =
             left_link->geometries().create(left_mesh);
@@ -73,8 +73,8 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
             view(right_mesh.transforms())[1] = t1.matrix();
 
             auto is_fixed = right_mesh.instances().find<IndexT>(builtin::is_fixed);
-            view(*is_fixed)[0] = 1;  // fix instance 0
-            view(*is_fixed)[1] = 1;  // fix instance 1
+            view(*is_fixed)[0] = 0;  // fix instance 0
+            view(*is_fixed)[1] = 0;  // fix instance 1
         }
         auto [right_geo_slot, right_rest_geo_slot] =
             right_link->geometries().create(right_mesh);
