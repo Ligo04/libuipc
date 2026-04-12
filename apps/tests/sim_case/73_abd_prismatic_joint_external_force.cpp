@@ -102,17 +102,14 @@ TEST_CASE("73_abd_prismatic_joint_external_force", "[abd][joint][external_force]
                     continue;
 
                 auto external_force = sc->edges().find<Float>("external_force");
-                if(!external_force)
-                    continue;
+                REQUIRE(external_force);
 
                 // Enable constraint
                 auto is_constrained =
                     sc->edges().find<IndexT>("external_force/is_constrained");
-                if(is_constrained)
-                {
-                    auto constrained_view = view(*is_constrained);
-                    std::fill(constrained_view.begin(), constrained_view.end(), 1);
-                }
+                REQUIRE(is_constrained);
+                auto constrained_view = view(*is_constrained);
+                std::fill(constrained_view.begin(), constrained_view.end(), 1);
 
                 // Apply upward force for first 50 frames, then reverse
                 Float force_value = (info.frame() <= 50) ? 1000.0 : -5000.0;
@@ -122,15 +119,13 @@ TEST_CASE("73_abd_prismatic_joint_external_force", "[abd][joint][external_force]
                 spdlog::info("Frame {} external_force: {:.2f}", info.frame(), force_value);
 
                 auto distance = sc->edges().find<Float>("distance");
-                if(distance)
-                {
-                    auto distance_view = distance->view();
-                    for(SizeT i = 0; i < distance_view.size(); ++i)
-                        spdlog::info("Frame {} edge[{}] distance: {:.6f}",
-                                     info.frame(),
-                                     i,
-                                     distance_view[i]);
-                }
+                REQUIRE(distance);
+                auto distance_view = distance->view();
+                for(SizeT i = 0; i < distance_view.size(); ++i)
+                    spdlog::info("Frame {} edge[{}] distance: {:.6f}",
+                                 info.frame(),
+                                 i,
+                                 distance_view[i]);
             }
         });
 

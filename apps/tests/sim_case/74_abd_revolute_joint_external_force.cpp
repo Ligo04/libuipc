@@ -103,16 +103,13 @@ TEST_CASE("74_abd_revolute_joint_external_force", "[abd][joint][external_force]"
                     continue;
 
                 auto external_torque = sc->edges().find<Float>("external_torque");
-                if(!external_torque)
-                    continue;
+                REQUIRE(external_torque);
 
                 auto is_constrained =
                     sc->edges().find<IndexT>("external_torque/is_constrained");
-                if(is_constrained)
-                {
-                    auto constrained_view = view(*is_constrained);
-                    std::fill(constrained_view.begin(), constrained_view.end(), 1);
-                }
+                REQUIRE(is_constrained);
+                auto constrained_view = view(*is_constrained);
+                std::fill(constrained_view.begin(), constrained_view.end(), 1);
 
                 // Apply torque for first 50 frames, then reverse
                 Float torque_value = (info.frame() <= 50) ? -1000.0 : 1000.0;
@@ -122,16 +119,14 @@ TEST_CASE("74_abd_revolute_joint_external_force", "[abd][joint][external_force]"
                 spdlog::info("Frame {} external_torque: {:.2f}", info.frame(), torque_value);
 
                 auto angle = sc->edges().find<Float>("angle");
-                if(angle)
-                {
-                    auto angle_view = angle->view();
-                    for(SizeT i = 0; i < angle_view.size(); ++i)
-                        spdlog::info("Frame {} edge[{}] angle: {:.6f} rad ({:.2f} deg)",
-                                     info.frame(),
-                                     i,
-                                     angle_view[i],
-                                     angle_view[i] * 180.0 / std::numbers::pi);
-                }
+                REQUIRE(angle);
+                auto angle_view = angle->view();
+                for(SizeT i = 0; i < angle_view.size(); ++i)
+                    spdlog::info("Frame {} edge[{}] angle: {:.6f} rad ({:.2f} deg)",
+                                 info.frame(),
+                                 i,
+                                 angle_view[i],
+                                 angle_view[i] * 180.0 / std::numbers::pi);
             }
         });
 

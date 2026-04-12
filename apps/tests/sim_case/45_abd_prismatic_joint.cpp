@@ -112,11 +112,9 @@ TEST_CASE("45_abd_prismatic_joint", "[abd]")
     auto print_distances = [&]()
     {
         auto* sc = joint_geo_slot->geometry().as<SimplicialComplex>();
-        if(!sc)
-            return;
+        REQUIRE(sc);
         auto distance = sc->edges().find<Float>("distance");
-        if(!distance)
-            return;
+        REQUIRE(distance);
         auto distance_view = distance->view();
         for(SizeT i = 0; i < distance_view.size(); ++i)
         {

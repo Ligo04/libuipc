@@ -116,16 +116,18 @@ TEST_CASE("80_abd_revolute_joint_driving_and_external_torque", "[abd][joint][dri
                 // --- driving attributes ---
                 auto driving_is_constrained =
                     sc->edges().find<IndexT>("driving/is_constrained");
+                REQUIRE(driving_is_constrained);
                 auto aim_angle = sc->edges().find<Float>("aim_angle");
-                auto angles    = sc->edges().find<Float>("angle");
+                REQUIRE(aim_angle);
+                auto angles = sc->edges().find<Float>("angle");
+                REQUIRE(angles);
 
-                if(driving_is_constrained)
                 {
                     auto v = view(*driving_is_constrained);
                     std::fill(v.begin(), v.end(), driving_phase ? 1 : 0);
                 }
 
-                if(driving_phase && aim_angle && angles)
+                if(driving_phase)
                 {
                     auto        aim_view   = view(*aim_angle);
                     auto        angle_view = view(*angles);
@@ -137,29 +139,29 @@ TEST_CASE("80_abd_revolute_joint_driving_and_external_torque", "[abd][joint][dri
                 // --- external torque attributes ---
                 auto torque_is_constrained =
                     sc->edges().find<IndexT>("external_torque/is_constrained");
+                REQUIRE(torque_is_constrained);
                 auto external_torque = sc->edges().find<Float>("external_torque");
+                REQUIRE(external_torque);
 
-                if(torque_is_constrained)
                 {
                     auto v = view(*torque_is_constrained);
                     std::fill(v.begin(), v.end(), driving_phase ? 0 : 1);
                 }
 
-                if(!driving_phase && external_torque)
+                if(!driving_phase)
                 {
                     Float torque_value = (info.frame() <= 150) ? -1000.0 : 1000.0;
                     std::ranges::fill(view(*external_torque), torque_value);
-                    spdlog::info("Frame {} external_torque: {:.2f}", info.frame(), torque_value);
+                    fmt::println("Frame {} external_torque: {:.2f}", info.frame(), torque_value);
                 }
 
                 // --- logging ---
-                if(angles)
                 {
                     auto angle_view = view(*angles);
-                    printf("Frame {%zu} angle: {%f} rad ({%f} deg)\n",
-                           info.frame(),
-                           angle_view[0],
-                           to_degrees(angle_view[0]));
+                    fmt::println("Frame {} angle: {:.2f} rad ({:.2f} deg)",
+                                 info.frame(),
+                                 angle_view[0],
+                                 to_degrees(angle_view[0]));
                 }
             }
         });

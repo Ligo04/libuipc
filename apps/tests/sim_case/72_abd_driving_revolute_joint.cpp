@@ -140,45 +140,40 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
                     if(!sc)
                         continue;
 
-                    // Find the "angle" attribute on edges (in radians), skip if not exists
+                    // Find the "angle" attribute on edges (in radians)
                     auto angles = sc->edges().find<Float>("angle");
-                    if(!angles)
-                        continue;
+                    REQUIRE(angles);
                     auto angles_view = view(*angles);
 
                     // 1. Enable is_constrained (set all values to 1)
                     auto is_constrained = sc->edges().find<IndexT>("driving/is_constrained");
-                    if(is_constrained)  // Check if attribute exists to avoid crash
-                    {
-                        auto constrained_view = view(*is_constrained);
-                        std::fill(constrained_view.begin(), constrained_view.end(), 1);
-                    }
+                    REQUIRE(is_constrained);
+                    auto constrained_view = view(*is_constrained);
+                    std::fill(constrained_view.begin(), constrained_view.end(), 1);
                     auto aim_angle = sc->edges().find<Float>("aim_angle");
-                    if(aim_angle)
+                    REQUIRE(aim_angle);
+                    auto         aim_angle_view = view(*aim_angle);
+                    const size_t valid_size =
+                        std::min(angles_view.size(), aim_angle_view.size());
+                    const Float velocity = (info.frame() <= 50) ? -5.0f : 10.0f;
+                    for(size_t i = 0; i < valid_size; ++i)
                     {
-                        auto         aim_angle_view = view(*aim_angle);
-                        const size_t valid_size =
-                            std::min(angles_view.size(), aim_angle_view.size());
-                        const Float velocity = (info.frame() <= 50) ? -5.0f : 10.0f;
-                        for(size_t i = 0; i < valid_size; ++i)
-                        {
-                            aim_angle_view[i] = angles_view[i] + info.dt() * velocity;
-                        }
+                        aim_angle_view[i] = angles_view[i] + info.dt() * velocity;
                     }
 
+
                     // Log angle and aim_angle values in degrees
-                    auto aim_angles_log = sc->edges().find<Float>("aim_angle");
                     for(size_t i = 0; i < angles_view.size(); ++i)
                     {
                         Float aim_deg =
-                            (aim_angles_log && i < aim_angles_log->view().size()) ?
-                                to_degrees(aim_angles_log->view()[i]) :
+                            (i < aim_angle_view.size()) ?
+                                to_degrees(aim_angle_view[i]) :
                                 0.0;
-                        printf("Frame %llu Edge %zu angle: %.2f aim_angle: %.2f degrees\n",
-                               (unsigned long long)info.frame(),
-                               i,
-                               to_degrees(angles_view[i]),
-                               aim_deg);
+                        fmt::println("Frame {} Edge {} angle: {:.2f} aim_angle: {:.2f} degrees",
+                                     info.frame(),
+                                     i,
+                                     to_degrees(angles_view[i]),
+                                     aim_deg);
                     }
                 }
             });

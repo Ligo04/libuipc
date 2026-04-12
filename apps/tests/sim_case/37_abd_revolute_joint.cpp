@@ -111,18 +111,13 @@ TEST_CASE("37_abd_revolute_joint", "[abd]")
     auto print_angles = [&]()
     {
         auto* sc = joint_geo_slot->geometry().as<SimplicialComplex>();
-        if(!sc)
-            return;
+        REQUIRE(sc);
         auto angle = sc->edges().find<Float>("angle");
-        if(!angle)
-            return;
+        REQUIRE(angle);
         auto angle_view = angle->view();
         for(SizeT i = 0; i < angle_view.size(); ++i)
         {
-            printf("frame=%llu joint=%zu angle=%.4f\n",
-                   (unsigned long long)world.frame(),
-                   i,
-                   angle_view[i]);
+            fmt::println("frame={} joint={} angle={:.4f}", world.frame(), i, angle_view[i]);
         }
     };
 
