@@ -44,3 +44,4 @@ vsxmake*/
 
 # venv
 .venv/
+.omc/
