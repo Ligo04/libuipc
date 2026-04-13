@@ -112,16 +112,18 @@ TEST_CASE("79_abd_prismatic_joint_driving_and_external_force", "[abd][joint][dri
                 // --- driving attributes ---
                 auto driving_is_constrained =
                     sc->edges().find<IndexT>("driving/is_constrained");
+                REQUIRE(driving_is_constrained);
                 auto aim_distance = sc->edges().find<Float>("aim_distance");
-                auto distances    = sc->edges().find<Float>("distance");
+                REQUIRE(aim_distance);
+                auto distances = sc->edges().find<Float>("distance");
+                REQUIRE(distances);
 
-                if(driving_is_constrained)
                 {
                     auto v = view(*driving_is_constrained);
                     std::fill(v.begin(), v.end(), driving_phase ? 1 : 0);
                 }
 
-                if(driving_phase && aim_distance && distances)
+                if(driving_phase)
                 {
                     auto aim_view  = view(*aim_distance);
                     auto dist_view = view(*distances);
@@ -133,15 +135,16 @@ TEST_CASE("79_abd_prismatic_joint_driving_and_external_force", "[abd][joint][dri
                 // --- external force attributes ---
                 auto ext_force_is_constrained =
                     sc->edges().find<IndexT>("external_force/is_constrained");
+                REQUIRE(ext_force_is_constrained);
                 auto external_force = sc->edges().find<Float>("external_force");
+                REQUIRE(external_force);
 
-                if(ext_force_is_constrained)
                 {
                     auto v = view(*ext_force_is_constrained);
                     std::fill(v.begin(), v.end(), driving_phase ? 0 : 1);
                 }
 
-                if(!driving_phase && external_force)
+                if(!driving_phase)
                 {
                     Float force_value = (info.frame() <= 150) ? -1000 : 1000.0;
                     std::ranges::fill(view(*external_force), force_value);
@@ -149,7 +152,6 @@ TEST_CASE("79_abd_prismatic_joint_driving_and_external_force", "[abd][joint][dri
                 }
 
                 // --- logging ---
-                if(distances)
                 {
                     auto dist_view = view(*distances);
                     for(size_t i = 0; i < dist_view.size(); ++i)

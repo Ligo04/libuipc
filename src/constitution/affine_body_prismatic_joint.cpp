@@ -211,6 +211,22 @@ void AffineBodyPrismaticJoint::apply_to(geometry::SimplicialComplex& edges,
     auto strength_ratio_view = view(*strength_ratio_attr);
     std::ranges::copy(strength_ratios, strength_ratio_view.begin());
 
+    auto distance = edges.edges().find<Float>("distance");
+    if(!distance)
+    {
+        distance = edges.edges().create<Float>("distance", 0.0);
+    }
+    auto distance_view = view(*distance);
+    std::ranges::fill(distance_view, 0.0);
+
+    auto init_distance = edges.edges().find<Float>("init_distance");
+    if(!init_distance)
+    {
+        init_distance = edges.edges().create<Float>("init_distance", 0.0);
+    }
+    auto init_distance_view = view(*init_distance);
+    std::ranges::fill(init_distance_view, 0.0);
+
     for(auto&& [i, l_slot] : enumerate(l_geo_slots))
     {
         auto r_slot = r_geo_slots[i];

@@ -211,6 +211,22 @@ void AffineBodyRevoluteJoint::apply_to(geometry::SimplicialComplex& edges,
     auto strength_ratio_view = view(*strength_ratio_attr);
     std::ranges::copy(strength_ratios, strength_ratio_view.begin());
 
+    auto angle = edges.edges().find<Float>("angle");
+    if(!angle)
+    {
+        angle = edges.edges().create<Float>("angle", 0.0);
+    }
+    auto angle_view = view(*angle);
+    std::ranges::fill(angle_view, 0.0);
+
+    auto init_angle = edges.edges().find<Float>("init_angle");
+    if(!init_angle)
+    {
+        init_angle = edges.edges().create<Float>("init_angle", 0.0);
+    }
+    auto init_angle_view = view(*init_angle);
+    std::ranges::fill(init_angle_view, 0.0);
+
     for(auto&& [i, l_slot] : enumerate(l_geo_slots))
     {
         auto r_slot = r_geo_slots[i];

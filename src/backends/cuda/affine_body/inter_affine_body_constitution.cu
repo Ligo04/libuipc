@@ -2,6 +2,12 @@
 
 namespace uipc::backend::cuda
 {
+span<const InterAffineBodyConstitution::InterGeoInfo> InterAffineBodyConstitution::inter_geo_info() const noexcept
+{
+    auto [offset, count] = m_manager->m_impl.constitution_geo_info_offsets_counts[m_index];
+    return span{m_manager->m_impl.constitution_inter_geo_infos}.subspan(offset, count);
+}
+
 void InterAffineBodyConstitution::do_build()
 {
     auto all_uids = world().scene().constitution_tabular().uids();
@@ -11,13 +17,13 @@ void InterAffineBodyConstitution::do_build()
             fmt::format("{} requires Constraint UID={}", name(), uid()));
     }
 
-    auto& manager = require<InterAffineBodyConstitutionManager>();
+    m_manager = require<InterAffineBodyConstitutionManager>();
 
     // let the subclass take care of its own build
     BuildInfo info;
     do_build(info);
 
-    manager.add_constitution(this);
+    m_manager->add_constitution(this);
 }
 
 void InterAffineBodyConstitution::init(FilteredInfo& info)

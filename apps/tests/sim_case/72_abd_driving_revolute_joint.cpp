@@ -15,6 +15,7 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
 
     auto output_path = AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE);
 
+    logger::set_level(Logger::Level::critical);
     Engine engine{"cuda", output_path};
     World  world{engine};
 
@@ -82,10 +83,10 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
 
         // Each edge defines a joint axis (2 points per edge)
         vector<Vector2i> Es = {{0, 1}, {2, 3}};
-        vector<Vector3>  Vs = {{0, 0, 0.5 - 0.5},   //
-                               {0, 0, 0.5 + 0.5},   //
-                               {0, 0, -0.5 - 0.5},  //
-                               {0, 0, -0.5 + 0.5}};
+        vector<Vector3>  Vs = {{0, 0, 0},  //
+                               {0, 0, 1},  //
+                               {0, 0, 0},  //
+                               {0, 0, -1}};
 
         auto joint_mesh = linemesh(Vs, Es);
         label_surface(joint_mesh);  // visualize the joint
@@ -95,9 +96,21 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
         vector<IndexT> l_instance_id = {0, 1};
         vector<S<SimplicialComplexSlot>> r_geo_slots = {right_geo_slot, right_geo_slot};
         vector<IndexT> r_instance_id   = {0, 1};
-        vector<Float>  strength_ratios = {100.0, 100.0};
+        vector<Float>  strength_ratios = {200.0, 200.0};
 
         abrj.apply_to(joint_mesh, l_geo_slots, l_instance_id, r_geo_slots, r_instance_id, strength_ratios);
+
+        {
+            auto to_radians = [](auto degrees)
+            { return degrees * (std::numbers::pi / 180.0); };
+            // set init_angle to 0
+            auto init_angle = joint_mesh.edges().find<Float>("init_angle");
+            if(init_angle)
+            {
+                auto init_angle_view = view(*init_angle);
+                std::fill(init_angle_view.begin(), init_angle_view.end(), 0);
+            }
+        }
 
         // driving
         AffineBodyDrivingRevoluteJoint abd_driving_revolute_joint;
@@ -108,6 +121,7 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
 
         auto to_degrees = [](auto radians)
         { return radians * (180.0 / std::numbers::pi); };
+
 
         scene.animator().insert(
             *revolute_joints,
@@ -126,39 +140,40 @@ TEST_CASE("72_abd_driving_revolute_joint", "[abd][joint][driving]")
                     if(!sc)
                         continue;
 
-                    // Find the "angle" attribute on edges (in radians), skip if not exists
+                    // Find the "angle" attribute on edges (in radians)
                     auto angles = sc->edges().find<Float>("angle");
-                    if(!angles)
-                        continue;
+                    REQUIRE(angles);
                     auto angles_view = view(*angles);
-
-                    // Log angle values in degrees for current frame (easier to read)
-                    for(size_t i = 0; i < angles_view.size(); ++i)
-                    {
-                        spdlog::info("Frame {} Edge {} angle: {:.2f} degrees ",
-                                     info.frame(),
-                                     i,
-                                     to_degrees(angles_view[i]));
-                    }
 
                     // 1. Enable is_constrained (set all values to 1)
                     auto is_constrained = sc->edges().find<IndexT>("driving/is_constrained");
-                    if(is_constrained)  // Check if attribute exists to avoid crash
-                    {
-                        auto constrained_view = view(*is_constrained);
-                        std::fill(constrained_view.begin(), constrained_view.end(), 1);
-                    }
+                    REQUIRE(is_constrained);
+                    auto constrained_view = view(*is_constrained);
+                    std::fill(constrained_view.begin(), constrained_view.end(), 1);
                     auto aim_angle = sc->edges().find<Float>("aim_angle");
-                    if(aim_angle)
+                    REQUIRE(aim_angle);
+                    auto         aim_angle_view = view(*aim_angle);
+                    const size_t valid_size =
+                        std::min(angles_view.size(), aim_angle_view.size());
+                    const Float velocity = (info.frame() <= 50) ? -5.0f : 10.0f;
+                    for(size_t i = 0; i < valid_size; ++i)
                     {
-                        auto         aim_angle_view = view(*aim_angle);
-                        const size_t valid_size =
-                            std::min(angles_view.size(), aim_angle_view.size());
-                        const Float velocity = (info.frame() <= 50) ? -5.0f : 10.0f;
-                        for(size_t i = 0; i < valid_size; ++i)
-                        {
-                            aim_angle_view[i] = angles_view[i] + info.dt() * velocity;
-                        }
+                        aim_angle_view[i] = angles_view[i] + info.dt() * velocity;
+                    }
+
+
+                    // Log angle and aim_angle values in degrees
+                    for(size_t i = 0; i < angles_view.size(); ++i)
+                    {
+                        Float aim_deg =
+                            (i < aim_angle_view.size()) ?
+                                to_degrees(aim_angle_view[i]) :
+                                0.0;
+                        fmt::println("Frame {} Edge {} angle: {:.2f} aim_angle: {:.2f} degrees",
+                                     info.frame(),
+                                     i,
+                                     to_degrees(angles_view[i]),
+                                     aim_deg);
                     }
                 }
             });

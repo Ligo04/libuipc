@@ -7,6 +7,10 @@
 #include <utils/make_spd.h>
 #include <utils/matrix_assembler.h>
 #include <uipc/common/enumerate.h>
+#include <affine_body/utils.h>
+#include <affine_body/affine_body_external_force_reporter.h>
+#include <muda/ext/eigen/atomic.h>
+#include <numbers>
 
 namespace uipc::backend::cuda
 {
@@ -35,17 +39,30 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
     vector<Vector6>  h_rest_bs;
     vector<Float>    h_strength_ratios;
 
+    // Distance tracking (for all prismatic joints)
+    OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
+    vector<Float>                 h_init_distances;
+    vector<Float>                 h_current_distances;
+
+    muda::DeviceBuffer<Float> init_distances;
+    muda::DeviceBuffer<Float> current_distances;
+
+    BufferDump curr_distances_dump;
+
     using Vector24    = Vector<Float, 24>;
     using Matrix24x24 = Matrix<Float, 24, 24>;
 
     void do_build(BuildInfo& info) override
     {
         affine_body_dynamics = require<AffineBodyDynamics>();
+        on_write_scene([this]() { write_scene(); });
     }
 
     void do_init(FilteredInfo& info) override
     {
         auto geo_slots = world().scene().geometries();
+
+        h_geo_joint_offsets_counts.resize(info.inter_geo_infos().size());
 
         list<Vector2i> body_ids_list;
         list<Vector6>  rest_c_list;
@@ -53,7 +70,9 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
         list<Vector6>  rest_n_list;
         list<Vector6>  rest_b_list;
         list<Float>    strength_ratio_list;
+        list<Float>    init_distances_list;
 
+        IndexT geo_index = 0;
         info.for_each(
             geo_slots,
             [&](geometry::Geometry& geo)
@@ -64,6 +83,8 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                             "AffineBodyPrismaticJoint: Geometry constitution UID mismatch");
 
                 auto sc = geo.as<geometry::SimplicialComplex>();
+
+                h_geo_joint_offsets_counts.counts()[geo_index] = sc->edges().size();
 
                 auto l_geo_id = sc->edges().find<IndexT>("l_geo_id");
                 UIPC_ASSERT(l_geo_id, "AffineBodyPrismaticJoint: Geometry must have 'l_geo_id' attribute on `edges`");
@@ -85,17 +106,10 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                 UIPC_ASSERT(strength_ratio, "AffineBodyPrismaticJoint: Geometry must have 'strength_ratio' attribute on `edges`");
                 auto strength_ratio_view = strength_ratio->view();
 
-                auto Normal = [&](const Vector3& W) -> Vector3
-                {
-                    Vector3 ref = abs(W.dot(Vector3(1, 0, 0))) < 0.9 ?
-                                      Vector3(1, 0, 0) :
-                                      Vector3(0, 1, 0);
-
-                    Vector3 U = ref.cross(W).normalized();
-                    Vector3 V = W.cross(U).normalized();
-
-                    return V;
-                };
+                auto init_distance_attr = sc->edges().find<Float>("init_distance");
+                UIPC_ASSERT(init_distance_attr,
+                            "AffineBodyPrismaticJoint: Geometry must have 'init_distance' attribute on `edges`");
+                auto init_distance_view = init_distance_attr->view();
 
                 auto Es = sc->edges().topo().view();
                 auto Ps = sc->positions().view();
@@ -136,13 +150,13 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                     Transform LT{left_sc->transforms().view()[l_iid]};
                     Transform RT{right_sc->transforms().view()[r_iid]};
 
-                    Vector3 tangent;
+                    Vector3 t;
                     Vector6 rest_position_c;
                     if(use_local)
                     {
                         Vector3 lp0 = LT * l_pos0_attr->view()[i];
                         Vector3 lp1 = LT * l_pos1_attr->view()[i];
-                        tangent = (lp1 - lp0).normalized();
+                        t           = (lp1 - lp0).normalized();
                         rest_position_c.segment<3>(0) = l_pos0_attr->view()[i];
                         rest_position_c.segment<3>(3) = r_pos0_attr->view()[i];
                     }
@@ -152,37 +166,43 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                         Vector3 P1 = Ps[e[1]];
                         UIPC_ASSERT((P0 - P1).squaredNorm() > 0,
                                     "AffineBodyPrismaticJoint: Edge positions must not be too close");
-                        tangent = (P1 - P0).normalized();
+                        t                             = (P1 - P0).normalized();
                         rest_position_c.segment<3>(0) = LT.inverse() * P0;
                         rest_position_c.segment<3>(3) = RT.inverse() * P0;
                     }
 
-                    Vector3 normal    = Normal(tangent);
-                    Vector3 bitangent = normal.cross(tangent).normalized();
+                    Vector3 n, b;
+                    orthonormal_basis(t, n, b);
+
                     rest_c_list.push_back(rest_position_c);
 
                     Matrix3x3 LT_rotation = LT.rotation();
                     Matrix3x3 RT_rotation = RT.rotation();
 
                     Vector6 rest_vec_t;
-                    rest_vec_t.segment<3>(0) = LT_rotation.inverse() * tangent;
-                    rest_vec_t.segment<3>(3) = RT_rotation.inverse() * tangent;
+                    rest_vec_t.segment<3>(0) = LT_rotation.inverse() * t;
+                    rest_vec_t.segment<3>(3) = RT_rotation.inverse() * t;
                     rest_t_list.push_back(rest_vec_t);
 
                     Vector6 rest_vec_n;
-                    rest_vec_n.segment<3>(0) = LT_rotation.inverse() * normal;
-                    rest_vec_n.segment<3>(3) = RT_rotation.inverse() * normal;
+                    rest_vec_n.segment<3>(0) = LT_rotation.inverse() * n;
+                    rest_vec_n.segment<3>(3) = RT_rotation.inverse() * n;
                     rest_n_list.push_back(rest_vec_n);
 
                     Vector6 rest_vec_b;
-                    rest_vec_b.segment<3>(0) = LT_rotation.inverse() * bitangent;
-                    rest_vec_b.segment<3>(3) = RT_rotation.inverse() * bitangent;
+                    rest_vec_b.segment<3>(0) = LT_rotation.inverse() * b;
+                    rest_vec_b.segment<3>(3) = RT_rotation.inverse() * b;
                     rest_b_list.push_back(rest_vec_b);
+
+                    init_distances_list.push_back(init_distance_view[i]);
                 }
 
                 std::ranges::copy(strength_ratio_view,
                                   std::back_inserter(strength_ratio_list));
+                ++geo_index;
             });
+
+        h_geo_joint_offsets_counts.scan();
 
         h_body_ids.resize(body_ids_list.size());
         std::ranges::move(body_ids_list, h_body_ids.begin());
@@ -202,12 +222,97 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
         h_strength_ratios.resize(strength_ratio_list.size());
         std::ranges::move(strength_ratio_list, h_strength_ratios.begin());
 
+        h_init_distances.resize(init_distances_list.size());
+        std::ranges::copy(init_distances_list, h_init_distances.begin());
+
+        h_current_distances.resize(h_init_distances.size());
+
         body_ids.copy_from(h_body_ids);
         rest_cs.copy_from(h_rest_cs);
         rest_ts.copy_from(h_rest_ts);
         rest_ns.copy_from(h_rest_ns);
         rest_bs.copy_from(h_rest_bs);
         strength_ratios.copy_from(h_strength_ratios);
+        init_distances.copy_from(h_init_distances);
+        current_distances.copy_from(h_current_distances);
+
+        // Compute initial distances from initial body qs
+        compute_current_distances();
+        // Write initial distances to geometry so the first animator step sees correct values
+        write_scene();
+    }
+
+    void compute_current_distances()
+    {
+        using namespace muda;
+        namespace DPJ = sym::affine_body_driving_prismatic_joint;
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(body_ids.size(),
+                   [body_ids = body_ids.cviewer().name("body_ids"),
+                    rest_cs  = rest_cs.cviewer().name("rest_cs"),
+                    rest_ts  = rest_ts.cviewer().name("rest_ts"),
+                    qs       = affine_body_dynamics->qs().cviewer().name("qs"),
+                    current_distances = current_distances.viewer().name("current_distances"),
+                    init_distances = init_distances.cviewer().name("init_distances")] __device__(int I)
+                   {
+                       Vector2i bids = body_ids(I);
+
+                       Vector12 q_i = qs(bids(0));
+                       Vector12 q_j = qs(bids(1));
+
+                       const Vector6& C_bar = rest_cs(I);
+                       const Vector6& t_bar = rest_ts(I);
+
+                       Vector9 F01_q;
+                       DPJ::F01_q<Float>(F01_q,
+                                         C_bar.segment<3>(0),
+                                         t_bar.segment<3>(0),
+                                         q_i,
+                                         C_bar.segment<3>(3),
+                                         t_bar.segment<3>(3),
+                                         q_j);
+
+                       Float distance;
+                       DPJ::Distance<Float>(distance, F01_q);
+
+                       current_distances(I) = distance - init_distances(I);
+                   });
+    }
+
+    void write_scene()
+    {
+        auto geo_slots = world().scene().geometries();
+
+        current_distances.copy_to(h_current_distances);
+
+        IndexT geo_joint_index = 0;
+
+        this->for_each(
+            geo_slots,
+            [&](geometry::Geometry& geo)
+            {
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyPrismaticJoint: Geometry must be a simplicial complex");
+
+                auto distance = sc->edges().find<Float>("distance");
+
+                if(distance)
+                {
+                    auto distance_view = view(*distance);
+                    auto [offset, count] = h_geo_joint_offsets_counts[geo_joint_index];
+                    UIPC_ASSERT(distance_view.size() == count,
+                                "AffineBodyPrismaticJoint: distance attribute size {} mismatch with joint count {}",
+                                distance_view.size(),
+                                count);
+
+                    auto src = span{h_current_distances}.subspan(offset, count);
+                    std::ranges::copy(src, distance_view.begin());
+                }
+
+                ++geo_joint_index;
+            });
     }
 
     void do_report_energy_extent(EnergyExtentInfo& info) override
@@ -397,9 +502,61 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
                    });
     };
 
+    bool do_dump(DumpInfo& info) override
+    {
+        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
+        auto frame = info.frame();
+
+        return curr_distances_dump.dump(fmt::format("{}pj_current_distances.{}", path, frame),
+                                        current_distances);
+    }
+
+    bool do_try_recover(RecoverInfo& info) override
+    {
+        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
+        auto frame = info.frame();
+
+        return curr_distances_dump.load(fmt::format("{}pj_current_distances.{}", path, frame));
+    }
+
+    void do_apply_recover(RecoverInfo& info) override
+    {
+        curr_distances_dump.apply_to(current_distances);
+    }
+
+    void do_clear_recover(RecoverInfo& info) override
+    {
+        curr_distances_dump.clean_up();
+    }
+
     U64 get_uid() const noexcept override { return ConstitutionUID; }
 };
 REGISTER_SIM_SYSTEM(AffineBodyPrismaticJoint);
+
+class AffineBodyPrismaticJointTimeIntegrator : public TimeIntegrator
+{
+  public:
+    using TimeIntegrator::TimeIntegrator;
+
+    SimSystemSlot<AffineBodyPrismaticJoint> prismatic_joint;
+    SimSystemSlot<AffineBodyDynamics>       affine_body_dynamics;
+
+    void do_init(InitInfo& info) override {}
+
+    void do_build(BuildInfo& info) override
+    {
+        prismatic_joint      = require<AffineBodyPrismaticJoint>();
+        affine_body_dynamics = require<AffineBodyDynamics>();
+    }
+
+    void do_predict_dof(PredictDofInfo& info) override {}
+
+    void do_update_state(UpdateVelocityInfo& info) override
+    {
+        prismatic_joint->compute_current_distances();
+    }
+};
+REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointTimeIntegrator);
 
 class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
 {
@@ -411,7 +568,6 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
     static constexpr U64 ConstraintUID = 21;
 
     SimSystemSlot<AffineBodyPrismaticJoint> prismatic_joint;
-
 
     // Host
     OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
@@ -427,13 +583,11 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
 
     vector<Float> h_init_distances;
     vector<Float> h_aim_distances;
-    vector<Float> h_current_distances;
 
     bool is_constrained_changed  = false;
     bool strength_ratios_changed = false;
     bool is_passive_changed      = false;
     bool aim_distances_changed   = false;
-
 
     // Device
     muda::DeviceBuffer<Vector2i> body_ids;
@@ -444,14 +598,10 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
     muda::DeviceBuffer<IndexT>   is_passive;
     muda::DeviceBuffer<Float>    init_distances;
     muda::DeviceBuffer<Float>    aim_distances;
-    muda::DeviceBuffer<Float>    current_distances;
 
     void do_build(BuildInfo& info) override
     {
-
         prismatic_joint = require<AffineBodyPrismaticJoint>();
-
-        on_write_scene([this]() { write_scene(); });
     }
 
     void do_init(InterAffineBodyAnimator::FilteredInfo& info) override
@@ -467,7 +617,6 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
         list<IndexT>   is_passive_list;
         list<Float>    init_distances_list;
         list<Float>    aim_distances_list;
-        list<Float>    current_distances_list;
 
         IndexT joint_offset = 0;
         info.for_each(
@@ -492,7 +641,7 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
                                 "AffineBodyDrivingPrismaticJoint: Geometry must have constraint UID {}",
                                 ConstraintUID);
                 }
-                // check consitudtion uid
+                // check constitution uid
                 {
                     auto constitution_uid = geo.meta().find<U64>(builtin::constitution_uid);
                     UIPC_ASSERT(constitution_uid, "AffineBodyDrivingPrismaticJoint: Geometry must have 'constitution_uid' attribute");
@@ -542,10 +691,9 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
                 auto is_passive_view = is_passive->view();
                 std::ranges::copy(is_passive_view, std::back_inserter(is_passive_list));
 
-                auto init_distances = sc->edges().find<Float>("init_distance");
-                UIPC_ASSERT(init_distances, "AffineBodyDrivingPrismaticJoint: Geometry must have 'init_distance' attribute on `edges`")
-                auto init_ditances_view = init_distances->view();
-                std::ranges::copy(init_ditances_view, std::back_inserter(init_distances_list));
+                auto init_dist = sc->edges().find<Float>("init_distance");
+                UIPC_ASSERT(init_dist, "AffineBodyDrivingPrismaticJoint: Geometry must have 'init_distance' attribute on `edges`")
+                auto init_dist_view = init_dist->view();
 
                 auto aim_distances = sc->edges().find<Float>("aim_distance");
                 UIPC_ASSERT(aim_distances, "AffineBodyDrivingPrismaticJoint: Geometry must have 'aim_distance' attribute on `edges`")
@@ -597,7 +745,7 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
                     {
                         Vector3 lp0 = LT * l_pos0_attr->view()[i];
                         Vector3 lp1 = LT * l_pos1_attr->view()[i];
-                        tangent = (lp1 - lp0).normalized();
+                        tangent     = (lp1 - lp0).normalized();
                         rest_position.segment<3>(0) = l_pos0_attr->view()[i];
                         rest_position.segment<3>(3) = r_pos0_attr->view()[i];
                     }
@@ -620,7 +768,7 @@ Edge             = ({}, {}))",
                                     e(0),
                                     e(1));
 
-                        tangent = (P1 - P0).normalized();
+                        tangent                     = (P1 - P0).normalized();
                         rest_position.segment<3>(0) = LT.inverse() * P0;
                         rest_position.segment<3>(3) = RT.inverse() * P0;
                     }
@@ -630,6 +778,8 @@ Edge             = ({}, {}))",
                     rest_tangent.segment<3>(0) = LT.rotation().inverse() * tangent;
                     rest_tangent.segment<3>(3) = RT.rotation().inverse() * tangent;
                     rest_tangent_list.push_back(rest_tangent);
+
+                    init_distances_list.push_back(init_dist_view[i]);
                 }
                 joint_offset++;
             });
@@ -669,7 +819,6 @@ Edge             = ({}, {}))",
         rest_tangents.copy_from(h_rest_tangent);
         init_distances.copy_from(h_init_distances);
         aim_distances.copy_from(h_aim_distances);
-        current_distances = init_distances;
     }
 
 
@@ -746,40 +895,6 @@ Edge             = ({}, {}))",
             is_passive.copy_from(h_is_passive);
     }
 
-    void write_scene()
-    {
-        auto geo_slots = world().scene().geometries();
-
-        current_distances.copy_to(h_current_distances);
-
-        IndexT geo_joint_index = 0;
-
-        this->for_each(
-            geo_slots,
-            [&](geometry::Geometry& geo)
-            {
-                auto sc = geo.as<geometry::SimplicialComplex>();
-                UIPC_ASSERT(sc, "AffineBodyDrivingPrismaticJoint: Geometry must be a simplicial complex");
-
-                auto distance = sc->edges().find<Float>("distance");
-
-                if(distance)
-                {
-                    auto distance_view = view(*distance);
-                    auto [offset, count] = h_geo_joint_offsets_counts[geo_joint_index];
-                    UIPC_ASSERT(distance_view.size() == count,
-                                "AffineBodyDrivingPrismaticJoint: distance attribute size {} mismatch with joint count {}",
-                                distance_view.size(),
-                                count);
-
-                    auto dst = span{h_current_distances}.subspan(offset, count);
-                    std::ranges::copy(dst, distance_view.begin());
-                }
-
-                ++geo_joint_index;
-            });
-    }
-
     void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
     {
         info.energy_count(body_ids.size());
@@ -798,64 +913,62 @@ Edge             = ({}, {}))",
 
         ParallelFor()
             .file_line(__FILE__, __LINE__)
-            .apply(body_ids.size(),
-                   [body_ids = body_ids.cviewer().name("body_ids"),
-                    is_constrained = is_constrained.cviewer().name("is_constrained"),
-                    is_passive = is_passive.cviewer().name("is_passive"),
-                    strength_ratios = strength_ratios.cviewer().name("strength_ratios"),
-                    rest_positions = rest_positions.cviewer().name("rest_positions"),
-                    rest_tangents = rest_tangents.cviewer().name("rest_tangents"),
-                    init_distances = init_distances.cviewer().name("init_distances"),
-                    curr_distances = current_distances.cviewer().name("current_distances"),
-                    aim_distances = aim_distances.cviewer().name("aim_distances"),
-                    qs = info.qs().cviewer().name("qs"),
-                    body_masses = info.body_masses().cviewer().name("body_masses"),
-                    is_fixed = info.is_fixed().cviewer().name("is_fixed"),
-                    Es = info.energies().viewer().name("Es")] __device__(int I)
-                   {
-                       Vector2i bids        = body_ids(I);
-                       auto     constrained = is_constrained(I);
-                       if(constrained == 0)
-                       {
-                           Es(I) = 0.0;
-                           return;
-                       }
-                       Float kappa = strength_ratios(I)
-                                     * (body_masses(bids(0)).mass()
-                                        + body_masses(bids(1)).mass());
+            .apply(
+                body_ids.size(),
+                [body_ids = body_ids.cviewer().name("body_ids"),
+                 is_constrained = is_constrained.cviewer().name("is_constrained"),
+                 is_passive = is_passive.cviewer().name("is_passive"),
+                 strength_ratios = strength_ratios.cviewer().name("strength_ratios"),
+                 rest_positions = rest_positions.cviewer().name("rest_positions"),
+                 rest_tangents = rest_tangents.cviewer().name("rest_tangents"),
+                 init_distances = init_distances.cviewer().name("init_distances"),
+                 curr_distances = prismatic_joint->current_distances.cviewer().name("current_distances"),
+                 aim_distances = aim_distances.cviewer().name("aim_distances"),
+                 qs            = info.qs().cviewer().name("qs"),
+                 body_masses = info.body_masses().cviewer().name("body_masses"),
+                 is_fixed    = info.is_fixed().cviewer().name("is_fixed"),
+                 Es = info.energies().viewer().name("Es")] __device__(int I)
+                {
+                    Vector2i bids        = body_ids(I);
+                    auto     constrained = is_constrained(I);
+                    if(constrained == 0)
+                    {
+                        Es(I) = 0.0;
+                        return;
+                    }
+                    Float kappa =
+                        strength_ratios(I)
+                        * (body_masses(bids(0)).mass() + body_masses(bids(1)).mass());
 
-                       auto passive      = is_passive(I);
-                       auto aim_distance = aim_distances(I);
-                       if(passive == 1)
-                       {
-                           // resist external forces passively
-                           aim_distance = curr_distances(I);
-                       }
+                    auto passive      = is_passive(I);
+                    auto aim_distance = aim_distances(I);
+                    if(passive == 1)
+                    {
+                        // resist external forces passively
+                        aim_distance = curr_distances(I);
+                    }
 
-                       Float d_tidle = aim_distance + init_distances(I);
+                    Float d_tidle = aim_distance + init_distances(I);
 
-                       Vector12 q_i = qs(bids(0));
-                       Vector12 q_j = qs(bids(1));
+                    Vector12 q_i = qs(bids(0));
+                    Vector12 q_j = qs(bids(1));
 
-                       const Vector6& C_bar = rest_positions(I);
-                       const Vector6& T_bar = rest_tangents(I);
+                    const Vector6& C_bar = rest_positions(I);
+                    const Vector6& T_bar = rest_tangents(I);
 
-                       Vector9 F01;
-                       DPJ::F01_q<Float>(F01,
-                                         C_bar.segment<3>(0),
-                                         T_bar.segment<3>(0),
-                                         q_i,
-                                         C_bar.segment<3>(3),
-                                         T_bar.segment<3>(3),
-                                         q_j);
+                    Vector9 F01;
+                    DPJ::F01_q<Float>(F01,
+                                      C_bar.segment<3>(0),
+                                      T_bar.segment<3>(0),
+                                      q_i,
+                                      C_bar.segment<3>(3),
+                                      T_bar.segment<3>(3),
+                                      q_j);
 
-                       // E0 = 1/2 * kappa * (T_i \cdot (C_j - C_i) - d_tidle)^2
-                       // E1 = 1/2 * kappa * (T_j \cdot (C_i - C_j) - d_tidle)^2
-
-                       Float E01;
-                       DPJ::E01<Float>(E01, kappa, F01, d_tidle);
-                       Es(I) = E01;
-                   });
+                    Float E01;
+                    DPJ::E01<Float>(E01, kappa, F01, d_tidle);
+                    Es(I) = E01;
+                });
     }
 
     void do_compute_gradient_hessian(InterAffineBodyAnimator::GradientHessianInfo& info) override
@@ -877,7 +990,7 @@ Edge             = ({}, {}))",
                  rest_positions = rest_positions.cviewer().name("rest_positions"),
                  rest_tangents = rest_tangents.cviewer().name("rest_tangents"),
                  init_distances = init_distances.cviewer().name("init_distances"),
-                 curr_distances = current_distances.cviewer().name("current_distances"),
+                 curr_distances = prismatic_joint->current_distances.cviewer().name("current_distances"),
                  aim_distances = aim_distances.cviewer().name("aim_distances"),
                  qs            = info.qs().cviewer().name("qs"),
                  body_masses = info.body_masses().cviewer().name("body_masses"),
@@ -956,104 +1069,190 @@ Edge             = ({}, {}))",
                 });
     }
 
-
     U64 get_uid() const noexcept override { return ConstraintUID; }
-
-
-    BufferDump curr_distances_dump;
-
-    bool do_dump(DumpInfo& info) override
-    {
-        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
-        auto frame = info.frame();
-
-        return curr_distances_dump.dump(fmt::format("{}current_distances.{}", path, frame),
-                                        current_distances);
-    }
-
-    bool do_try_recover(RecoverInfo& info) override
-    {
-        auto path  = info.dump_path(UIPC_RELATIVE_SOURCE_FILE);
-        auto frame = info.frame();
-
-        return curr_distances_dump.load(fmt::format("{}current_distances.{}", path, frame));
-    }
-
-    void do_apply_recover(RecoverInfo& info) override
-    {
-        curr_distances_dump.apply_to(current_distances);
-    }
-
-    void do_clear_recover(RecoverInfo& info) override
-    {
-        curr_distances_dump.clean_up();
-    }
 };
 REGISTER_SIM_SYSTEM(AffineBodyDrivingPrismaticJoint);
 
-class AffineBodyDrivingPrismaticJointTimeIntegrator : public TimeIntegrator
+// ============================================================================
+// AffineBodyPrismaticJointExternalForceConstraint
+// Reuses body_ids, rest_ts, init_distances from AffineBodyPrismaticJoint.
+// Only stores external-force-specific data (forces, is_constrained).
+// ============================================================================
+
+class AffineBodyPrismaticJointExternalForceConstraint final : public InterAffineBodyConstraint
 {
   public:
-    using TimeIntegrator::TimeIntegrator;
+    using InterAffineBodyConstraint::InterAffineBodyConstraint;
+    static constexpr U64 ConstraintUID = 667;
 
-    SimSystemSlot<AffineBodyDrivingPrismaticJoint> driving_prismatic_joint;
-    SimSystemSlot<AffineBodyDynamics>              affine_body_dynamics;
+    SimSystemSlot<AffineBodyPrismaticJoint> prismatic_joint;
 
-    void do_init(InitInfo& info) override {}
+    vector<Float>  h_forces;
+    vector<IndexT> h_is_constrained;
+
+    muda::DeviceBuffer<Float>  forces_buf;
+    muda::DeviceBuffer<IndexT> is_constrained_buf;
 
     void do_build(BuildInfo& info) override
     {
-        driving_prismatic_joint = require<AffineBodyDrivingPrismaticJoint>();
-        affine_body_dynamics    = require<AffineBodyDynamics>();
+        prismatic_joint = require<AffineBodyPrismaticJoint>();
     }
 
-    void do_predict_dof(PredictDofInfo& info) override
+    U64 get_uid() const noexcept override { return ConstraintUID; }
+
+    void do_init(InterAffineBodyAnimator::FilteredInfo& info) override
     {
-        // do noting here
+        auto geo_slots = world().scene().geometries();
+
+        info.for_each(
+            geo_slots,
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
+            {
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyPrismaticJointExternalForceConstraint: geometry must be SimplicialComplex");
+
+                auto is_constrained = sc->edges().find<IndexT>("external_force/is_constrained");
+                UIPC_ASSERT(is_constrained, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force/is_constrained' attribute on `edges`");
+                auto is_constrained_view = is_constrained->view();
+
+                auto external_force = sc->edges().find<Float>("external_force");
+                UIPC_ASSERT(external_force, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force' attribute on `edges`");
+                auto external_force_view = external_force->view();
+
+                for(SizeT i = 0; i < sc->edges().size(); ++i)
+                {
+                    h_is_constrained.push_back(is_constrained_view[i]);
+                    h_forces.push_back(external_force_view[i]);
+                }
+            });
+
+        SizeT N = h_forces.size();
+        if(N > 0)
+        {
+            forces_buf.copy_from(h_forces);
+            is_constrained_buf.copy_from(h_is_constrained);
+        }
     }
 
-    void do_update_state(UpdateVelocityInfo& info) override
+    void do_step(InterAffineBodyAnimator::FilteredInfo& info) override
     {
+        auto geo_slots = world().scene().geometries();
+
+        SizeT offset = 0;
+        info.for_each(
+            geo_slots,
+            [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
+            {
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyPrismaticJointExternalForceConstraint: geometry must be SimplicialComplex");
+
+                auto is_constrained = sc->edges().find<IndexT>("external_force/is_constrained");
+                UIPC_ASSERT(is_constrained, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force/is_constrained' attribute on `edges`");
+                auto is_constrained_view = is_constrained->view();
+
+                auto external_force = sc->edges().find<Float>("external_force");
+                UIPC_ASSERT(external_force, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force' attribute on `edges`");
+                auto external_force_view = external_force->view();
+
+                auto Es = sc->edges().topo().view();
+                for(auto&& [i, e] : enumerate(Es))
+                {
+                    h_is_constrained[offset] = is_constrained_view[i];
+                    h_forces[offset]         = external_force_view[i];
+                    ++offset;
+                }
+            });
+
+        SizeT N = h_forces.size();
+        if(N > 0)
+        {
+            is_constrained_buf.copy_from(h_is_constrained);
+            forces_buf.copy_from(h_forces);
+        }
+    }
+
+    void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
+    {
+        info.energy_count(0);
+        info.gradient_count(0);
+        if(!info.gradient_only())
+            info.hessian_count(0);
+    }
+
+    void do_compute_energy(InterAffineBodyAnimator::ComputeEnergyInfo& info) override {}
+    void do_compute_gradient_hessian(InterAffineBodyAnimator::GradientHessianInfo& info) override {}
+};
+REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointExternalForceConstraint);
+
+// ============================================================================
+// AffineBodyPrismaticJointExternalForce
+// Applies external forces along prismatic joint axes.
+// ============================================================================
+
+class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalForceReporter
+{
+  public:
+    static constexpr U64 ReporterUID = 667;
+    using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
+
+    SimSystemSlot<AffineBodyDynamics>                              affine_body_dynamics;
+    SimSystemSlot<AffineBodyPrismaticJointExternalForceConstraint> constraint;
+
+    void do_build(BuildInfo& info) override
+    {
+        affine_body_dynamics = require<AffineBodyDynamics>();
+        constraint           = require<AffineBodyPrismaticJointExternalForceConstraint>();
+    }
+
+    U64 get_uid() const noexcept override { return ReporterUID; }
+
+    void do_init() override {}
+
+    void do_step(ExternalForceInfo& info) override
+    {
+        SizeT force_count = constraint->forces_buf.size();
+        if(force_count == 0)
+            return;
+
         using namespace muda;
-        namespace DPJ = sym::affine_body_driving_prismatic_joint;
-        auto& dpj     = driving_prismatic_joint;
-
-
         ParallelFor()
             .file_line(__FILE__, __LINE__)
-            .apply(dpj->body_ids.size(),
-                   [body_ids = dpj->body_ids.cviewer().name("body_ids"),
-                    rest_positions = dpj->rest_positions.cviewer().name("rest_position"),
-                    rest_tangents = dpj->rest_tangents.cviewer().name("rest_tangents"),
-                    current_distances = dpj->current_distances.viewer().name("current_distances"),
-                    init_distances = dpj->init_distances.cviewer().name("init_distances"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int I)
+            .apply(force_count,
+                   [external_forces = info.external_forces().viewer().name("external_forces"),
+                    body_ids = constraint->prismatic_joint->body_ids.cviewer().name("body_ids"),
+                    forces   = constraint->forces_buf.cviewer().name("forces"),
+                    rest_tangents = constraint->prismatic_joint->rest_ts.cviewer().name("rest_tangents"),
+                    constrained_flags = constraint->is_constrained_buf.cviewer().name("constrained_flags"),
+                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
                    {
-                       Vector2i bids = body_ids(I);
+                       if(constrained_flags(i) == 0)
+                           return;
+
+                       Vector2i bids = body_ids(i);
+                       Float    f    = forces(i);
+
+                       const Vector6& t_bar = rest_tangents(i);
 
                        Vector12 q_i = qs(bids(0));
                        Vector12 q_j = qs(bids(1));
 
-                       const Vector6& C_bar = rest_positions(I);
-                       const Vector6& t_bar = rest_tangents(I);
+                       ABDJacobi JT[2] = {ABDJacobi{t_bar.segment<3>(0)},
+                                          ABDJacobi{t_bar.segment<3>(3)}};
+                       Vector3   t_i   = JT[0].vec_x(q_i);
+                       Vector3   t_j   = JT[1].vec_x(q_j);
 
-                       Vector9 F01_q;
-                       DPJ::F01_q<Float>(F01_q,
-                                         C_bar.segment<3>(0),
-                                         t_bar.segment<3>(0),
-                                         q_i,
-                                         C_bar.segment<3>(3),
-                                         t_bar.segment<3>(3),
-                                         q_j);
+                       // Build 12D force vectors: +f*t to body_i, -f*t to body_j
+                       Vector12 F_i      = Vector12::Zero();
+                       F_i.segment<3>(0) = f * t_i;
 
-                       Float distance;
-                       DPJ::Distance<Float>(distance, F01_q);
+                       Vector12 F_j      = Vector12::Zero();
+                       F_j.segment<3>(0) = -f * t_j;
 
-                       current_distances(I) = distance - init_distances(I);
+                       eigen::atomic_add(external_forces(bids(0)), F_i);
+                       eigen::atomic_add(external_forces(bids(1)), F_j);
                    });
     }
 };
-REGISTER_SIM_SYSTEM(AffineBodyDrivingPrismaticJointTimeIntegrator);
-
+REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointExternalForce);
 
 }  // namespace uipc::backend::cuda

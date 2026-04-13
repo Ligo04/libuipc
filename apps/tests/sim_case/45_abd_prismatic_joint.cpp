@@ -103,10 +103,27 @@ TEST_CASE("45_abd_prismatic_joint", "[abd]")
                              span{r_instance_id},
                              span{strength_ratios});
     auto joints = scene.objects().create("prismatic_joint");
-    joints->geometries().create(joint_mesh);
+    auto [joint_geo_slot, joint_rest_geo_slot] =
+        joints->geometries().create(joint_mesh);
 
     world.init(scene);
     REQUIRE(world.is_valid());
+
+    auto print_distances = [&]()
+    {
+        auto* sc = joint_geo_slot->geometry().as<SimplicialComplex>();
+        REQUIRE(sc);
+        auto distance = sc->edges().find<Float>("distance");
+        REQUIRE(distance);
+        auto distance_view = distance->view();
+        for(SizeT i = 0; i < distance_view.size(); ++i)
+        {
+            printf("frame=%llu joint=%zu distance=%.6f\n",
+                   (unsigned long long)world.frame(),
+                   i,
+                   distance_view[i]);
+        }
+    };
 
     SceneIO sio{scene};
     sio.write_surface(
@@ -117,6 +134,7 @@ TEST_CASE("45_abd_prismatic_joint", "[abd]")
         world.advance();
         REQUIRE(world.is_valid());
         world.retrieve();
+        print_distances();
         sio.write_surface(
             fmt::format("{}scene_surface{}.obj", output_path, world.frame()));
     }
