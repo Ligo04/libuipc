@@ -90,22 +90,19 @@ void AffineBodyConstitution::create_abd_attributes(geometry::SimplicialComplex& 
     auto kappa_view = geometry::view(*kappa_attr);
     std::ranges::fill(kappa_view, kappa);
 
-    if constexpr(uipc::RUNTIME_CHECK)
-    {
-        UIPC_ASSERT(volume > 0,
-                    "Volume of the mesh is non-positive ({}), which is not allowed.",
-                    volume);
-    }
+    UIPC_ASSERT(volume > 0,
+                "Volume of the mesh is non-positive ({}), which is not allowed.",
+                volume);
 
     auto meta_volume = sc.meta().find<Float>(builtin::volume);
     if(!meta_volume)
-        meta_volume = sc.meta().create<Float>(builtin::volume, volume);
+        meta_volume = sc.meta().create<Float>(builtin::volume, 0.0);
     else
         geometry::view(*meta_volume).front() = volume;
 
     auto meta_mass = sc.meta().find<Float>(builtin::mass_density);
     if(!meta_mass)
-        meta_mass = sc.meta().create<Float>(builtin::mass_density, mass_density);
+        meta_mass = sc.meta().create<Float>(builtin::mass_density, 0.0);
     else
         geometry::view(*meta_mass).front() = mass_density;
 

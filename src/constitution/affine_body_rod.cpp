@@ -35,7 +35,7 @@ void AffineBodyRod::apply_to(geometry::SimplicialComplex& sc,
 
     auto attr_thickness = sc.vertices().find<Float>(builtin::thickness);
     if(!attr_thickness)
-        attr_thickness = sc.vertices().create<Float>(builtin::thickness, thickness);
+        attr_thickness = sc.vertices().create<Float>(builtin::thickness, 0.0);
     auto thickness_view = geometry::view(*attr_thickness);
     std::ranges::fill(thickness_view, thickness);
 }
