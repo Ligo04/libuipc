@@ -154,6 +154,7 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
 
                     Vector12 rest_pos;
                     Vector3  t;
+
                     if(use_local)
                     {
                         rest_pos.segment<3>(0) = l_pos0_attr->view()[i];
@@ -170,35 +171,31 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
                         Vector3 P1 = Ps[e[1]];
                         t          = P1 - P0;
 
-                        UIPC_ASSERT(t.squaredNorm() > 1e-24,
-                                    R"(AffineBodyRevoluteJoint: Edge with zero length detected,
-Joint GeometryID = {},
-LinkGeoIDs       = ({}, {}),
-LinkInstIDs      = ({}, {}),
-Edge             = ({}, {}))",
-                                    joint_geo_id,
-                                    l_gid,
-                                    r_gid,
-                                    l_iid,
-                                    r_iid,
-                                    e(0),
-                                    e(1));
-
                         rest_pos.segment<3>(0) = LT.inverse() * P0;
                         rest_pos.segment<3>(3) = LT.inverse() * P1;
                         rest_pos.segment<3>(6) = RT.inverse() * P0;
                         rest_pos.segment<3>(9) = RT.inverse() * P1;
                     }
+                    UIPC_ASSERT(t.squaredNorm() > 1e-24,
+                                R"(AffineBodyRevoluteJoint: Edge with zero length detected,
+Joint GeometryID = {},
+LinkGeoIDs       = ({}, {}),
+LinkInstIDs      = ({}, {}),
+Edge             = ({}, {}))",
+                                joint_geo_id,
+                                l_gid,
+                                r_gid,
+                                l_iid,
+                                r_iid,
+                                e(0),
+                                e(1));
+
                     rest_positions_list.push_back(rest_pos);
 
-                    UIPC_ASSERT(t.squaredNorm() > 0.0,
-                                "AffineBodyRevoluteJoint: joint edge has zero length at index {}",
-                                i);
                     Vector3 n, b;
                     orthonormal_basis(t, n, b);
-
                     // Storage layout: [b, n] per body (swapped from [n, b]) to
-                    // invert the sign of the angle reported by DRJ::currAngle
+                    // invert the sign of the angle reported by DRJ::Angle
                     // while keeping b = t x n right-handed.
                     Vector6 lb;
                     lb.segment<3>(0) = L_inv_rot * b;
@@ -247,11 +244,6 @@ Edge             = ({}, {}))",
         r_basis.copy_from(h_r_basis);
         init_angles.copy_from(h_init_angles);
         current_angles.copy_from(h_current_angles);
-
-        // Compute initial angles from initial body qs
-        compute_current_angles();
-        // Write initial angles to geometry so the first animator step sees correct values
-        write_scene();
     }
 
     void compute_current_angles()
@@ -279,17 +271,17 @@ Edge             = ({}, {}))",
 
                        Vector12 F01_q;
                        DRJ::F01_q<Float>(F01_q,
-                                         lb.segment<3>(3),
                                          lb.segment<3>(0),
+                                         lb.segment<3>(3),
                                          q_i,
-                                         rb.segment<3>(3),
                                          rb.segment<3>(0),
+                                         rb.segment<3>(3),
                                          q_j);
 
-                       Float curr_angle;
-                       DRJ::currAngle<Float>(curr_angle, F01_q);
+                       Float theta;
+                       DRJ::theta<Float>(theta, F01_q);
 
-                       Float total_angle = curr_angle - init_angles(I);
+                       Float total_angle = theta - init_angles(I);
                        // map to [-pi, pi]
                        auto map2range = [=](Float angle) -> Float
                        {
@@ -740,16 +732,16 @@ Edge             = ({}, {}))",
                     Vector3 n, b;
                     orthonormal_basis(t, n, b);
 
-                    // Storage layout: [b, n] per body (matches constitution
+                    // Storage layout: [n,b] per body (matches constitution
                     // side); see AffineBodyRevoluteJoint::do_init for details.
                     Vector6 lb;
-                    lb.segment<3>(0) = L_inv_rot * b;
-                    lb.segment<3>(3) = L_inv_rot * n;
+                    lb.segment<3>(0) = L_inv_rot * n;
+                    lb.segment<3>(3) = L_inv_rot * b;
                     l_basis_list.push_back(lb);
 
                     Vector6 rb;
-                    rb.segment<3>(0) = R_inv_rot * b;
-                    rb.segment<3>(3) = R_inv_rot * n;
+                    rb.segment<3>(0) = R_inv_rot * n;
+                    rb.segment<3>(3) = R_inv_rot * b;
                     r_basis_list.push_back(rb);
 
                     init_angles_list.push_back(init_angles_view[i]);
@@ -929,14 +921,13 @@ Edge             = ({}, {}))",
 
                        Vector12 F01_q;
                        DRJ::F01_q<Float>(F01_q,
-                                         lb.segment<3>(3),
                                          lb.segment<3>(0),
+                                         lb.segment<3>(3),
                                          q_i,
-                                         rb.segment<3>(3),
                                          rb.segment<3>(0),
+                                         rb.segment<3>(3),
                                          q_j);
 
-                       // E = 1/2 * kappa * (sin(theta) cos(theta_tilde) - cos(theta) sin(theta_tilde))^2
                        Float E;
                        DRJ::E(E, kappa, F01_q, theta_tilde);
                        Es(I) = E;
@@ -1004,11 +995,11 @@ Edge             = ({}, {}))",
 
                     Vector12 F01_q;
                     DRJ::F01_q<Float>(F01_q,
-                                      lb.segment<3>(3),
                                       lb.segment<3>(0),
+                                      lb.segment<3>(3),
                                       q_i,
-                                      rb.segment<3>(3),
                                       rb.segment<3>(0),
+                                      rb.segment<3>(3),
                                       q_j);
 
                     // G12s
@@ -1017,10 +1008,10 @@ Edge             = ({}, {}))",
                     Vector24 J01T_G01;
                     DRJ::J01T_G01<Float>(J01T_G01,
                                          G01,
-                                         lb.segment<3>(3),
                                          lb.segment<3>(0),
-                                         rb.segment<3>(3),
-                                         rb.segment<3>(0));
+                                         lb.segment<3>(3),
+                                         rb.segment<3>(0),
+                                         rb.segment<3>(3));
 
                     DoubletVectorAssembler DVA{G12s};
                     DVA.segment<StencilSize>(StencilSize * I).write(bids, J01T_G01);
@@ -1037,10 +1028,10 @@ Edge             = ({}, {}))",
                     Matrix24x24 J01T_H01_J01;
                     DRJ::J01T_H01_J01<Float>(J01T_H01_J01,
                                              H01,
-                                             lb.segment<3>(3),
                                              lb.segment<3>(0),
-                                             rb.segment<3>(3),
-                                             rb.segment<3>(0));
+                                             lb.segment<3>(3),
+                                             rb.segment<3>(0),
+                                             rb.segment<3>(3));
 
                     TripletMatrixAssembler TMA{H12x12s};
                     TMA.half_block<StencilSize>(HalfHessianSize * I).write(bids, J01T_H01_J01);
