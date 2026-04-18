@@ -235,11 +235,6 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
         strength_ratios.copy_from(h_strength_ratios);
         init_distances.copy_from(h_init_distances);
         current_distances.copy_from(h_current_distances);
-
-        // Compute initial distances from initial body qs
-        compute_current_distances();
-        // Write initial distances to geometry so the first animator step sees correct values
-        write_scene();
     }
 
     void compute_current_distances()
@@ -1111,7 +1106,8 @@ class AffineBodyPrismaticJointExternalForceConstraint final : public InterAffine
                 auto sc = geo.as<geometry::SimplicialComplex>();
                 UIPC_ASSERT(sc, "AffineBodyPrismaticJointExternalForceConstraint: geometry must be SimplicialComplex");
 
-                auto is_constrained = sc->edges().find<IndexT>("external_force/is_constrained");
+                auto is_constrained =
+                    sc->edges().find<IndexT>("external_force/is_constrained");
                 UIPC_ASSERT(is_constrained, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force/is_constrained' attribute on `edges`");
                 auto is_constrained_view = is_constrained->view();
 
@@ -1146,7 +1142,8 @@ class AffineBodyPrismaticJointExternalForceConstraint final : public InterAffine
                 auto sc = geo.as<geometry::SimplicialComplex>();
                 UIPC_ASSERT(sc, "AffineBodyPrismaticJointExternalForceConstraint: geometry must be SimplicialComplex");
 
-                auto is_constrained = sc->edges().find<IndexT>("external_force/is_constrained");
+                auto is_constrained =
+                    sc->edges().find<IndexT>("external_force/is_constrained");
                 UIPC_ASSERT(is_constrained, "AffineBodyPrismaticJointExternalForceConstraint: Geometry must have 'external_force/is_constrained' attribute on `edges`");
                 auto is_constrained_view = is_constrained->view();
 
@@ -1179,8 +1176,12 @@ class AffineBodyPrismaticJointExternalForceConstraint final : public InterAffine
             info.hessian_count(0);
     }
 
-    void do_compute_energy(InterAffineBodyAnimator::ComputeEnergyInfo& info) override {}
-    void do_compute_gradient_hessian(InterAffineBodyAnimator::GradientHessianInfo& info) override {}
+    void do_compute_energy(InterAffineBodyAnimator::ComputeEnergyInfo& info) override
+    {
+    }
+    void do_compute_gradient_hessian(InterAffineBodyAnimator::GradientHessianInfo& info) override
+    {
+    }
 };
 REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointExternalForceConstraint);
 
@@ -1195,13 +1196,13 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
     static constexpr U64 ReporterUID = 667;
     using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
 
-    SimSystemSlot<AffineBodyDynamics>                              affine_body_dynamics;
+    SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
     SimSystemSlot<AffineBodyPrismaticJointExternalForceConstraint> constraint;
 
     void do_build(BuildInfo& info) override
     {
         affine_body_dynamics = require<AffineBodyDynamics>();
-        constraint           = require<AffineBodyPrismaticJointExternalForceConstraint>();
+        constraint = require<AffineBodyPrismaticJointExternalForceConstraint>();
     }
 
     U64 get_uid() const noexcept override { return ReporterUID; }
@@ -1217,40 +1218,41 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
         using namespace muda;
         ParallelFor()
             .file_line(__FILE__, __LINE__)
-            .apply(force_count,
-                   [external_forces = info.external_forces().viewer().name("external_forces"),
-                    body_ids = constraint->prismatic_joint->body_ids.cviewer().name("body_ids"),
-                    forces   = constraint->forces_buf.cviewer().name("forces"),
-                    rest_tangents = constraint->prismatic_joint->rest_ts.cviewer().name("rest_tangents"),
-                    constrained_flags = constraint->is_constrained_buf.cviewer().name("constrained_flags"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
-                   {
-                       if(constrained_flags(i) == 0)
-                           return;
+            .apply(
+                force_count,
+                [external_forces = info.external_forces().viewer().name("external_forces"),
+                 body_ids = constraint->prismatic_joint->body_ids.cviewer().name("body_ids"),
+                 forces = constraint->forces_buf.cviewer().name("forces"),
+                 rest_tangents = constraint->prismatic_joint->rest_ts.cviewer().name("rest_tangents"),
+                 constrained_flags = constraint->is_constrained_buf.cviewer().name("constrained_flags"),
+                 qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
+                {
+                    if(constrained_flags(i) == 0)
+                        return;
 
-                       Vector2i bids = body_ids(i);
-                       Float    f    = forces(i);
+                    Vector2i bids = body_ids(i);
+                    Float    f    = forces(i);
 
-                       const Vector6& t_bar = rest_tangents(i);
+                    const Vector6& t_bar = rest_tangents(i);
 
-                       Vector12 q_i = qs(bids(0));
-                       Vector12 q_j = qs(bids(1));
+                    Vector12 q_i = qs(bids(0));
+                    Vector12 q_j = qs(bids(1));
 
-                       ABDJacobi JT[2] = {ABDJacobi{t_bar.segment<3>(0)},
-                                          ABDJacobi{t_bar.segment<3>(3)}};
-                       Vector3   t_i   = JT[0].vec_x(q_i);
-                       Vector3   t_j   = JT[1].vec_x(q_j);
+                    ABDJacobi JT[2] = {ABDJacobi{t_bar.segment<3>(0)},
+                                       ABDJacobi{t_bar.segment<3>(3)}};
+                    Vector3   t_i   = JT[0].vec_x(q_i);
+                    Vector3   t_j   = JT[1].vec_x(q_j);
 
-                       // Build 12D force vectors: +f*t to body_i, -f*t to body_j
-                       Vector12 F_i      = Vector12::Zero();
-                       F_i.segment<3>(0) = f * t_i;
+                    // Build 12D force vectors: +f*t to body_i, -f*t to body_j
+                    Vector12 F_i      = Vector12::Zero();
+                    F_i.segment<3>(0) = f * t_i;
 
-                       Vector12 F_j      = Vector12::Zero();
-                       F_j.segment<3>(0) = -f * t_j;
+                    Vector12 F_j      = Vector12::Zero();
+                    F_j.segment<3>(0) = -f * t_j;
 
-                       eigen::atomic_add(external_forces(bids(0)), F_i);
-                       eigen::atomic_add(external_forces(bids(1)), F_j);
-                   });
+                    eigen::atomic_add(external_forces(bids(0)), F_i);
+                    eigen::atomic_add(external_forces(bids(1)), F_j);
+                });
     }
 };
 REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointExternalForce);
