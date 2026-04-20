@@ -194,17 +194,15 @@ Edge             = ({}, {}))",
 
                     Vector3 n, b;
                     orthonormal_basis(t, n, b);
-                    // Storage layout: [b, n] per body (swapped from [n, b]) to
-                    // invert the sign of the angle reported by DRJ::Angle
-                    // while keeping b = t x n right-handed.
+                    // Storage layout: [n, b] per body
                     Vector6 lb;
-                    lb.segment<3>(0) = L_inv_rot * b;
-                    lb.segment<3>(3) = L_inv_rot * n;
+                    lb.segment<3>(0) = L_inv_rot * n;
+                    lb.segment<3>(3) = L_inv_rot * b;
                     l_basis_list.push_back(lb);
 
                     Vector6 rb;
-                    rb.segment<3>(0) = R_inv_rot * b;
-                    rb.segment<3>(3) = R_inv_rot * n;
+                    rb.segment<3>(0) = R_inv_rot * n;
+                    rb.segment<3>(3) = R_inv_rot * b;
                     r_basis_list.push_back(rb);
 
                     init_angles_list.push_back(init_angle_view[i]);
@@ -530,19 +528,15 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
     SimSystemSlot<AffineBodyRevoluteJoint> revolute_joint;
 
     // Host
+    // Note: body_ids / l_basis / r_basis / init_angles are reused directly
+    // from AffineBodyRevoluteJoint under a strict index-alignment assumption
+    // (see sanity check in do_init).
     OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
-
-    vector<Vector2i> h_body_ids;
-
-    vector<Vector6> h_l_basis;
-    vector<Vector6> h_r_basis;
 
     vector<IndexT> h_is_constrained;
     vector<Float>  h_strength_ratios;
     vector<IndexT> h_is_passive;
-
-    vector<Float> h_init_angles;
-    vector<Float> h_aim_angles;
+    vector<Float>  h_aim_angles;
 
     bool is_constrained_changed  = false;
     bool strength_ratios_changed = false;
@@ -550,14 +544,10 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
     bool aim_angles_changed      = false;
 
     // Device
-    muda::DeviceBuffer<Vector2i> body_ids;
-    muda::DeviceBuffer<Vector6>  l_basis;
-    muda::DeviceBuffer<Vector6>  r_basis;
-    muda::DeviceBuffer<IndexT>   is_constrained;
-    muda::DeviceBuffer<Float>    strength_ratios;
-    muda::DeviceBuffer<IndexT>   is_passive;
-    muda::DeviceBuffer<Float>    init_angles;
-    muda::DeviceBuffer<Float>    aim_angles;
+    muda::DeviceBuffer<IndexT> is_constrained;
+    muda::DeviceBuffer<Float>  strength_ratios;
+    muda::DeviceBuffer<IndexT> is_passive;
+    muda::DeviceBuffer<Float>  aim_angles;
 
     void do_build(BuildInfo& info) override
     {
@@ -570,14 +560,10 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
 
         h_geo_joint_offsets_counts.resize(info.anim_inter_geo_infos().size());
 
-        list<Vector2i> body_ids_list;
-        list<Vector6>  l_basis_list;
-        list<Vector6>  r_basis_list;
-        list<IndexT>   is_constrained_list;
-        list<Float>    strength_ratios_list;
-        list<IndexT>   is_passive_list;
-        list<Float>    init_angles_list;
-        list<Float>    aim_angles_list;
+        list<IndexT> is_constrained_list;
+        list<Float>  strength_ratios_list;
+        list<IndexT> is_passive_list;
+        list<Float>  aim_angles_list;
 
         IndexT joint_offset = 0;
         info.for_each(
@@ -619,146 +605,30 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                 UIPC_ASSERT(h_geo_joint_offsets_counts.counts()[joint_offset] > 0,
                             "AffineBodyDrivingRevoluteJoint: Geometry must have at least one edge");
 
-                // get l_geo_id, r_geo_id, l_inst_id, r_inst_id
-                auto l_geo_id = sc->edges().find<IndexT>("l_geo_id");
-                UIPC_ASSERT(l_geo_id, "AffineBodyDrivingRevoluteJoint: Geometry must have 'l_geo_id' attribute on `edges`");
-                auto l_geo_id_view = l_geo_id->view();
-
-                auto r_geo_id = sc->edges().find<IndexT>("r_geo_id");
-                UIPC_ASSERT(r_geo_id, "AffineBodyDrivingRevoluteJoint: Geometry must have 'r_geo_id' attribute on `edges`");
-                auto r_geo_id_view = r_geo_id->view();
-
-                auto l_inst_id = sc->edges().find<IndexT>("l_inst_id");
-                UIPC_ASSERT(l_inst_id, "AffineBodyDrivingRevoluteJoint: Geometry must have 'l_inst_id' attribute on `edges`");
-                auto l_inst_id_view = l_inst_id->view();
-
-                auto r_inst_id = sc->edges().find<IndexT>("r_inst_id");
-                UIPC_ASSERT(r_inst_id, "AffineBodyDrivingRevoluteJoint: Geometry must have 'r_inst_id' attribute on `edges`");
-                auto r_inst_id_view = r_inst_id->view();
-
+                // Driving-only attributes; shared attributes (body_ids, basis,
+                // init_angles) are supplied by AffineBodyRevoluteJoint.
                 auto is_constrained = sc->edges().find<IndexT>("driving/is_constrained");
                 UIPC_ASSERT(is_constrained, "AffineBodyDrivingRevoluteJoint: Geometry must have 'driving/is_constrained' attribute on `edges`");
-                auto is_constrained_view = is_constrained->view();
-                std::ranges::copy(is_constrained_view,
+                std::ranges::copy(is_constrained->view(),
                                   std::back_inserter(is_constrained_list));
 
                 auto strength_ratios = sc->edges().find<Float>("driving/strength_ratio");
                 UIPC_ASSERT(strength_ratios, "AffineBodyDrivingRevoluteJoint: Geometry must have 'driving/strength_ratio' attribute on `edges`")
-                auto strength_ratios_view = strength_ratios->view();
-                std::ranges::copy(strength_ratios_view,
+                std::ranges::copy(strength_ratios->view(),
                                   std::back_inserter(strength_ratios_list));
 
                 auto is_passive = sc->edges().find<IndexT>("is_passive");
                 UIPC_ASSERT(is_passive, "AffineBodyDrivingRevoluteJoint: Geometry must have 'is_passive' attribute on `edges`")
-                auto is_passive_view = is_passive->view();
-                std::ranges::copy(is_passive_view, std::back_inserter(is_passive_list));
-
-                auto init_angles = sc->edges().find<Float>("init_angle");
-                UIPC_ASSERT(init_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'init_angle' attribute on `edges`");
-                auto init_angles_view = init_angles->view();
+                std::ranges::copy(is_passive->view(), std::back_inserter(is_passive_list));
 
                 auto aim_angles = sc->edges().find<Float>("aim_angle");
                 UIPC_ASSERT(aim_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'aim_angles' attribute on `edges`");
-                auto aim_angles_view = aim_angles->view();
-                std::ranges::copy(aim_angles_view, std::back_inserter(aim_angles_list));
+                std::ranges::copy(aim_angles->view(), std::back_inserter(aim_angles_list));
 
-                auto Es = sc->edges().topo().view();
-                auto Ps = sc->positions().view();
-
-                auto l_pos0_attr = sc->edges().find<Vector3>("l_position0");
-                auto l_pos1_attr = sc->edges().find<Vector3>("l_position1");
-                auto r_pos0_attr = sc->edges().find<Vector3>("r_position0");
-                auto r_pos1_attr = sc->edges().find<Vector3>("r_position1");
-                bool use_local = l_pos0_attr && l_pos1_attr && r_pos0_attr && r_pos1_attr;
-
-                for(auto&& [i, e] : enumerate(Es))
-                {
-                    IndexT l_gid = l_geo_id_view[i];
-                    IndexT r_gid = r_geo_id_view[i];
-                    IndexT l_iid = l_inst_id_view[i];
-                    IndexT r_iid = r_inst_id_view[i];
-
-                    Vector2i body_ids = {info.body_id(l_gid, l_iid),
-                                         info.body_id(r_gid, r_iid)};
-                    body_ids_list.push_back(body_ids);
-
-                    auto left_sc  = info.body_geo(geo_slots, l_gid);
-                    auto right_sc = info.body_geo(geo_slots, r_gid);
-
-                    UIPC_ASSERT(l_iid >= 0
-                                    && l_iid < static_cast<IndexT>(
-                                           left_sc->instances().size()),
-                                "AffineBodyDrivingRevoluteJoint: Left instance ID {} is out of range [0, {})",
-                                l_iid,
-                                left_sc->instances().size());
-                    UIPC_ASSERT(r_iid >= 0
-                                    && r_iid < static_cast<IndexT>(
-                                           right_sc->instances().size()),
-                                "AffineBodyDrivingRevoluteJoint: Right instance ID {} is out of range [0, {})",
-                                r_iid,
-                                right_sc->instances().size());
-
-                    Transform LT{left_sc->transforms().view()[l_iid]};
-                    Transform RT{right_sc->transforms().view()[r_iid]};
-
-                    Matrix3x3 L_inv_rot = LT.rotation().inverse();
-                    Matrix3x3 R_inv_rot = RT.rotation().inverse();
-
-                    Vector3 t;
-                    if(use_local)
-                    {
-                        t = LT.rotation()
-                            * (l_pos1_attr->view()[i] - l_pos0_attr->view()[i]);
-                    }
-                    else
-                    {
-                        t = Ps[e[1]] - Ps[e[0]];
-                    }
-
-                    UIPC_ASSERT(t.squaredNorm() > 0.0,
-                                R"(AffineBodyDrivingRevoluteJoint: Edge with zero length detected,
-Joint GeometryID = {},
-LinkGeoIDs       = ({}, {}),
-LinkInstIDs      = ({}, {}),
-Edge             = ({}, {}))",
-                                I.geo_info().geo_id,
-                                l_gid,
-                                r_gid,
-                                l_iid,
-                                r_iid,
-                                e(0),
-                                e(1));
-
-                    Vector3 n, b;
-                    orthonormal_basis(t, n, b);
-
-                    // Storage layout: [n,b] per body (matches constitution
-                    // side); see AffineBodyRevoluteJoint::do_init for details.
-                    Vector6 lb;
-                    lb.segment<3>(0) = L_inv_rot * n;
-                    lb.segment<3>(3) = L_inv_rot * b;
-                    l_basis_list.push_back(lb);
-
-                    Vector6 rb;
-                    rb.segment<3>(0) = R_inv_rot * n;
-                    rb.segment<3>(3) = R_inv_rot * b;
-                    r_basis_list.push_back(rb);
-
-                    init_angles_list.push_back(init_angles_view[i]);
-                }
                 joint_offset++;
             });
 
         h_geo_joint_offsets_counts.scan();
-
-        h_body_ids.resize(body_ids_list.size());
-        std::ranges::move(body_ids_list, h_body_ids.begin());
-
-        h_l_basis.resize(l_basis_list.size());
-        std::ranges::move(l_basis_list, h_l_basis.begin());
-
-        h_r_basis.resize(r_basis_list.size());
-        std::ranges::move(r_basis_list, h_r_basis.begin());
 
         h_is_constrained.resize(is_constrained_list.size());
         std::ranges::copy(is_constrained_list, h_is_constrained.begin());
@@ -769,20 +639,22 @@ Edge             = ({}, {}))",
         h_is_passive.resize(is_passive_list.size());
         std::ranges::copy(is_passive_list, h_is_passive.begin());
 
-        h_init_angles.resize(init_angles_list.size());
-        std::ranges::copy(init_angles_list, h_init_angles.begin());
-
         h_aim_angles.resize(aim_angles_list.size());
         std::ranges::copy(aim_angles_list, h_aim_angles.begin());
 
-        body_ids.copy_from(h_body_ids);
-        l_basis.copy_from(h_l_basis);
-        r_basis.copy_from(h_r_basis);
         is_constrained.copy_from(h_is_constrained);
         strength_ratios.copy_from(h_strength_ratios);
         is_passive.copy_from(h_is_passive);
-        init_angles.copy_from(h_init_angles);
         aim_angles.copy_from(h_aim_angles);
+
+        // Sanity check: driving joint reuses body_ids/basis/init_angles from
+        // AffineBodyRevoluteJoint via the shared index `I`. Both must therefore
+        // enumerate exactly the same (geo, edge) sequence.
+        UIPC_ASSERT(h_is_constrained.size() == revolute_joint->h_body_ids.size(),
+                    "AffineBodyDrivingRevoluteJoint: joint count {} must equal "
+                    "AffineBodyRevoluteJoint joint count {} (index alignment required)",
+                    h_is_constrained.size(),
+                    revolute_joint->h_body_ids.size());
     }
 
 
@@ -861,12 +733,12 @@ Edge             = ({}, {}))",
 
     void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
     {
-        info.energy_count(body_ids.size());
-        info.gradient_count(2 * body_ids.size());
+        info.energy_count(is_constrained.size());
+        info.gradient_count(2 * is_constrained.size());
         if(info.gradient_only())
             return;
 
-        info.hessian_count(HalfHessianSize * body_ids.size());
+        info.hessian_count(HalfHessianSize * is_constrained.size());
     }
 
 
@@ -877,15 +749,15 @@ Edge             = ({}, {}))",
 
         ParallelFor()
             .file_line(__FILE__, __LINE__)
-            .apply(body_ids.size(),
-                   [body_ids = body_ids.cviewer().name("body_ids"),
-                    l_basis  = l_basis.cviewer().name("l_basis"),
-                    r_basis  = r_basis.cviewer().name("r_basis"),
+            .apply(is_constrained.size(),
+                   [body_ids = revolute_joint->body_ids.cviewer().name("body_ids"),
+                    l_basis = revolute_joint->l_basis.cviewer().name("l_basis"),
+                    r_basis = revolute_joint->r_basis.cviewer().name("r_basis"),
                     is_constrained = is_constrained.cviewer().name("is_constrained"),
                     strength_ratios = strength_ratios.cviewer().name("strength_ratios"),
-                    is_passive  = is_passive.cviewer().name("is_passive"),
-                    init_angles = init_angles.cviewer().name("init_angles"),
-                    aim_angles  = aim_angles.cviewer().name("aim_angles"),
+                    is_passive = is_passive.cviewer().name("is_passive"),
+                    init_angles = revolute_joint->init_angles.cviewer().name("init_angles"),
+                    aim_angles = aim_angles.cviewer().name("aim_angles"),
                     current_angles = revolute_joint->current_angles.cviewer().name("current_angles"),
                     qs = info.qs().cviewer().name("qs"),
                     body_masses = info.body_masses().cviewer().name("body_masses"),
@@ -945,15 +817,15 @@ Edge             = ({}, {}))",
         ParallelFor()
             .file_line(__FILE__, __LINE__)
             .apply(
-                body_ids.size(),
-                [body_ids = body_ids.cviewer().name("body_ids"),
-                 l_basis  = l_basis.cviewer().name("l_basis"),
-                 r_basis  = r_basis.cviewer().name("r_basis"),
+                is_constrained.size(),
+                [body_ids = revolute_joint->body_ids.cviewer().name("body_ids"),
+                 l_basis  = revolute_joint->l_basis.cviewer().name("l_basis"),
+                 r_basis  = revolute_joint->r_basis.cviewer().name("r_basis"),
                  is_constrained = is_constrained.cviewer().name("is_constrained"),
                  strength_ratios = strength_ratios.cviewer().name("strength_ratios"),
-                 is_passive  = is_passive.cviewer().name("is_passive"),
-                 init_angles = init_angles.cviewer().name("init_angles"),
-                 aim_angles  = aim_angles.cviewer().name("aim_angles"),
+                 is_passive = is_passive.cviewer().name("is_passive"),
+                 init_angles = revolute_joint->init_angles.cviewer().name("init_angles"),
+                 aim_angles = aim_angles.cviewer().name("aim_angles"),
                  current_angles = revolute_joint->current_angles.cviewer().name("current_angles"),
                  qs          = info.qs().cviewer().name("qs"),
                  body_masses = info.body_masses().cviewer().name("body_masses"),
