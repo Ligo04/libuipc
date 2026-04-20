@@ -19,46 +19,44 @@ The constraint can also be toggled on and off at runtime via the `driving/is_con
 
 We assume 2 affine body indices $i$ and $j$, each with their own state vector $\mathbf{q}_i$ and $\mathbf{q}_j$ as defined in the [Affine Body](./affine_body.md) constitution.
 
-The current relative rotation angle $\theta$ between the two bodies about the joint axis is extracted from the affine body states using the joint axis and normal rest frames, as defined in the [Revolute Joint](./affine_body_revolute_joint.md):
+The current relative rotation angle $\theta$ between the two bodies about the joint axis is extracted from the affine body states using the per-body $(\hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k)$ basis maintained by the base [Revolute Joint](./affine_body_revolute_joint.md):
 
 $$
 \cos\theta = \frac{\hat{\mathbf{n}}_i \cdot \hat{\mathbf{n}}_j + \hat{\mathbf{b}}_i \cdot \hat{\mathbf{b}}_j}{2}, \quad
-\sin\theta = \frac{\hat{\mathbf{n}}_i \cdot \hat{\mathbf{b}}_j - \hat{\mathbf{b}}_i \cdot \hat{\mathbf{n}}_j}{2}.
+\sin\theta = \frac{\hat{\mathbf{b}}_i \cdot \hat{\mathbf{n}}_j - \hat{\mathbf{n}}_i \cdot \hat{\mathbf{b}}_j}{2},
 $$
 
-where $\hat{\mathbf{n}}$ and $\hat{\mathbf{b}}$ are the normal and binormal directions in each body's frame.
+$$
+\theta = \operatorname{atan2}(\sin\theta,\; \cos\theta) \in (-\pi, \pi],
+$$
 
-The target angle $\tilde\theta$ is determined by:
+where $\hat{\mathbf{n}}_k$, $\hat{\mathbf{b}}_k$ are the normal and binormal directions in body $k$'s current frame, obtained from the stored rest-space basis via the affine map. The sign follows the right-hand rule around $+\hat{\mathbf{t}}$.
+
+`aim_angle` is a **user-facing target** expressed in the same frame as the reported `angle` (i.e. $\theta_{\text{current}}$). To translate it into the raw $\theta$-space actually used by the energy, the solver subtracts $\theta_{\text{init}}$ (the base joint's `init_angle`):
 
 $$
 \tilde\theta =
 \begin{cases}
-\theta_{\text{aim}} + \theta_{\text{init}}, & \text{is\_passive} = 0 \\
-\theta_{\text{current}} + \theta_{\text{init}}, & \text{is\_passive} = 1
+\theta_{\text{aim}} - \theta_{\text{init}}, & \text{is\_passive} = 0 \\
+\theta_{\text{current}} - \theta_{\text{init}}, & \text{is\_passive} = 1
 \end{cases}
 $$
 
-where $\theta_{\text{init}}$ is the initial angle offset captured at the start of the simulation.
+In active mode, $\tilde\theta$ is the raw-angle counterpart of `aim_angle`. In passive mode, `aim_angle` is silently replaced by the current reported angle, which gives $\tilde\theta \approx \theta(\mathbf{q})$ and therefore a near-zero energy — the joint locks at the instant state and resists further motion.
 
-The energy function is:
+The energy function is a quadratic penalty on the raw-angle difference:
 
 $$
-E = \frac{K}{2} \sin^2(\theta - \tilde\theta) = \frac{K}{2} \left(\sin\theta \cos\tilde\theta - \cos\theta \sin\tilde\theta\right)^2,
+E = \frac{K}{2} \left(\theta - \tilde\theta\right)^2,
 $$
 
-where $K = \gamma (m_i + m_j)$, $\gamma$ is the **user defined** `strength_ratio` parameter, and $m_i$, $m_j$ are the masses of the two affine bodies.
+where $K = \gamma (m_i + m_j)$, $\gamma$ is the **user defined** `driving/strength_ratio` parameter, and $m_i$, $m_j$ are the masses of the two affine bodies. Substituting the definitions, the penalty is equivalent to $\tfrac{K}{2}(\theta_{\text{current}} - \theta_{\text{aim}})^2$ in the user-facing frame — the driving joint simply pulls the reported `angle` toward `aim_angle`.
+
+Note that $\theta - \tilde\theta$ is a raw difference of two values each returned by $\operatorname{atan2}$ in $(-\pi, \pi]$; it is **not** wrapped. As a consequence the penalty is only meaningful while $|\theta - \tilde\theta| < \pi$, which is the intended operating range of the driving joint (the controller is expected to deliver a target close to the current angle). Crossing the $\pm\pi$ branch cut makes the energy discontinuous; if larger travel is needed the driving target should be advanced incrementally.
 
 When `driving/is_constrained = 0`, the energy is zero and the driving effect is disabled.
 
-## State Update
-
-At the end of each time step, the time integrator updates the `angle` attribute to reflect the current joint angle:
-
-$$
-\theta_{\text{current}} = \text{map}_{[-\pi,\pi]}(\theta - \theta_{\text{init}})
-$$
-
-where $\text{map}_{[-\pi,\pi]}$ maps the angle into $(-\pi, \pi]$.
+The current angle $\theta_{\text{current}}$ and the initial offset $\theta_{\text{init}}$ are read from the **base** [AffineBodyRevoluteJoint](./affine_body_revolute_joint.md), which tracks them on the `angle` / `init_angle` edge attributes and keeps them in sync with the body state. The driving joint only consumes these values — it does not own them.
 
 ## Requirement
 
@@ -66,7 +64,7 @@ This constitution must be applied to a geometry that already has an [AffineBodyR
 
 ## Attributes
 
-On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge carries the same linking fields as [Affine Body Revolute Joint](./affine_body_revolute_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, base `strength_ratio` (if present), and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
+On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge inherits all linking and state fields of the base [Affine Body Revolute Joint](./affine_body_revolute_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, `strength_ratio`, `angle`, `init_angle`, and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
 
 Driving-specific attributes on **edges**:
 
@@ -74,5 +72,3 @@ Driving-specific attributes on **edges**:
 - `driving/is_constrained`: enables (`1`) or disables (`0`) the driving effect
 - `is_passive`: passive mode (`1`) locks at the current angle; active mode (`0`) drives to `aim_angle`
 - `aim_angle`: $\theta_{\text{aim}}$, the target angle in active mode
-- `angle`: $\theta_{\text{current}}$, the current relative angle (updated by the backend each time step)
-- `init_angle`: $\theta_{\text{init}}$, the initial angle offset

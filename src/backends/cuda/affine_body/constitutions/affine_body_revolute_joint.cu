@@ -6,11 +6,13 @@
 #include <uipc/builtin/attribute_name.h>
 #include <affine_body/inter_affine_body_constraint.h>
 #include <affine_body/constitutions/affine_body_revolute_joint_function.h>
+#include <affine_body/constitutions/joint_limit_penalty.h>
 #include <uipc/common/enumerate.h>
 #include <affine_body/utils.h>
 #include <affine_body/affine_body_external_force_reporter.h>
 #include <joint_dof_system/joint_dof_reporter.h>
 #include <muda/ext/eigen/atomic.h>
+
 
 namespace uipc::backend::cuda
 {
@@ -34,8 +36,8 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
 
     // Angle tracking (for all revolute joints)
     OffsetCountCollection<IndexT> h_geo_joint_offsets_counts;
-    vector<Vector6>               h_l_basis;  // [b_L, n_L] per joint
-    vector<Vector6>               h_r_basis;  // [b_R, n_R] per joint
+    vector<Vector6>               h_l_basis;  // [n_L, b_L] per joint
+    vector<Vector6>               h_r_basis;  // [n_R, b_R] per joint
     vector<Float>                 h_init_angles;
     vector<Float>                 h_current_angles;
 
@@ -43,8 +45,8 @@ class AffineBodyRevoluteJoint final : public InterAffineBodyConstitution
     muda::DeviceBuffer<Vector12> rest_positions;
     muda::DeviceBuffer<Float>    strength_ratio;
 
-    muda::DeviceBuffer<Vector6> l_basis;  // [b_L, n_L] per joint
-    muda::DeviceBuffer<Vector6> r_basis;  // [b_R, n_R] per joint
+    muda::DeviceBuffer<Vector6> l_basis;  // [n_L, b_L] per joint
+    muda::DeviceBuffer<Vector6> r_basis;  // [n_R, b_R] per joint
     muda::DeviceBuffer<Float>   init_angles;
     muda::DeviceBuffer<Float>   current_angles;
 
@@ -243,6 +245,9 @@ Edge             = ({}, {}))",
         r_basis.copy_from(h_r_basis);
         init_angles.copy_from(h_init_angles);
         current_angles.copy_from(h_current_angles);
+
+        compute_current_angles();
+        write_scene();
     }
 
     void compute_current_angles()
@@ -280,7 +285,7 @@ Edge             = ({}, {}))",
                        Float theta;
                        DRJ::theta<Float>(theta, F01_q);
 
-                       Float total_angle = theta - init_angles(I);
+                       Float total_angle = theta + init_angles(I);
                        // map to [-pi, pi]
                        auto map2range = [=](Float angle) -> Float
                        {
@@ -805,8 +810,8 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                            aim_angle = current_angles(I);
                        }
 
-                       // mapping [min_angle, max_angle] to [min+init_angle, max+init_angle]
-                       Float theta_tilde = aim_angle + init_angles(I);
+                       // mapping [min_angle, max_angle] to [min-init_angle, max-init_angle]
+                       Float theta_tilde = aim_angle - init_angles(I);
 
                        Vector12 q_i = qs(bids(0));
                        Vector12 q_j = qs(bids(1));
@@ -879,7 +884,7 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                         aim_angle = current_angles(I);
                     }
 
-                    auto theta_tilde = aim_angle + init_angles(I);
+                    auto theta_tilde = aim_angle - init_angles(I);
 
                     Vector12 q_i = qs(bids(0));
                     Vector12 q_j = qs(bids(1));
@@ -1154,5 +1159,301 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
     }
 };
 REGISTER_SIM_SYSTEM(AffineBodyRevoluteJointExternalForce);
+
+// ============================================================================
+// AffineBodyRevoluteJointLimit
+// Penalty energy enforcing `limit/lower <= delta_angle <= limit/upper`.
+// Reuses body_ids / l_basis / r_basis / init_angles from AffineBodyRevoluteJoint
+// (index-aligned). Only ref_qs, lowers, uppers, strengths are owned locally.
+// ============================================================================
+
+class AffineBodyRevoluteJointLimit final : public InterAffineBodyConstitution
+{
+  public:
+    static constexpr U64   ConstitutionUID = 670;
+    static constexpr U64   JointUID = AffineBodyRevoluteJoint::ConstitutionUID;
+    static constexpr SizeT HalfHessianSize = 2 * (2 + 1) / 2;
+
+    using InterAffineBodyConstitution::InterAffineBodyConstitution;
+
+    using Vector24    = Vector<Float, 24>;
+    using Matrix24x24 = Matrix<Float, 24, 24>;
+
+    SimSystemSlot<AffineBodyRevoluteJoint> revolute_joint;
+
+    vector<Vector24> h_ref_qs;
+    vector<Float>    h_lowers;
+    vector<Float>    h_uppers;
+    vector<Float>    h_strengths;
+
+    muda::DeviceBuffer<Vector24> ref_qs;
+    muda::DeviceBuffer<Float>    lowers;
+    muda::DeviceBuffer<Float>    uppers;
+    muda::DeviceBuffer<Float>    strengths;
+
+    void do_build(BuildInfo& info) override
+    {
+        revolute_joint = require<AffineBodyRevoluteJoint>();
+    }
+
+    void do_init(FilteredInfo& info) override
+    {
+        auto geo_slots = world().scene().geometries();
+
+        h_ref_qs.clear();
+        h_lowers.clear();
+        h_uppers.clear();
+        h_strengths.clear();
+
+        info.for_each(
+            geo_slots,
+            [&](geometry::Geometry& geo)
+            {
+                auto uid = geo.meta().find<U64>(builtin::constitution_uid);
+                UIPC_ASSERT(uid && uid->view()[0] == JointUID,
+                            "AffineBodyRevoluteJointLimit must be attached on base revolute joint geometry (UID={})",
+                            JointUID);
+
+                auto sc = geo.as<geometry::SimplicialComplex>();
+                UIPC_ASSERT(sc, "AffineBodyRevoluteJointLimit geometry must be SimplicialComplex");
+
+                auto l_geo_id = sc->edges().find<IndexT>("l_geo_id");
+                UIPC_ASSERT(l_geo_id, "AffineBodyRevoluteJointLimit requires `l_geo_id` attribute on edges");
+                auto l_geo_id_view = l_geo_id->view();
+                auto r_geo_id      = sc->edges().find<IndexT>("r_geo_id");
+                UIPC_ASSERT(r_geo_id, "AffineBodyRevoluteJointLimit requires `r_geo_id` attribute on edges");
+                auto r_geo_id_view = r_geo_id->view();
+                auto l_inst_id     = sc->edges().find<IndexT>("l_inst_id");
+                UIPC_ASSERT(l_inst_id, "AffineBodyRevoluteJointLimit requires `l_inst_id` attribute on edges");
+                auto l_inst_id_view = l_inst_id->view();
+                auto r_inst_id      = sc->edges().find<IndexT>("r_inst_id");
+                UIPC_ASSERT(r_inst_id, "AffineBodyRevoluteJointLimit requires `r_inst_id` attribute on edges");
+                auto r_inst_id_view = r_inst_id->view();
+
+                auto lower_attr = sc->edges().find<Float>("limit/lower");
+                UIPC_ASSERT(lower_attr, "AffineBodyRevoluteJointLimit requires `limit/lower` attribute on edges");
+                auto lower_view = lower_attr->view();
+
+                auto upper_attr = sc->edges().find<Float>("limit/upper");
+                UIPC_ASSERT(upper_attr, "AffineBodyRevoluteJointLimit requires `limit/upper` attribute on edges");
+                auto upper_view = upper_attr->view();
+
+                auto strength_attr = sc->edges().find<Float>("limit/strength");
+                UIPC_ASSERT(strength_attr, "AffineBodyRevoluteJointLimit requires `limit/strength` attribute on edges");
+                auto strength_view = strength_attr->view();
+
+                auto edges = sc->edges().topo().view();
+
+                for(auto&& [i, e] : enumerate(edges))
+                {
+                    IndexT l_gid = l_geo_id_view[i];
+                    IndexT r_gid = r_geo_id_view[i];
+                    IndexT l_iid = l_inst_id_view[i];
+                    IndexT r_iid = r_inst_id_view[i];
+
+                    auto* left_sc  = info.body_geo(geo_slots, l_gid);
+                    auto* right_sc = info.body_geo(geo_slots, r_gid);
+
+                    UIPC_ASSERT(l_iid >= 0
+                                    && l_iid < static_cast<IndexT>(
+                                           left_sc->instances().size()),
+                                "AffineBodyRevoluteJointLimit: left instance ID {} out of range [0, {})",
+                                l_iid,
+                                left_sc->instances().size());
+                    UIPC_ASSERT(r_iid >= 0
+                                    && r_iid < static_cast<IndexT>(
+                                           right_sc->instances().size()),
+                                "AffineBodyRevoluteJointLimit: right instance ID {} out of range [0, {})",
+                                r_iid,
+                                right_sc->instances().size());
+
+                    Vector24 ref;
+                    ref.segment<12>(0) =
+                        transform_to_q(left_sc->transforms().view()[l_iid]);
+                    ref.segment<12>(12) =
+                        transform_to_q(right_sc->transforms().view()[r_iid]);
+                    h_ref_qs.push_back(ref);
+
+                    UIPC_ASSERT(lower_view[i] <= upper_view[i],
+                                "AffineBodyRevoluteJointLimit: requires `limit/lower <= limit/upper` on edge {}, but got lower={} upper={}",
+                                i,
+                                lower_view[i],
+                                upper_view[i]);
+                    h_lowers.push_back(lower_view[i]);
+                    h_uppers.push_back(upper_view[i]);
+                    h_strengths.push_back(strength_view[i]);
+                }
+            });
+
+        // Sanity check: limit constitution reuses body_ids/l_basis/r_basis/init_angles
+        // from AffineBodyRevoluteJoint via the shared index `I`. Both must
+        // therefore enumerate exactly the same (geo, edge) sequence.
+        UIPC_ASSERT(h_ref_qs.size() == revolute_joint->h_body_ids.size(),
+                    "AffineBodyRevoluteJointLimit: joint count {} must equal "
+                    "AffineBodyRevoluteJoint joint count {} (index alignment required)",
+                    h_ref_qs.size(),
+                    revolute_joint->h_body_ids.size());
+
+        ref_qs.copy_from(h_ref_qs);
+        lowers.copy_from(h_lowers);
+        uppers.copy_from(h_uppers);
+        strengths.copy_from(h_strengths);
+    }
+
+    void do_report_energy_extent(EnergyExtentInfo& info) override
+    {
+        info.energy_count(ref_qs.size());
+    }
+
+    void do_compute_energy(ComputeEnergyInfo& info) override
+    {
+        using namespace muda;
+        namespace ERJ = sym::affine_body_revolute_joint_limit;
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(ref_qs.size(),
+                   [body_ids = revolute_joint->body_ids.cviewer().name("body_ids"),
+                    l_basis = revolute_joint->l_basis.cviewer().name("l_basis"),
+                    r_basis = revolute_joint->r_basis.cviewer().name("r_basis"),
+                    init_angles = revolute_joint->init_angles.cviewer().name("init_angles"),
+                    ref_qs    = ref_qs.cviewer().name("ref_qs"),
+                    lowers    = lowers.cviewer().name("lowers"),
+                    uppers    = uppers.cviewer().name("uppers"),
+                    strengths = strengths.cviewer().name("strengths"),
+                    qs        = info.qs().cviewer().name("qs"),
+                    q_prevs   = info.q_prevs().cviewer().name("q_prevs"),
+                    Es = info.energies().viewer().name("Es")] __device__(int I)
+                   {
+                       Vector2i bid = body_ids(I);
+
+                       Vector6  lb    = l_basis(I);
+                       Vector6  rb    = r_basis(I);
+                       Vector24 ref_q = ref_qs(I);
+
+                       Vector12 qk      = qs(bid[0]);
+                       Vector12 ql      = qs(bid[1]);
+                       Vector12 q_prevk = q_prevs(bid[0]);
+                       Vector12 q_prevl = q_prevs(bid[1]);
+                       Vector12 q_refk  = ref_q.segment<12>(0);
+                       Vector12 q_refl  = ref_q.segment<12>(12);
+
+                       Float theta_prev = 0.0f;
+                       ERJ::DeltaTheta<Float>(theta_prev, lb, q_prevk, q_refk, rb, q_prevl, q_refl);
+
+                       Float delta = 0.0f;
+                       ERJ::DeltaTheta<Float>(delta, lb, qk, q_prevk, rb, ql, q_prevl);
+
+                       Float x        = theta_prev + delta;
+                       Float init_a   = init_angles(I);
+                       Float lower    = lowers(I) - init_a;
+                       Float upper    = uppers(I) - init_a;
+                       Float strength = strengths(I);
+
+                       Float E = joint_limit::eval_penalty_energy<Float>(x, lower, upper, strength);
+
+                       Es(I) = E;
+                   });
+    }
+
+    void do_report_gradient_hessian_extent(GradientHessianExtentInfo& info) override
+    {
+        info.gradient_count(2 * ref_qs.size());
+        if(info.gradient_only())
+            return;
+
+        info.hessian_count(HalfHessianSize * ref_qs.size());
+    }
+
+    void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
+    {
+        using namespace muda;
+        namespace ERJ      = sym::affine_body_revolute_joint_limit;
+        auto gradient_only = info.gradient_only();
+
+        ParallelFor()
+            .file_line(__FILE__, __LINE__)
+            .apply(ref_qs.size(),
+                   [body_ids = revolute_joint->body_ids.cviewer().name("body_ids"),
+                    l_basis = revolute_joint->l_basis.cviewer().name("l_basis"),
+                    r_basis = revolute_joint->r_basis.cviewer().name("r_basis"),
+                    init_angles = revolute_joint->init_angles.cviewer().name("init_angles"),
+                    ref_qs    = ref_qs.cviewer().name("ref_qs"),
+                    lowers    = lowers.cviewer().name("lowers"),
+                    uppers    = uppers.cviewer().name("uppers"),
+                    strengths = strengths.cviewer().name("strengths"),
+                    qs        = info.qs().cviewer().name("qs"),
+                    q_prevs   = info.q_prevs().cviewer().name("q_prevs"),
+                    G12s      = info.gradients().viewer().name("G12s"),
+                    H12x12s   = info.hessians().viewer().name("H12x12s"),
+                    gradient_only] __device__(int I) mutable
+                   {
+                       Vector2i bid = body_ids(I);
+
+                       Vector6  lb    = l_basis(I);
+                       Vector6  rb    = r_basis(I);
+                       Vector24 ref_q = ref_qs(I);
+
+                       Vector12 qk      = qs(bid[0]);
+                       Vector12 ql      = qs(bid[1]);
+                       Vector12 q_prevk = q_prevs(bid[0]);
+                       Vector12 q_prevl = q_prevs(bid[1]);
+                       Vector12 q_refk  = ref_q.segment<12>(0);
+                       Vector12 q_refl  = ref_q.segment<12>(12);
+
+                       Float theta_prev = 0.0f;
+                       ERJ::DeltaTheta<Float>(theta_prev, lb, q_prevk, q_refk, rb, q_prevl, q_refl);
+
+                       Float delta = 0.0f;
+                       ERJ::DeltaTheta<Float>(delta, lb, qk, q_prevk, rb, ql, q_prevl);
+
+                       Float x        = theta_prev + delta;
+                       Float init_a   = init_angles(I);
+                       Float lower    = lowers(I) - init_a;
+                       Float upper    = uppers(I) - init_a;
+                       Float strength = strengths(I);
+
+                       Float dE_dx   = 0.0f;
+                       Float d2E_dx2 = 0.0f;
+                       joint_limit::eval_penalty_derivatives<Float>(
+                           x, lower, upper, strength, dE_dx, d2E_dx2);
+
+                       Vector24 dx_dq;
+                       ERJ::dDeltaTheta_dQ<Float>(dx_dq, lb, qk, q_prevk, rb, ql, q_prevl);
+
+                       Vector24               G = dE_dx * dx_dq;
+                       DoubletVectorAssembler DVA{G12s};
+                       DVA.segment<2>(2 * I).write(bid, G);
+
+                       if(gradient_only)
+                           return;
+
+                       Matrix24x24 H = d2E_dx2 * (dx_dq * dx_dq.transpose());
+
+                       if(dE_dx != 0.0f)
+                       {
+                           Vector12 F;
+                           Vector12 F_prev;
+                           ERJ::F<Float>(F, lb, qk, rb, ql);
+                           ERJ::F<Float>(F_prev, lb, q_prevk, rb, q_prevl);
+
+                           Matrix12x12 ddx_ddF;
+                           ERJ::ddDeltaTheta_ddF(ddx_ddF, F, F_prev);
+
+                           Matrix12x12 H_F = dE_dx * ddx_ddF;
+                           make_spd(H_F);
+
+                           Matrix24x24 JT_H_J;
+                           ERJ::JT_H_J<Float>(JT_H_J, H_F, lb, rb, lb, rb);
+                           H += JT_H_J;
+                       }
+
+                       TripletMatrixAssembler TMA{H12x12s};
+                       TMA.half_block<2>(HalfHessianSize * I).write(bid, H);
+                   });
+    }
+
+    U64 get_uid() const noexcept override { return ConstitutionUID; }
+};
+REGISTER_SIM_SYSTEM(AffineBodyRevoluteJointLimit);
 
 }  // namespace uipc::backend::cuda

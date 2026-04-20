@@ -40,13 +40,7 @@ $$
 
 ## State Update
 
-At the end of each time step, the time integrator computes the current displacement along the joint axis:
-
-$$
-d_{\text{current}} = d(\mathbf{q}) - d_{\text{init}},
-$$
-
-where $d(\mathbf{q})$ is the signed displacement along the joint axis computed from the current affine body states, and $d_{\text{init}}$ is the initial distance offset captured at the start of the simulation. This value is written back to the `distance` attribute for user inspection via the Animator.
+The current signed displacement $d_{\text{current}}$ is tracked and written back to the `distance` edge attribute by the **base** [AffineBodyPrismaticJoint](./affine_body_prismatic_joint.md) — not by this external-force constitution. See [Distance State](./affine_body_prismatic_joint.md#distance-state) for the formulation.
 
 ## Runtime Control
 
@@ -61,10 +55,9 @@ This constitution must be applied to a geometry that already has an [AffineBodyP
 
 ## Attributes
 
-On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge carries the same linking fields as [Affine Body Prismatic Joint](./affine_body_prismatic_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, `strength_ratio`, and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
+On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge inherits all linking and state fields of the base [Affine Body Prismatic Joint](./affine_body_prismatic_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, `strength_ratio`, `distance`, `init_distance`, and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
 
-External-force attributes on **edges**:
+External-force-specific attributes on **edges**:
 
 - `external_force`: $f$ in the formulae above, scalar force along the joint axis (one per edge)
 - `external_force/is_constrained`: enables (`1`) or disables (`0`) the external force
-- `distance`: $d_{\text{current}}$, the current displacement along the joint axis (updated by the backend each time step)

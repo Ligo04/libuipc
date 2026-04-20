@@ -94,12 +94,14 @@ void AffineBodyStateAccessorFeatureOverrider::do_copy_transform_to(
 
     auto* dst_ptr =
         reinterpret_cast<Matrix4x4*>(buffer_view.handle()) + buffer_view.offset();
+    muda::BufferView<Matrix4x4> dst_view{dst_ptr, body_count};
 
     muda::ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(body_count,
-               [q_in = q_subview.cviewer().name("q_in"), dst = dst_ptr] __device__(int i) mutable
-               { dst[i] = q_to_transform(q_in(i)); });
+               [q_in = q_subview.cviewer().name("q_in"),
+                dst  = dst_view.viewer().name("dst")] __device__(int i) mutable
+               { dst(i) = q_to_transform(q_in(i)); });
 }
 
 void AffineBodyStateAccessorFeatureOverrider::do_copy_velocity_to(backend::BufferView buffer_view,
@@ -111,11 +113,13 @@ void AffineBodyStateAccessorFeatureOverrider::do_copy_velocity_to(backend::Buffe
 
     auto* dst_ptr =
         reinterpret_cast<Matrix4x4*>(buffer_view.handle()) + buffer_view.offset();
+    muda::BufferView<Matrix4x4> dst_view{dst_ptr, body_count};
 
     muda::ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(body_count,
-               [q_in = q_v_subview.cviewer().name("q_v_in"), dst = dst_ptr] __device__(
-                   int i) mutable { dst[i] = q_v_to_transform_v(q_in(i)); });
+               [q_in = q_v_subview.cviewer().name("q_v_in"),
+                dst  = dst_view.viewer().name("dst")] __device__(int i) mutable
+               { dst(i) = q_v_to_transform_v(q_in(i)); });
 }
 }  // namespace uipc::backend::cuda

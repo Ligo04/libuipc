@@ -38,6 +38,42 @@ $$
 
 where $K$ is the stiffness constant of the joint, we choose $K=\gamma (m_i + m_j)$, where $\gamma$ is a **user defined** `strength_ratio` parameter, and $m_i$ and $m_j$ are the masses of the two affine bodies.
 
+## Angle State
+
+The revolute joint tracks a scalar joint angle $\theta$ that extra-per-joint constitutions (driving joint, angle limit, external torque) share. The backend builds, for each body $k \in \{i,j\}$, an orthonormal basis $(\hat{\mathbf{t}}_k, \hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k)$ aligned with the joint axis at setup, where
+
+$$
+\hat{\mathbf{t}}_k = \frac{\mathbf{x}^1_k - \mathbf{x}^0_k}{\|\mathbf{x}^1_k - \mathbf{x}^0_k\|}, \quad
+\hat{\mathbf{b}}_k = \hat{\mathbf{t}}_k \times \hat{\mathbf{n}}_k,
+$$
+
+and the $(\hat{\mathbf{n}}, \hat{\mathbf{b}})$ pair is stored per body in the layout $[\hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k]$. The current relative angle between the two bodies is extracted as
+
+$$
+\cos\theta = \frac{\hat{\mathbf{n}}_i \cdot \hat{\mathbf{n}}_j + \hat{\mathbf{b}}_i \cdot \hat{\mathbf{b}}_j}{2}, \quad
+\sin\theta = \frac{\hat{\mathbf{b}}_i \cdot \hat{\mathbf{n}}_j - \hat{\mathbf{n}}_i \cdot \hat{\mathbf{b}}_j}{2},
+$$
+
+$$
+\theta = \operatorname{atan2}(\sin\theta,\; \cos\theta) \in (-\pi, \pi].
+$$
+
+The sign follows the right-hand rule around $+\hat{\mathbf{t}}$ (counterclockwise when viewed along $+\hat{\mathbf{t}}$).
+
+### State Update
+
+At the end of each time step, the backend writes back the current relative angle, wrapped to $(-\pi, \pi]$, to the `angle` edge attribute:
+
+$$
+\theta_{\text{current}} = \operatorname{map}_{(-\pi,\pi]}\left(\theta(\mathbf{q}) + \alpha_0\right),
+$$
+
+where $\theta(\mathbf{q})$ is extracted from the formulas above and $\alpha_0$ is `init_angle`, a **user-facing offset** that shifts the "zero" of the reported value (default `0.0`). The `angle` attribute is therefore available to any frontend and to all extra-per-joint constitutions built on top of this joint (driving joint, limit, external torque). When an external state write replaces the body DOF $\mathbf{q}$ (e.g. via `AffineBodyStateAccessorFeature`), the backend re-syncs `current_angles` synchronously through the `GlobalJointDofManager`.
+
+#### Convention for all user-facing bounds
+
+All user-facing angle quantities on this joint (`limit/lower`, `limit/upper` on [AffineBodyRevoluteJointLimit](./affine_body_revolute_joint_limit.md); `aim_angle` on [AffineBodyDrivingRevoluteJoint](./affine_body_driving_revolute_joint.md)) are expressed in the same "`current_*` frame" as the reported `angle` attribute. A user can therefore set them directly against the value they read back from `angle`, without having to reason about `init_angle`. Wherever `init_angle` appears inside a solver-side formula, it is **subtracted** from the user-facing quantity to translate it into the raw frame $\theta(\mathbf{q})$.
+
 ## Attributes
 
 On the joint geometry (1D simplicial complex), on **edges** (one edge per joint):
@@ -47,5 +83,7 @@ On the joint geometry (1D simplicial complex), on **edges** (one edge per joint)
 - `l_inst_id` (`IndexT`): instance index within the left geometry
 - `r_inst_id` (`IndexT`): instance index within the right geometry
 - `strength_ratio`: $\gamma$ in $K = \gamma(m_i + m_j)$ above
+- `angle` (`Float`): $\theta_{\text{current}}$, current relative joint angle in radians, wrapped to $(-\pi, \pi]$. Written by the backend every time step (read-only for the user).
+- `init_angle` (`Float`): $\alpha_0$, initial angle offset added to the extracted relative angle. Default `0.0`.
 
 When the joint is created via Local `create_geometry`, optional **edge** attributes (each `Vector3`) supply local joint geometry: `l_position0`, `l_position1` (left body local frame), `r_position0`, `r_position1` (right body local frame).

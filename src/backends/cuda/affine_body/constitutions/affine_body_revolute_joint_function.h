@@ -11,4 +11,9 @@ namespace sym::affine_body_driving_revolute_joint
 {
 #include "sym/affine_body_driving_revolute_joint.inl"
 }
+
+namespace sym::affine_body_revolute_joint_limit
+{
+#include <affine_body/constitutions/sym/affine_body_revolute_joint_limit.inl>
+}
 }  // namespace uipc::backend::cuda
