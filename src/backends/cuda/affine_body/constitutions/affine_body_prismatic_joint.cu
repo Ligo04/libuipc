@@ -9,6 +9,7 @@
 #include <uipc/common/enumerate.h>
 #include <affine_body/utils.h>
 #include <affine_body/affine_body_external_force_reporter.h>
+#include <joint_dof_system/joint_dof_reporter.h>
 #include <muda/ext/eigen/atomic.h>
 #include <numbers>
 
@@ -527,6 +528,27 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
     U64 get_uid() const noexcept override { return ConstitutionUID; }
 };
 REGISTER_SIM_SYSTEM(AffineBodyPrismaticJoint);
+
+class AffineBodyPrismaticJointDofReporter final : public JointDofReporter
+{
+  public:
+    using JointDofReporter::JointDofReporter;
+
+    SimSystemSlot<AffineBodyPrismaticJoint> prismatic_joint;
+
+    void do_build(BuildInfo& info) override
+    {
+        prismatic_joint = require<AffineBodyPrismaticJoint>();
+    }
+
+    void do_update_dof_attributes(UpdateDofAttributesInfo& info) override
+    {
+        // Re-sync persistent per-joint distances (current_distances) with the
+        // new vertex/body attribute layout before the next frame uses them.
+        prismatic_joint->compute_current_distances();
+    }
+};
+REGISTER_SIM_SYSTEM(AffineBodyPrismaticJointDofReporter);
 
 class AffineBodyPrismaticJointTimeIntegrator : public TimeIntegrator
 {

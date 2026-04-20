@@ -9,6 +9,7 @@
 #include <uipc/common/enumerate.h>
 #include <affine_body/utils.h>
 #include <affine_body/affine_body_external_force_reporter.h>
+#include <joint_dof_system/joint_dof_reporter.h>
 #include <muda/ext/eigen/atomic.h>
 
 namespace uipc::backend::cuda
@@ -486,6 +487,27 @@ Edge             = ({}, {}))",
 };
 
 REGISTER_SIM_SYSTEM(AffineBodyRevoluteJoint);
+
+class AffineBodyRevoluteJointDofReporter final : public JointDofReporter
+{
+  public:
+    using JointDofReporter::JointDofReporter;
+
+    SimSystemSlot<AffineBodyRevoluteJoint> revolute_joint;
+
+    void do_build(BuildInfo& info) override
+    {
+        revolute_joint = require<AffineBodyRevoluteJoint>();
+    }
+
+    void do_update_dof_attributes(UpdateDofAttributesInfo& info) override
+    {
+        // Re-sync persistent per-joint angles (current_angles) with the new
+        // vertex/body attribute layout before the next frame uses them.
+        revolute_joint->compute_current_angles();
+    }
+};
+REGISTER_SIM_SYSTEM(AffineBodyRevoluteJointDofReporter);
 
 class AffineBodyRevoluteJointTimeIntegrator : public TimeIntegrator
 {
