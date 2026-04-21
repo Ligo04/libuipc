@@ -22,10 +22,12 @@ class JointDofReporter : public SimSystem
 
     class BuildInfo
     {
+        // reserved for future extensibility
     };
 
     class UpdateDofAttributesInfo
     {
+        // reserved for future extensibility
     };
 
   protected:

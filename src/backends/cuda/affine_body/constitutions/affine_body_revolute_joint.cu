@@ -253,7 +253,6 @@ Edge             = ({}, {}))",
     void compute_current_angles()
     {
         using namespace muda;
-        namespace DRJ = sym::affine_body_driving_revolute_joint;
 
         ParallelFor()
             .file_line(__FILE__, __LINE__)
@@ -273,30 +272,14 @@ Edge             = ({}, {}))",
                        Vector6  lb  = l_basis(I);
                        Vector6  rb  = r_basis(I);
 
-                       Vector12 F01_q;
-                       DRJ::F01_q<Float>(F01_q,
-                                         lb.segment<3>(0),
-                                         lb.segment<3>(3),
-                                         q_i,
-                                         rb.segment<3>(0),
-                                         rb.segment<3>(3),
-                                         q_j);
-
                        Float theta;
-                       DRJ::theta<Float>(theta, F01_q);
+                       compute_relative_angle(theta, lb, q_i, rb, q_j);
 
                        Float total_angle = theta + init_angles(I);
-                       // map to [-pi, pi]
-                       auto map2range = [=](Float angle) -> Float
-                       {
-                           if(angle > PI)
-                               angle -= 2 * PI;
-                           else if(angle < -PI)
-                               angle += 2 * PI;
-                           return angle;
-                       };
-
-                       current_angles(I) = map2range(total_angle);
+                       current_angles(I) = ::remainder(total_angle, 2.0 * PI);
+                       MUDA_ASSERT(current_angles(I) >= -PI && current_angles(I) <= PI,
+                                   "current_angle out of (-pi, pi]: %f",
+                                   current_angles(I));
                    });
     }
 
@@ -565,11 +548,6 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
     vector<IndexT> h_is_passive;
     vector<Float>  h_aim_angles;
 
-    bool is_constrained_changed  = false;
-    bool strength_ratios_changed = false;
-    bool is_passive_changed      = false;
-    bool aim_angles_changed      = false;
-
     // Device
     muda::DeviceBuffer<IndexT> is_constrained;
     muda::DeviceBuffer<Float>  strength_ratios;
@@ -690,11 +668,10 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
         auto  geo_slots       = world().scene().geometries();
         SizeT geo_joint_index = 0;
 
-        is_constrained_changed  = false;
-        strength_ratios_changed = false;
-        is_passive_changed      = false;
-        aim_angles_changed      = false;
-
+        // Mirror all per-edge driving attributes host-side, then upload each
+        // buffer once at the end. No change-detection: attributes are expected
+        // to change every step (they are the animation signal), so guarding
+        // the uploads is pointless.
         info.for_each(
             geo_slots,
             [&](const InterAffineBodyConstitutionManager::ForEachInfo& I, geometry::Geometry& geo)
@@ -702,7 +679,6 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
                 auto sc = geo.as<geometry::SimplicialComplex>();
                 UIPC_ASSERT(sc, "AffineBodyDrivingRevoluteJoint: Geometry must be a simplicial complex");
 
-                auto joint_geo_id = I.geo_info().geo_id;
                 auto [offset, count] = h_geo_joint_offsets_counts[geo_joint_index];
 
                 UIPC_ASSERT(sc->edges().size() == count,
@@ -712,50 +688,31 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
 
                 auto is_constrained = sc->edges().find<IndexT>("driving/is_constrained");
                 UIPC_ASSERT(is_constrained, "AffineBodyDrivingRevoluteJoint: Geometry must have 'driving/is_constrained' attribute on `edges`");
-                {
-                    auto is_constrained_view = is_constrained->view();
-                    auto dst = span{h_is_constrained}.subspan(offset, count);
-                    std::ranges::copy(is_constrained_view, dst.begin());
-                    is_constrained_changed = true;
-                }
+                std::ranges::copy(is_constrained->view(),
+                                  span{h_is_constrained}.subspan(offset, count).begin());
 
                 auto is_passive = sc->edges().find<IndexT>("is_passive");
                 UIPC_ASSERT(is_passive, "AffineBodyDrivingRevoluteJoint: Geometry must have 'is_passive' attribute on `edges`")
-                {
-                    auto is_passive_view = is_passive->view();
-                    auto dst = span{h_is_passive}.subspan(offset, count);
-                    std::ranges::copy(is_passive_view, dst.begin());
-                    is_passive_changed = true;
-                }
+                std::ranges::copy(is_passive->view(),
+                                  span{h_is_passive}.subspan(offset, count).begin());
 
                 auto strength_ratios = sc->edges().find<Float>("driving/strength_ratio");
                 UIPC_ASSERT(strength_ratios, "AffineBodyDrivingRevoluteJoint: Geometry must have 'driving/strength_ratio' attribute on `edges`")
-                {
-                    auto strength_ratios_view = strength_ratios->view();
-                    auto dst = span{h_strength_ratios}.subspan(offset, count);
-                    std::ranges::copy(strength_ratios_view, dst.begin());
-                    strength_ratios_changed = true;
-                }
+                std::ranges::copy(strength_ratios->view(),
+                                  span{h_strength_ratios}.subspan(offset, count).begin());
 
                 auto aim_angles = sc->edges().find<Float>("aim_angle");
-                UIPC_ASSERT(aim_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'aim_angles' attribute on `edges`");
-                {
-                    auto aim_angles_view = aim_angles->view();
-                    auto dst = span{h_aim_angles}.subspan(offset, count);
-                    std::ranges::copy(aim_angles_view, dst.begin());
-                    aim_angles_changed = true;
-                }
+                UIPC_ASSERT(aim_angles, "AffineBodyDrivingRevoluteJoint: Geometry must have 'aim_angle' attribute on `edges`");
+                std::ranges::copy(aim_angles->view(),
+                                  span{h_aim_angles}.subspan(offset, count).begin());
+
                 ++geo_joint_index;
             });
 
-        if(aim_angles_changed)
-            aim_angles.copy_from(h_aim_angles);
-        if(is_constrained_changed)
-            is_constrained.copy_from(h_is_constrained);
-        if(strength_ratios_changed)
-            strength_ratios.copy_from(h_strength_ratios);
-        if(is_passive_changed)
-            is_passive.copy_from(h_is_passive);
+        aim_angles.copy_from(h_aim_angles);
+        is_constrained.copy_from(h_is_constrained);
+        strength_ratios.copy_from(h_strength_ratios);
+        is_passive.copy_from(h_is_passive);
     }
 
     void do_report_extent(InterAffineBodyAnimator::ReportExtentInfo& info) override
@@ -958,8 +915,8 @@ class AffineBodyRevoluteJointExternalForceConstraint final : public InterAffineB
     vector<Float>  h_torques;
     vector<IndexT> h_is_constrained;
 
-    muda::DeviceBuffer<Float>  torques_buf;
-    muda::DeviceBuffer<IndexT> is_constrained_buf;
+    muda::DeviceBuffer<Float>  torques;
+    muda::DeviceBuffer<IndexT> is_constrained;
 
     void do_build(BuildInfo& info) override
     {
@@ -998,8 +955,8 @@ class AffineBodyRevoluteJointExternalForceConstraint final : public InterAffineB
         SizeT N = h_torques.size();
         if(N > 0)
         {
-            torques_buf.copy_from(h_torques);
-            is_constrained_buf.copy_from(h_is_constrained);
+            torques.copy_from(h_torques);
+            is_constrained.copy_from(h_is_constrained);
         }
     }
 
@@ -1036,8 +993,8 @@ class AffineBodyRevoluteJointExternalForceConstraint final : public InterAffineB
         SizeT N = h_torques.size();
         if(N > 0)
         {
-            is_constrained_buf.copy_from(h_is_constrained);
-            torques_buf.copy_from(h_torques);
+            is_constrained.copy_from(h_is_constrained);
+            torques.copy_from(h_torques);
         }
     }
 
@@ -1084,7 +1041,7 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
 
     void do_step(ExternalForceInfo& info) override
     {
-        SizeT torque_count = constraint->torques_buf.size();
+        SizeT torque_count = constraint->torques.size();
         if(torque_count == 0)
             return;
 
@@ -1094,10 +1051,10 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
             .apply(torque_count,
                    [external_forces = info.external_forces().viewer().name("external_forces"),
                     body_ids = constraint->revolute_joint->body_ids.cviewer().name("body_ids"),
-                    torques = constraint->torques_buf.cviewer().name("torques"),
+                    torques = constraint->torques.cviewer().name("torques"),
                     rest_positions =
                         constraint->revolute_joint->rest_positions.cviewer().name("rest_positions"),
-                    constrained_flags = constraint->is_constrained_buf.cviewer().name("constrained_flags"),
+                    constrained_flags = constraint->is_constrained.cviewer().name("constrained_flags"),
                     qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
                    {
                        if(constrained_flags(i) == 0)

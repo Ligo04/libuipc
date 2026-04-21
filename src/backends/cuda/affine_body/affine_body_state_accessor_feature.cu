@@ -9,10 +9,10 @@
 namespace uipc::backend::cuda
 {
 AffineBodyStateAccessorFeatureOverrider::AffineBodyStateAccessorFeatureOverrider(
-    AffineBodyDynamics& abd, AffineBodyVertexReporter& vertex_reporter, GlobalJointDofManager& joint_dof_reporter)
+    AffineBodyDynamics& abd, AffineBodyVertexReporter& vertex_reporter, GlobalJointDofManager& joint_dof_manager)
     : m_abd{abd}
     , m_vertex_reporter{vertex_reporter}
-    , m_joint_dof_reporter{joint_dof_reporter}
+    , m_joint_dof_manager{joint_dof_manager}
 {
 }
 
@@ -53,7 +53,7 @@ void AffineBodyStateAccessorFeatureOverrider::do_copy_from(const geometry::Simpl
     m_vertex_reporter.request_attribute_update();
     // re-sync persistent per-joint DOF state (e.g. revolute current_angles)
     // synchronously so it stays consistent with the freshly written body q.
-    m_joint_dof_reporter.update_dof_attributes();
+    m_joint_dof_manager.update_dof_attributes();
 }
 
 void AffineBodyStateAccessorFeatureOverrider::do_copy_to(geometry::SimplicialComplex& state_geo)
