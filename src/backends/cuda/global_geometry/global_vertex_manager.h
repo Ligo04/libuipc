@@ -12,6 +12,7 @@ namespace uipc::backend::cuda
 {
 class GlobalTrajectoryFilter;
 class GlobalActiveSetManager;
+class GlobalJointDofManager;
 class VertexReporter;
 class GlobalVertexManager final : public SimSystem
 {
@@ -215,6 +216,7 @@ class GlobalVertexManager final : public SimSystem
 
         SimSystemSlot<GlobalTrajectoryFilter>   global_trajectory_filter;
         SimSystemSlot<GlobalActiveSetManager>   global_active_set_manager;
+        SimSystemSlot<GlobalJointDofManager>    global_joint_dof_manager;
         SimSystemSlotCollection<VertexReporter> vertex_reporters;
 
         OffsetCountCollection<IndexT> reporter_vertex_offsets_counts;

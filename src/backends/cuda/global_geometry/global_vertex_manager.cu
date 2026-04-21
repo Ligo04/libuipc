@@ -1,5 +1,6 @@
 #include <global_geometry/global_vertex_manager.h>
 #include <active_set_system/global_active_set_manager.h>
+#include <joint_dof_system/global_joint_dof_manager.h>
 #include <uipc/common/enumerate.h>
 #include <uipc/common/range.h>
 #include <muda/cub/device/device_reduce.h>
@@ -20,7 +21,8 @@ void GlobalVertexManager::do_build()
     m_impl.default_d_hat = d_hat->view()[0];
 
     m_impl.global_trajectory_filter  = find<GlobalTrajectoryFilter>();
-    m_impl.global_active_set_manager  = find<GlobalActiveSetManager>();
+    m_impl.global_active_set_manager = find<GlobalActiveSetManager>();
+    m_impl.global_joint_dof_manager  = find<GlobalJointDofManager>();
 }
 
 void GlobalVertexManager::Impl::init()
@@ -140,9 +142,9 @@ void GlobalVertexManager::Impl::setup_ccd(muda::CBufferView<Vector3> base_positi
     muda::ParallelFor()
         .file_line(__FILE__, __LINE__)
         .apply(positions.size(),
-               [pos      = positions.viewer().name("pos"),
-                tmp_pos  = tmp_pos.viewer().name("tmp_pos"),
-                disp     = displacements.viewer().name("disp"),
+               [pos     = positions.viewer().name("pos"),
+                tmp_pos = tmp_pos.viewer().name("tmp_pos"),
+                disp    = displacements.viewer().name("disp"),
                 base_pos = base_positions.cviewer().name("base_pos")] __device__(int i) mutable
                {
                    disp(i)    = pos(i) - base_pos(i);
@@ -153,7 +155,8 @@ void GlobalVertexManager::Impl::setup_ccd(muda::CBufferView<Vector3> base_positi
 
 void GlobalVertexManager::Impl::restore_ccd()
 {
-    muda::BufferLaunch().copy<Vector3>(positions.view(), std::as_const(safe_positions).view());
+    muda::BufferLaunch().copy<Vector3>(positions.view(),
+                                       std::as_const(safe_positions).view());
 }
 
 void GlobalVertexManager::Impl::overwrite_positions(muda::CBufferView<Vector3> src)

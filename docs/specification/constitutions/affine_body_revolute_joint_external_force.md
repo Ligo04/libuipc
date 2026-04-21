@@ -63,13 +63,7 @@ $$
 
 ## State Update
 
-At the end of each time step, the time integrator computes the current joint angle:
-
-$$
-\theta_{\text{current}} = \theta(\mathbf{q}) - \theta_{\text{init}},
-$$
-
-where $\theta(\mathbf{q})$ is the revolute angle extracted from the current affine body states, and $\theta_{\text{init}}$ is the initial angle offset captured at the start of the simulation. The angle is mapped to the range $(-\pi, \pi]$. This value is written back to the `angle` attribute for user inspection via the Animator.
+The current joint angle $\theta_{\text{current}}$ is tracked and written back to the `angle` edge attribute by the **base** [AffineBodyRevoluteJoint](./affine_body_revolute_joint.md) — not by this external-force constitution. See [Angle State](./affine_body_revolute_joint.md#angle-state) for the formulation.
 
 ## Runtime Control
 
@@ -84,10 +78,9 @@ This constitution must be applied to a geometry that already has an [AffineBodyR
 
 ## Attributes
 
-On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge carries the same linking fields as [Affine Body Revolute Joint](./affine_body_revolute_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, `strength_ratio`, and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
+On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge inherits all linking and state fields of the base [Affine Body Revolute Joint](./affine_body_revolute_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, `strength_ratio`, `angle`, `init_angle`, and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
 
-External-force attributes on **edges**:
+External-force-specific attributes on **edges**:
 
 - `external_torque`: $\tau$ in the formulae above, scalar torque around the joint axis (one per edge)
 - `external_torque/is_constrained`: enables (`1`) or disables (`0`) the external torque
-- `angle`: $\theta_{\text{current}}$, the current joint angle in radians (updated by the backend each time step)
