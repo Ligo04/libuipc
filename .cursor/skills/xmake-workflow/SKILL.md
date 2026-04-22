@@ -45,7 +45,7 @@ xmake run sim_case
 xmake run backend_cuda
 ```
 
-Or execute the binary directly: `./build/linux/x86_64/releasedbg/uipc_test_core`.
+Or execute the binary directly: `./build/<plat>/<arch>/<mode>/uipc_test_core` (e.g. `./build/linux/x86_64/releasedbg/uipc_test_core`; on Windows the path ends in `.exe`).
 
 Catch2 flags passthrough:
 - `--list-tests` — list all test cases
