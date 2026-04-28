@@ -1103,17 +1103,18 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        // Tangential force at center of mass:
                        //   F = tau * (e × r) / |r|^2
                        // Body_i receives +tau, body_j receives -tau (reaction).
-
-                       constexpr Float num_eps = 1e-3;
+                       // Skip when |r|^2 ~ 0: divides by squared perpendicular arm; this
+                       // floor matches the prior 1e-12 threshold (float noise near the axis).
+                       constexpr Float lever_arm_sq_floor = 1e-12f;
 
                        Vector12 F_i = Vector12::Zero();
-                       if(r_sq_i >= num_eps)
+                       if(r_sq_i > lever_arm_sq_floor)
                        {
                            F_i.segment<3>(0) = tau * e_world_i.cross(r_i) / r_sq_i;
                        }
 
                        Vector12 F_j = Vector12::Zero();
-                       if(r_sq_j >= num_eps)
+                       if(r_sq_j > lever_arm_sq_floor)
                        {
                            F_j.segment<3>(0) = tau * e_world_j.cross(r_j) / r_sq_j;
                        }

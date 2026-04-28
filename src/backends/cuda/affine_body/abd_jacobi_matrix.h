@@ -216,7 +216,7 @@ class ABDJacobiDyadicMass
 
     /**
      * @brief Center of mass in the reference frame.
-     * Returns zero vector if mass is zero.
+     * Requires positive total mass (checked with MUDA_ASSERT in implementations).
      */
     MUDA_GENERIC Vector3 center_of_mass() const;
 

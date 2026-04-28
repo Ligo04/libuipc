@@ -190,8 +190,7 @@ MUDA_GENERIC Matrix12x12 ABDJacobiDyadicMass::to_mat() const
 MUDA_GENERIC Vector3 ABDJacobiDyadicMass::center_of_mass() const
 {
     const Float m = static_cast<Float>(m_mass);
-    if(m <= 0)
-        return Vector3::Zero();
+    MUDA_ASSERT(m > 0, "ABDJacobiDyadicMass::center_of_mass requires positive mass");
     return m_mass_times_x_bar / m;
 }
 

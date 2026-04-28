@@ -9,8 +9,8 @@ The **Affine Body Revolute Joint External Force** applies a scalar external torq
 Given a scalar torque $\tau$ and the joint axis direction $\hat{\mathbf{e}}$, the external torque is converted into a translational force at each body's center of mass. The torque produces equal-and-opposite tangential forces on the two bodies:
 
 $$
-\mathbf{F}_i = \begin{bmatrix} -\tau \, \dfrac{\hat{\mathbf{e}}_i \times \mathbf{r}_i}{\|\mathbf{r}_i\|^2} \\[6pt] \mathbf{0}_9 \end{bmatrix} \in \mathbb{R}^{12}, \quad
-\mathbf{F}_j = \begin{bmatrix} +\tau \, \dfrac{\hat{\mathbf{e}}_j \times \mathbf{r}_j}{\|\mathbf{r}_j\|^2} \\[6pt] \mathbf{0}_9 \end{bmatrix} \in \mathbb{R}^{12},
+\mathbf{F}_i = \begin{bmatrix} -\tau \, \dfrac{\hat{\mathbf{e}}_i \times \mathbf{r}_i}{\|\mathbf{r}_i\|^2} \\ \mathbf{0}_9 \end{bmatrix} \in \mathbb{R}^{12}, \quad
+\mathbf{F}_j = \begin{bmatrix} +\tau \, \dfrac{\hat{\mathbf{e}}_j \times \mathbf{r}_j}{\|\mathbf{r}_j\|^2} \\ \mathbf{0}_9 \end{bmatrix} \in \mathbb{R}^{12},
 $$
 
 where:
@@ -34,15 +34,15 @@ where $\mathring{\mathbf{J}}^{\hat{e}}_k$ maps the rest-space axis direction thr
 
 ### Parent vs. child axis and positive torque
 
-Indexing matches the base joint: **parent** \(=\) left \((i)\), **child** \(=\) right \((j)\). For each joint, the CUDA backend builds two normalized axis vectors from rest segments \((\bar{\mathbf{x}}^1-\bar{\mathbf{x}}^0)\) **per body**; they coincide as a geometric line but point **opposite** directions,
+Indexing matches the base joint: **parent** $=$ left $(i)$, **child** $=$ right $(j)$. For each joint, the CUDA backend builds two normalized axis vectors from rest segments $(\bar{\mathbf{x}}^1-\bar{\mathbf{x}}^0)$ **per body**; they coincide as a geometric line but point **opposite** directions,
 
 $$
 \hat{\mathbf{e}}_i \approx -\,\hat{\mathbf{e}}_j \qquad\text{(parent axis opposite child axis)}.
 $$
 
-The scalar attribute `external_torque` is **child-positive**: a **positive** \(\tau\) applies a right-hand torque about **the child’s** axis direction \(\hat{\mathbf{e}}_{\mathrm{child}} = \hat{\mathbf{e}}_j\) (equivalently, about \(-\hat{\mathbf{e}}_i\) on the parent). The force kernel uses each body’s own \(\hat{\mathbf{e}}_k\) and lever arm \(\mathbf{r}_k\) so the pair is consistent with this convention.
+The scalar attribute `external_torque` is **child-positive**: a **positive** $\tau$ applies a right-hand torque about **the child’s** axis direction $\hat{\mathbf{e}}_{\mathrm{child}} = \hat{\mathbf{e}}_j$ (equivalently, about $-\hat{\mathbf{e}}_i$ on the parent). The force kernel uses each body’s own $\hat{\mathbf{e}}_k$ and lever arm $\mathbf{r}_k$ so the pair is consistent with this convention.
 
-This parent/child polarity matters for interpreting **only** this external-force constitution (UID 668), not for renaming \(\theta\) or for limit/driving targets, which follow the shared `angle` frame in [Angle State](./affine_body_revolute_joint.md#angle-state).
+This parent/child polarity matters for interpreting **only** this external-force constitution (UID 668), not for renaming $\theta$ or for limit/driving targets, which follow the shared `angle` frame in [Angle State](./affine_body_revolute_joint.md#angle-state).
 
 ### Center of mass (reference configuration)
 
@@ -74,7 +74,7 @@ When $\|\mathbf{r}_k\|^2 < \epsilon$ (within a numerical cutoff), that body cont
 
 ### Sign Convention
 
-Let \(\hat{\mathbf{e}}_{\mathrm{child}}=\hat{\mathbf{e}}_j\) and \(\hat{\mathbf{e}}_{\mathrm{parent}}=\hat{\mathbf{e}}_i=-\hat{\mathbf{e}}_j\). A positive \(\tau\) applies a right-hand torque about \(+\hat{\mathbf{e}}_{\mathrm{child}}\) (child-positive; see [above](#parent-vs-child-axis-and-positive-torque)). The two bodies receive consistent tangential forces at their centers of mass via the per-body \(\hat{\mathbf{e}}_k\times\mathbf{r}_k\) terms in § [Torque Application](#torque-application).
+Let $\hat{\mathbf{e}}_{\mathrm{child}}=\hat{\mathbf{e}}_j$ and $\hat{\mathbf{e}}_{\mathrm{parent}}=\hat{\mathbf{e}}_i=-\hat{\mathbf{e}}_j$. A positive $\tau$ applies a right-hand torque about $+\hat{\mathbf{e}}_{\mathrm{child}}$ (child-positive; see [above](#parent-vs-child-axis-and-positive-torque)). The two bodies receive tangential impulse at their centers of mass via the per-body $\hat{\mathbf{e}}_k\times\mathbf{r}_k$ terms in § [Torque Application](#torque-application).
 
 ## Energy Integration
 
