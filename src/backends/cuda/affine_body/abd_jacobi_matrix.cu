@@ -187,6 +187,14 @@ MUDA_GENERIC Matrix12x12 ABDJacobiDyadicMass::to_mat() const
     return h;
 }
 
+MUDA_GENERIC Vector3 ABDJacobiDyadicMass::center_of_mass() const
+{
+    const Float m = static_cast<Float>(m_mass);
+    if(m <= 0)
+        return Vector3::Zero();
+    return m_mass_times_x_bar / m;
+}
+
 MUDA_GENERIC Matrix3x3 ABDJacobiDyadicMass::inertia_tensor_cm() const
 {
     const Float m = static_cast<Float>(m_mass);

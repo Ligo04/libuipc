@@ -1026,12 +1026,10 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
     static constexpr U64 ReporterUID = 668;
     using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
 
-    SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
     SimSystemSlot<AffineBodyRevoluteJointExternalForceConstraint> constraint;
 
     void do_build(BuildInfo& info) override
     {
-        affine_body_dynamics = require<AffineBodyDynamics>();
         constraint = require<AffineBodyRevoluteJointExternalForceConstraint>();
     }
 
@@ -1045,6 +1043,8 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
         if(torque_count == 0)
             return;
 
+        auto abd = constraint->revolute_joint->affine_body_dynamics;
+
         using namespace muda;
         ParallelFor()
             .file_line(__FILE__, __LINE__)
@@ -1055,7 +1055,8 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                     rest_positions =
                         constraint->revolute_joint->rest_positions.cviewer().name("rest_positions"),
                     constrained_flags = constraint->is_constrained.cviewer().name("constrained_flags"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
+                    qs = abd->qs().cviewer().name("qs"),
+                    mass = abd->body_masses().cviewer().name("body_masses")] __device__(int i) mutable
                    {
                        if(constrained_flags(i) == 0)
                            return;
@@ -1073,6 +1074,10 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector3 x2_bar = X_bar.segment<3>(6);
                        Vector3 x3_bar = X_bar.segment<3>(9);
 
+
+                       auto com_i_bar = mass(bids(0)).center_of_mass();
+                       auto com_j_bar = mass(bids(1)).center_of_mass();
+
                        // Axis direction in world frame
                        Vector3 e_world_i =
                            ABDJacobi{x1_bar - x0_bar}.vec_x(q_i).normalized();
@@ -1080,9 +1085,9 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                            ABDJacobi{x3_bar - x2_bar}.vec_x(q_j).normalized();
 
                        // Vector from axis point x0 to center of mass (x_bar=0) in world:
-                       //   c - x0_world = c - (c + A * x0_bar) = -A * x0_bar
-                       Vector3 d_i = -ABDJacobi{x0_bar}.vec_x(q_i);
-                       Vector3 d_j = -ABDJacobi{x2_bar}.vec_x(q_j);
+                       //   com_world - x0_world
+                       Vector3 d_i = ABDJacobi{com_i_bar - x0_bar}.vec_x(q_i);
+                       Vector3 d_j = ABDJacobi{com_j_bar - x2_bar}.vec_x(q_j);
 
                        // Project center of mass onto axis, lever arm is the
                        // perpendicular component: r = d - (d·e)*e

@@ -215,6 +215,12 @@ class ABDJacobiDyadicMass
     MUDA_GENERIC double mass() const { return m_mass; }
 
     /**
+     * @brief Center of mass in the reference frame.
+     * Returns zero vector if mass is zero.
+     */
+    MUDA_GENERIC Vector3 center_of_mass() const;
+
+    /**
      * @brief Inertia tensor about center of mass (3x3).
      * Derived from second moment about origin: I_cm = I^O - m(|c|^2 I_3 - c c^T),
      * I^O = tr(S) I_3 - S, with c = m_x_bar/m and S = m_x_bar_x_bar.

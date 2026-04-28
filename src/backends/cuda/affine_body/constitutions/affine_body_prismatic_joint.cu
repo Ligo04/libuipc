@@ -1064,12 +1064,10 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
     static constexpr U64 ReporterUID = 667;
     using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
 
-    SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
     SimSystemSlot<AffineBodyPrismaticJointExternalForceConstraint> constraint;
 
     void do_build(BuildInfo& info) override
     {
-        affine_body_dynamics = require<AffineBodyDynamics>();
         constraint = require<AffineBodyPrismaticJointExternalForceConstraint>();
     }
 
@@ -1093,7 +1091,9 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
                     rest_tangents =
                         constraint->prismatic_joint->rest_ts.cviewer().name("rest_tangents"),
                     constrained_flags = constraint->is_constrained.cviewer().name("constrained_flags"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
+                    qs = constraint->prismatic_joint->affine_body_dynamics->qs()
+                             .cviewer()
+                             .name("qs")] __device__(int i) mutable
                    {
                        if(constrained_flags(i) == 0)
                            return;
