@@ -1,4 +1,5 @@
 #include <affine_body/abd_jacobi_matrix.h>
+#include <muda/tools/debug_log.h>
 
 namespace uipc::backend::cuda
 {
