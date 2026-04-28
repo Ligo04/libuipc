@@ -30,22 +30,51 @@ $$
 
 where $\mathring{\mathbf{J}}^{\hat{e}}_k$ maps the rest-space axis direction through the current affine transform.
 
+<a id="parent-vs-child-axis-and-positive-torque"></a>
+
+### Parent vs. child axis and positive torque
+
+Indexing matches the base joint: **parent** \(=\) left \((i)\), **child** \(=\) right \((j)\). For each joint, the CUDA backend builds two normalized axis vectors from rest segments \((\bar{\mathbf{x}}^1-\bar{\mathbf{x}}^0)\) **per body**; they coincide as a geometric line but point **opposite** directions,
+
+$$
+\hat{\mathbf{e}}_i \approx -\,\hat{\mathbf{e}}_j \qquad\text{(parent axis opposite child axis)}.
+$$
+
+The scalar attribute `external_torque` is **child-positive**: a **positive** \(\tau\) applies a right-hand torque about **the child’s** axis direction \(\hat{\mathbf{e}}_{\mathrm{child}} = \hat{\mathbf{e}}_j\) (equivalently, about \(-\hat{\mathbf{e}}_i\) on the parent). The force kernel uses each body’s own \(\hat{\mathbf{e}}_k\) and lever arm \(\mathbf{r}_k\) so the pair is consistent with this convention.
+
+This parent/child polarity matters for interpreting **only** this external-force constitution (UID 668), not for renaming \(\theta\) or for limit/driving targets, which follow the shared `angle` frame in [Angle State](./affine_body_revolute_joint.md#angle-state).
+
+### Center of mass (reference configuration)
+
+For each body $k \in \{i, j\}$, let $\bar{\mathbf{c}}_k \in \mathbb{R}^3$ be the center of mass in the **reference configuration** — the same frame as the rest vertices and $m\bar{\mathbf{x}}$ in the dyadic mass on the affine body geometry ([Affine Body](./affine_body.md)). It is
+
+$$
+\bar{\mathbf{c}}_k = \frac{(m\bar{\mathbf{x}})_k}{m_k},
+$$
+
+using that body’s $m_k$, $(m\bar{\mathbf{x}})_k$ from `abd_mass` / `abd_mass_x_bar` (equivalently `mass_center` in meta).
+
 ### Lever Arm
 
-The lever arm $\mathbf{r}_k$ is the perpendicular distance from the joint axis to the center of mass of body $k$:
+Let $\bar{\mathbf{x}}^0_k$ be the rest-frame anchor point on body $k$ for the joint (paired with the axis segment as in [Revolute Joint](./affine_body_revolute_joint.md)). Write $\mathbf{T}_k(\bar{\mathbf{x}})$ for the world-space position of a rest point under body $k$’s current affine coordinates $\mathbf{q}_k$. The vector from the anchor to the center of mass in world space is
 
 $$
-\mathbf{d}_k = -\mathring{\mathbf{J}}^{\mathbf{x}^0_k} \mathbf{q}_k, \quad
-\mathbf{r}_k = \mathbf{d}_k - (\mathbf{d}_k \cdot \hat{\mathbf{e}}_k) \hat{\mathbf{e}}_k,
+\mathbf{d}_k = \mathbf{T}_k(\bar{\mathbf{c}}_k) - \mathbf{T}_k(\bar{\mathbf{x}}^0_k),
 $$
 
-where $\mathbf{d}_k$ is the vector from the axis point to the center of mass in world space.
+equivalently the linear map applied to $\bar{\mathbf{c}}_k - \bar{\mathbf{x}}^0_k$ (translation drops out along this displacement). The lever arm orthogonal to the axis is
 
-When $\|\mathbf{r}_k\|^2 < \epsilon$ (the center of mass lies on the axis), the force contribution for that body is zero.
+$$
+\mathbf{r}_k = \mathbf{d}_k - (\mathbf{d}_k \cdot \hat{\mathbf{e}}_k) \hat{\mathbf{e}}_k.
+$$
+
+If $\bar{\mathbf{c}}_k = \mathbf{0}$ (reference origin at COM), $\mathbf{d}_k = -\mathbf{T}_k(\bar{\mathbf{x}}^0_k) = \mathbf{T}_k(\mathbf{0}) - \mathbf{T}_k(\bar{\mathbf{x}}^0_k)$, recovering the chord from anchor to origin.
+
+When $\|\mathbf{r}_k\|^2 < \epsilon$ (within a numerical cutoff), that body contributes no coupling force from this step.
 
 ### Sign Convention
 
-A positive $\tau$ applies torque to body $j$ in the $+\hat{\mathbf{e}}$ direction (counterclockwise when viewed along $+\hat{\mathbf{e}}$, right-hand rule) and an equal-and-opposite reaction torque to body $i$.
+Let \(\hat{\mathbf{e}}_{\mathrm{child}}=\hat{\mathbf{e}}_j\) and \(\hat{\mathbf{e}}_{\mathrm{parent}}=\hat{\mathbf{e}}_i=-\hat{\mathbf{e}}_j\). A positive \(\tau\) applies a right-hand torque about \(+\hat{\mathbf{e}}_{\mathrm{child}}\) (child-positive; see [above](#parent-vs-child-axis-and-positive-torque)). The two bodies receive consistent tangential forces at their centers of mass via the per-body \(\hat{\mathbf{e}}_k\times\mathbf{r}_k\) terms in § [Torque Application](#torque-application).
 
 ## Energy Integration
 

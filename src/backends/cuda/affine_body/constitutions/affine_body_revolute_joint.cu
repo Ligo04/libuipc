@@ -1082,7 +1082,10 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector3 e_world_i =
                            ABDJacobi{x1_bar - x0_bar}.vec_x(q_i).normalized();
                        Vector3 e_world_j =
-                           ABDJacobi{x3_bar - x2_bar}.vec_x(q_j).normalized();
+                           ABDJacobi{x2_bar - x3_bar}.vec_x(q_j).normalized();
+
+                       MUDA_ASSERT((e_world_i + e_world_j).squaredNorm() < 1e-6,
+                                   "e_world_i + e_world_j should be zero");
 
                        // Vector from axis point x0 to center of mass (x_bar=0) in world:
                        //   com_world - x0_world
@@ -1101,19 +1104,20 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        //   F = tau * (e × r) / |r|^2
                        // Body_i receives +tau, body_j receives -tau (reaction).
 
-                       constexpr Float eps = 1e-12;
+                       constexpr Float num_eps = 1e-3;
 
                        Vector12 F_i = Vector12::Zero();
-                       if(r_sq_i > eps)
+                       if(r_sq_i >= num_eps)
                        {
                            F_i.segment<3>(0) = tau * e_world_i.cross(r_i) / r_sq_i;
                        }
 
                        Vector12 F_j = Vector12::Zero();
-                       if(r_sq_j > eps)
+                       if(r_sq_j >= num_eps)
                        {
                            F_j.segment<3>(0) = tau * e_world_j.cross(r_j) / r_sq_j;
                        }
+
 
                        eigen::atomic_add(external_forces(bids(0)), F_i);
                        eigen::atomic_add(external_forces(bids(1)), F_j);
