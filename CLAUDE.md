@@ -91,3 +91,38 @@ Modules mirror C++ namespaces:
 - `uipc.geometry` - Geometry operations
 - `uipc.constitution` - Material models
 - `uipc.unit` - Physical units (GPa, MPa, etc.)
+
+## Cursor Rules and Skills
+
+This repo also has Cursor-format rules and skills that apply to Claude Code work:
+
+- **Always-on rules** — read `.cursor/rules/*.mdc` at the start of any coding task and follow them. Treat the prose as authoritative. Ignore Cursor-specific syntax: `mdc:<path>` links are just relative file paths, and the frontmatter (`globs`, `alwaysApply`, etc.) is for Cursor's auto-attach logic — not instructions for you. Currently:
+  - `.cursor/rules/cpp-format.mdc` — C++ formatting rules (clang-format-aligned style). Apply to every `*.h *.hpp *.cpp *.inl *.cu *.cuh` edit.
+  - `.cursor/rules/self-improvement.mdc` — when you notice repeated patterns or rule gaps, propose updates to the rules.
+
+- **Cursor skills** — `.cursor/skills/<name>/SKILL.md`. Each has YAML frontmatter with `name`, `description`, and optional `disable-model-invocation: true` (which means the user must explicitly invoke it; do NOT auto-trigger).
+
+  **How to use them:** when the user's request matches a skill — by name (e.g. "run the `commit` skill", "/format"), by intent matching the description, or by explicit ask — read the full `.cursor/skills/<name>/SKILL.md` with the Read tool and follow its steps. Skills may reference other skills via `[name](./other.md)` links — load those too on demand.
+
+  **Available skills (index):**
+
+  *Auto-triggerable (read whenever the description matches the task):*
+  - `cmake-workflow` — Build and test libuipc via CMake (configure, RelWithDebInfo, Catch2). Trigger on build/test asks.
+  - `commit-convention` — Conventional commit message format and rules for this project.
+  - `cursor-rules` — How to add or edit Cursor rules in this project.
+  - `document` — Documentation style guide and rules.
+  - `gpu-optimization` — GPU profiling/optimization workflow (`uipc.profile`, `uipc.profile.nsight`, Nsight Compute CLI). Trigger when profiling/optimizing CUDA kernels.
+  - `project-structure` — Overview of main directories and important files. Trigger when needing repo layout.
+  - `repository-setup` — Setting up remotes when working with forks.
+  - `review-pr` — End-to-end PR review (checkout, summarize, domain-aware AI review covering physics, backend, C++ style, GPU, pybind). Trigger on PR-review asks.
+  - `simulation-dev` — Simulation dev best practices: correctness, stability, debuggability, index safety, NaN/Inf, diagnostics. Trigger when modifying solvers/constraints/GPU kernels.
+  - `xmake-workflow` — Build/test via XMake (alternate build system).
+
+  *Explicit-invocation only (`disable-model-invocation: true` — only when the user explicitly asks):*
+  - `commit` — Create a conventional commit locally (no push without explicit ask).
+  - `fix-issue` — Fix a GitHub issue with proper branch / testing / PR flow.
+  - `fix-pr` — Fix a PR based on review feedback.
+  - `format` — Run `clang-format` on C++ files changed vs. `main`.
+  - `github-pr` — Create a structured pull request.
+  - `push-tag` — Push a version tag and optionally create a GitHub release.
+  - `run-tests` — Run C++ and Python tests.

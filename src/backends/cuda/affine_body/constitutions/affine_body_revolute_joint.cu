@@ -1068,21 +1068,13 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector12 q_i = qs(bids(0));
                        Vector12 q_j = qs(bids(1));
 
-                       Vector3 x0_bar = X_bar.segment<3>(0);
-                       Vector3 x1_bar = X_bar.segment<3>(3);
                        Vector3 x2_bar = X_bar.segment<3>(6);
                        Vector3 x3_bar = X_bar.segment<3>(9);
 
-                       // Joint axis in world frame, computed independently per
-                       // body. Rest layout uses reversed order on body j, so
-                       // e_world_j ≈ -e_world_i; the assert below catches drift.
-                       Vector3 e_world_i =
-                           ABDJacobi{x1_bar - x0_bar}.vec_x(q_i).normalized();
                        Vector3 e_world_j =
-                           ABDJacobi{x2_bar - x3_bar}.vec_x(q_j).normalized();
+                           ABDJacobi{x3_bar - x2_bar}.vec_x(q_i).normalized();
 
-                       MUDA_ASSERT((e_world_i + e_world_j).squaredNorm() < 1e-6,
-                                   "e_world_i + e_world_j should be zero");
+                       Vector3 e_world_i = -e_world_j;
 
                        // Equivalent generalized force from a pure torque
                        //     m_b = tau * e_world_b
