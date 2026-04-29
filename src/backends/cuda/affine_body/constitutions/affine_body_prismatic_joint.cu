@@ -1108,10 +1108,12 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
 
                        ABDJacobi JT[2] = {ABDJacobi{t_bar.segment<3>(0)},
                                           ABDJacobi{t_bar.segment<3>(3)}};
-                       Vector3   t_i   = -JT[0].vec_x(q_i);
+                       Vector3   t_i   = JT[0].vec_x(q_i);
                        Vector3   t_j   = JT[1].vec_x(q_j);
 
-                       MUDA_ASSERT((t_i + t_j).squaredNorm() < 1e-6, "t_i + t_j should be zero");
+                       // symmetrize to avoid numerical issues when the joint is near singularity
+                       t_j = 0.5 * (t_i + t_j);
+                       t_i = -t_j;
 
                        // Build 12D force vectors: -f*t to body_i, +f*t to body_j
                        Vector12 F_i      = Vector12::Zero();

@@ -1068,23 +1068,19 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector12 q_i = qs(bids(0));
                        Vector12 q_j = qs(bids(1));
 
-                       Vector3 x2_bar = X_bar.segment<3>(6);
-                       Vector3 x3_bar = X_bar.segment<3>(9);
+                       // position direction of the applied torque on body j (right-hand rule)
+                       ABDJacobi e_bar[2] = {
+                           ABDJacobi{X_bar.segment<3>(3) - X_bar.segment<3>(0)},
+                           ABDJacobi{X_bar.segment<3>(9) - X_bar.segment<3>(6)}};
+                       Vector3 e_i = e_bar[0].vec_x(q_i).normalized();
+                       Vector3 e_j = e_bar[1].vec_x(q_j).normalized();
 
-                       Vector3 e_world_j =
-                           ABDJacobi{x3_bar - x2_bar}.vec_x(q_i).normalized();
+                       // symmetrize to avoid numerical issues when the joint is near singularity
+                       e_j = 0.5 * (e_j + e_i);
+                       e_i = -e_j;
 
-                       Vector3 e_world_i = -e_world_j;
-
-                       // Equivalent generalized force from a pure torque
-                       //     m_b = tau * e_world_b
-                       // on the affine-body rotational DOF (virtual-work form,
-                       // see revolute_joint_affine_body.md):
-                       //     F^x_b  = 0
-                       //     F^A_b  = (tau/2) * [e_world_b]_x * A_b^{-T}    (3x3)
-                       // and vec(F^A_b) is laid out row-major into q[3:12] to
-                       // match the row-major (rows of A) convention of `q`.
-                       // Newton's 3rd law is encoded by e_world_j = -e_world_i.
+                       // affine-body rotational DOF (virtual-work form)
+                       //  F^A_b  = (tau/2) * [e_world_b]_x * A_b^{-T}    (3x3)
                        auto torque_to_F = [](Float tau, const Vector3& e, const Vector12& q)
                        {
                            Matrix3x3 A_inv_T = q_to_A(q).inverse().transpose();
@@ -1095,8 +1091,8 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                            return F;
                        };
 
-                       Vector12 F_i = torque_to_F(tau, e_world_i, q_i);
-                       Vector12 F_j = torque_to_F(tau, e_world_j, q_j);
+                       Vector12 F_i = torque_to_F(tau, e_i, q_i);
+                       Vector12 F_j = torque_to_F(tau, e_j, q_j);
 
                        eigen::atomic_add(external_forces(bids(0)), F_i);
                        eigen::atomic_add(external_forces(bids(1)), F_j);
