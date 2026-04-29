@@ -1055,8 +1055,7 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                     rest_positions =
                         constraint->revolute_joint->rest_positions.cviewer().name("rest_positions"),
                     constrained_flags = constraint->is_constrained.cviewer().name("constrained_flags"),
-                    qs = abd->qs().cviewer().name("qs"),
-                    mass = abd->body_masses().cviewer().name("body_masses")] __device__(int i) mutable
+                    qs = abd->qs().cviewer().name("qs")] __device__(int i) mutable
                    {
                        if(constrained_flags(i) == 0)
                            return;
@@ -1074,11 +1073,9 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector3 x2_bar = X_bar.segment<3>(6);
                        Vector3 x3_bar = X_bar.segment<3>(9);
 
-
-                       auto com_i_bar = mass(bids(0)).center_of_mass();
-                       auto com_j_bar = mass(bids(1)).center_of_mass();
-
-                       // Axis direction in world frame
+                       // Joint axis in world frame, computed independently per
+                       // body. Rest layout uses reversed order on body j, so
+                       // e_world_j ≈ -e_world_i; the assert below catches drift.
                        Vector3 e_world_i =
                            ABDJacobi{x1_bar - x0_bar}.vec_x(q_i).normalized();
                        Vector3 e_world_j =
@@ -1087,36 +1084,27 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        MUDA_ASSERT((e_world_i + e_world_j).squaredNorm() < 1e-6,
                                    "e_world_i + e_world_j should be zero");
 
-                       // Vector from axis point x0 to center of mass (x_bar=0) in world:
-                       //   com_world - x0_world
-                       Vector3 d_i = ABDJacobi{com_i_bar - x0_bar}.vec_x(q_i);
-                       Vector3 d_j = ABDJacobi{com_j_bar - x2_bar}.vec_x(q_j);
-
-                       // Project center of mass onto axis, lever arm is the
-                       // perpendicular component: r = d - (d·e)*e
-                       Vector3 r_i = d_i - d_i.dot(e_world_i) * e_world_i;
-                       Vector3 r_j = d_j - d_j.dot(e_world_j) * e_world_j;
-
-                       Float r_sq_i = r_i.squaredNorm();
-                       Float r_sq_j = r_j.squaredNorm();
-
-                       // F = tau * (e × r) / |r|^2 ; body_j gets the reaction.
-                       // Floor on |r|^2 ignores FP noise near the axis to avoid
-                       // amplifying round-off into an unphysically large force.
-                       constexpr Float lever_arm_sq_floor = 1e-4;
-
-                       Vector12 F_i = Vector12::Zero();
-                       if(r_sq_i > lever_arm_sq_floor)
+                       // Equivalent generalized force from a pure torque
+                       //     m_b = tau * e_world_b
+                       // on the affine-body rotational DOF (virtual-work form,
+                       // see revolute_joint_affine_body.md):
+                       //     F^x_b  = 0
+                       //     F^A_b  = (tau/2) * [e_world_b]_x * A_b^{-T}    (3x3)
+                       // and vec(F^A_b) is laid out row-major into q[3:12] to
+                       // match the row-major (rows of A) convention of `q`.
+                       // Newton's 3rd law is encoded by e_world_j = -e_world_i.
+                       auto torque_to_F = [](Float tau, const Vector3& e, const Vector12& q)
                        {
-                           F_i.segment<3>(0) = tau * e_world_i.cross(r_i) / r_sq_i;
-                       }
+                           Matrix3x3 A_inv_T = q_to_A(q).inverse().transpose();
+                           Matrix3x3 FA      = (0.5 * tau) * skew(e) * A_inv_T;
 
-                       Vector12 F_j = Vector12::Zero();
-                       if(r_sq_j > lever_arm_sq_floor)
-                       {
-                           F_j.segment<3>(0) = tau * e_world_j.cross(r_j) / r_sq_j;
-                       }
+                           Vector12 F      = Vector12::Zero();
+                           F.segment<9>(3) = A_to_q(FA);
+                           return F;
+                       };
 
+                       Vector12 F_i = torque_to_F(tau, e_world_i, q_i);
+                       Vector12 F_j = torque_to_F(tau, e_world_j, q_j);
 
                        eigen::atomic_add(external_forces(bids(0)), F_i);
                        eigen::atomic_add(external_forces(bids(1)), F_j);

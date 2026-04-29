@@ -180,4 +180,11 @@ UIPC_GENERIC void orthonormal_basis(Vector3& t, Vector3& n, Vector3& b)
     n = t.cross(test_vector).normalized();
     b = t.cross(n).normalized();
 }
+
+UIPC_GENERIC Matrix3x3 skew(const Vector3& v)
+{
+    Matrix3x3 S;
+    S << 0, -v(2), v(1), v(2), 0, -v(0), -v(1), v(0), 0;
+    return S;
+}
 }  // namespace uipc::backend::cuda
