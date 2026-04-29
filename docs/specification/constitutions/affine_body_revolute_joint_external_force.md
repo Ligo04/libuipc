@@ -6,64 +6,66 @@ The **Affine Body Revolute Joint External Force** applies a scalar external torq
 
 ## Torque Application
 
-Given a scalar torque $\tau$ and the joint axis direction $\hat{\mathbf{e}}$, the external torque is converted into a translational force at each body's center of mass. The torque produces equal-and-opposite tangential forces on the two bodies:
+Given a scalar torque $\tau$ and the per-body joint axis $\hat{\mathbf{e}}_k$, the external torque is mapped via the principle of virtual work directly to an equivalent **generalized force on the affine rotational DOF** of each body — without forming a translational force or evaluating a center-of-mass lever arm. For each body $k \in \{i, j\}$ with affine matrix $\mathbf{A}_k \in \mathbb{R}^{3 \times 3}$ extracted from $\mathbf{q}_k$:
 
 $$
-\mathbf{F}_i = \begin{bmatrix} -\tau \, \dfrac{\hat{\mathbf{e}}_i \times \mathbf{r}_i}{\|\mathbf{r}_i\|^2} \\[6pt] \mathbf{0}_9 \end{bmatrix} \in \mathbb{R}^{12}, \quad
-\mathbf{F}_j = \begin{bmatrix} +\tau \, \dfrac{\hat{\mathbf{e}}_j \times \mathbf{r}_j}{\|\mathbf{r}_j\|^2} \\[6pt] \mathbf{0}_9 \end{bmatrix} \in \mathbb{R}^{12},
+\mathbf{F}_k = \begin{bmatrix} \mathbf{0}_3 \\ \operatorname{vec}\!\bigl(\mathbf{F}^A_k\bigr) \end{bmatrix} \in \mathbb{R}^{12},
+$$
+
+$$
+\mathbf{F}^A_k = \frac{\tau}{2} \, [\hat{\mathbf{e}}_k]_\times \, \mathbf{A}_k^{-T},
 $$
 
 where:
 
 - $\tau$ is the scalar torque magnitude (per edge)
-- $\hat{\mathbf{e}}_k$ is the normalized joint axis direction in body $k$'s current frame
-- $\mathbf{r}_k$ is the lever arm vector from the joint axis to body $k$'s center of mass, perpendicular to the axis
-- $\mathbf{0}_9$ denotes the nine-dimensional zero vector (no affine force component)
+- $\hat{\mathbf{e}}_k$ is the normalized joint axis on body $k$ in world space (see [Axis Direction](#axis-direction))
+- $[\hat{\mathbf{e}}_k]_\times \in \mathbb{R}^{3 \times 3}$ is the skew-symmetric matrix satisfying $[\hat{\mathbf{e}}_k]_\times \mathbf{w} = \hat{\mathbf{e}}_k \times \mathbf{w}$
+- $\mathbf{A}_k^{-T}$ is the inverse-transpose of body $k$'s current affine matrix
+- $\operatorname{vec}(\cdot)$ packs a $3 \times 3$ matrix into the $9$ components of $\mathbf{q}_k[3{:}12]$ in **row-major** order, matching the row-major layout used for the rows of $\mathbf{A}_k$ in $\mathbf{q}_k$
+- $\mathbf{0}_3$ denotes the three-dimensional zero vector — a pure torque produces no translational generalized force, regardless of whether $\mathbf{x}_k$ is the COM or a mesh anchor
+
+The same factor $\tau$ is applied to both bodies; Newton's third law is encoded by the strict antisymmetry $\hat{\mathbf{e}}_i = -\hat{\mathbf{e}}_j$ that is enforced numerically in § [Axis Direction](#axis-direction), so the opposite axis direction supplies the opposite-sign reaction.
+
+### Reduction to rigid body
+
+When $\mathbf{A}_k \in SO(3)$ (no shear or scale, i.e. an undeformed rigid body), $\mathbf{A}_k^{-T} = \mathbf{A}_k$ and the formula reduces to the familiar rigid-body torque-on-rotation generalized force $\mathbf{F}^A_k = \tfrac{1}{2}[\hat{\mathbf{e}}_k]_\times \mathbf{A}_k$. The factor $\mathbf{A}_k^{-T}$ is the affine-body correction for shear/scale; it vanishes in the rigid limit.
 
 ### Axis Direction
 
-The joint axis is defined by two points $\mathbf{x}^0$ and $\mathbf{x}^1$ on each body, following the [Revolute Joint](./affine_body_revolute_joint.md) convention. The axis direction in world space is:
+The joint axis on body $k$ is defined by two anchor points $\mathbf{x}^0_k$ and $\mathbf{x}^1_k$ in world space, following the base [Revolute Joint](./affine_body_revolute_joint.md) convention. Each body first computes its own raw world-space axis from its own anchors and current pose:
 
 $$
-\hat{\mathbf{e}}_k = \frac{\mathring{\mathbf{J}}^{\hat{e}}_k \mathbf{q}_k}{\|\mathring{\mathbf{J}}^{\hat{e}}_k \mathbf{q}_k\|}, \quad k \in \{i, j\},
+\tilde{\mathbf{e}}_k = \frac{\mathbf{x}^1_k - \mathbf{x}^0_k}{\bigl\|\mathbf{x}^1_k - \mathbf{x}^0_k\bigr\|}, \quad k \in \{i, j\}.
 $$
 
-where $\mathring{\mathbf{J}}^{\hat{e}}_k$ maps the rest-space axis direction through the current affine transform.
-
-### Lever Arm
-
-The lever arm $\mathbf{r}_k$ is the perpendicular distance from the joint axis to the center of mass of body $k$:
+By construction the two anchor pairs are laid out in opposite order on the two bodies, so $\tilde{\mathbf{e}}_i \approx -\tilde{\mathbf{e}}_j$ whenever the joint constraint is satisfied. To absorb residual numerical drift near the singularity (and to guarantee Newton's third law bit-exactly regardless of the per-body roundoff), the two raw axes are symmetrized into one strictly antisymmetric pair:
 
 $$
-\mathbf{d}_k = -\mathring{\mathbf{J}}^{\mathbf{x}^0_k} \mathbf{q}_k, \quad
-\mathbf{r}_k = \mathbf{d}_k - (\mathbf{d}_k \cdot \hat{\mathbf{e}}_k) \hat{\mathbf{e}}_k,
+\hat{\mathbf{e}}_j = \tfrac{1}{2}\bigl(\tilde{\mathbf{e}}_j + \tilde{\mathbf{e}}_i\bigr),
 $$
 
-where $\mathbf{d}_k$ is the vector from the axis point to the center of mass in world space.
-
-When $\|\mathbf{r}_k\|^2 < \epsilon$ (the center of mass lies on the axis), the force contribution for that body is zero.
-
-### Sign Convention
-
-A positive $\tau$ applies torque to body $j$ in the $+\hat{\mathbf{e}}$ direction (counterclockwise when viewed along $+\hat{\mathbf{e}}$, right-hand rule) and an equal-and-opposite reaction torque to body $i$.
-
-## Energy Integration
-
-The external forces are incorporated into each affine body's kinetic energy term through the predicted position $\tilde{\mathbf{q}}$, following the same mechanism as [AffineBodyExternalForce](./affine_body_external_force.md):
-
 $$
-E = \frac{1}{2} \left(\mathbf{q} - \tilde{\mathbf{q}}\right)^T \mathbf{M} \left(\mathbf{q} - \tilde{\mathbf{q}}\right),
+\hat{\mathbf{e}}_i = -\hat{\mathbf{e}}_j.
 $$
 
-where $\tilde{\mathbf{q}}$ is updated each time step to include the acceleration from the external force:
+The averaging step is a first-order denoiser: as long as the joint is well-posed, $\tilde{\mathbf{e}}_i + \tilde{\mathbf{e}}_j$ is roundoff-level and the corrected axes lie within the same $\mathcal{O}(\varepsilon)$ neighborhood as the raw ones, while strict antisymmetry $\hat{\mathbf{e}}_i = -\hat{\mathbf{e}}_j$ now holds exactly. If the magnitude of $\tilde{\mathbf{e}}_i + \tilde{\mathbf{e}}_j$ is non-trivial, the joint constraint itself has drifted and the upstream constraint solver — not this symmetrization — is responsible for the fix.
+
+<a id="parent-vs-child-axis-and-positive-torque"></a>
+
+### Parent vs. child axis and positive torque
+
+**Parent** $=$ left $(i)$, **child** $=$ right $(j)$, matching the base joint. The two anchor pairs are laid out in opposite order on the two bodies, so the raw per-body axes point opposite ways: $\tilde{\mathbf{e}}_i \approx -\tilde{\mathbf{e}}_j$. After the symmetrization in § [Axis Direction](#axis-direction) this becomes the exact identity $\hat{\mathbf{e}}_i = -\hat{\mathbf{e}}_j$.
+
+`external_torque` is **child-positive**: a positive $\tau$ applies a right-hand torque about $\hat{\mathbf{e}}_j$ (the child axis); the parent receives the equal-and-opposite reaction automatically because $\hat{\mathbf{e}}_i = -\hat{\mathbf{e}}_j$. This polarity applies only to this constitution (UID 668); the shared `angle` frame for limits and driving targets follows the base [Revolute Joint](./affine_body_revolute_joint.md#angle-state).
+
+## Time Integration
+
+`external_torque` contributes **no potential energy of its own**. The generalized force $\mathbf{F}_k$ from § [Torque Application](#torque-application) enters the time step only through the predicted position $\tilde{\mathbf{q}}_k$ (i.e. as an inertial shift), in the same way as [AffineBodyExternalForce](./affine_body_external_force.md):
 
 $$
-\mathbf{a}_{ext} = \mathbf{M}^{-1} \mathbf{F}_{ext}.
+\mathbf{a}_{\text{ext},k} = \mathbf{M}_k^{-1} \mathbf{F}_k.
 $$
-
-## State Update
-
-The current joint angle $\theta_{\text{current}}$ is tracked and written back to the `angle` edge attribute by the **base** [AffineBodyRevoluteJoint](./affine_body_revolute_joint.md) — not by this external-force constitution. See [Angle State](./affine_body_revolute_joint.md#angle-state) for the formulation.
 
 ## Runtime Control
 
@@ -78,9 +80,7 @@ This constitution must be applied to a geometry that already has an [AffineBodyR
 
 ## Attributes
 
-On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). The edge inherits all linking and state fields of the base [Affine Body Revolute Joint](./affine_body_revolute_joint.md): `l_geo_id`, `r_geo_id`, `l_inst_id`, `r_inst_id`, `strength_ratio`, `angle`, `init_angle`, and optional `l_position0`, `l_position1`, `r_position0`, `r_position1` when created via Local `create_geometry`.
-
-External-force-specific attributes on **edges**:
+On the joint geometry (1D simplicial complex), on **edges** (one edge per joint). Linking and state fields are inherited from the base [Affine Body Revolute Joint](./affine_body_revolute_joint.md). The fields owned by this constitution are:
 
 - `external_torque`: $\tau$ in the formulae above, scalar torque around the joint axis (one per edge)
 - `external_torque/is_constrained`: enables (`1`) or disables (`0`) the external torque

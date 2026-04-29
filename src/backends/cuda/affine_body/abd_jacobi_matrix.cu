@@ -1,4 +1,5 @@
 #include <affine_body/abd_jacobi_matrix.h>
+#include <muda/tools/debug_log.h>
 
 namespace uipc::backend::cuda
 {
@@ -185,6 +186,13 @@ MUDA_GENERIC Matrix12x12 ABDJacobiDyadicMass::to_mat() const
     Matrix12x12 h = Matrix12x12::Zero();
     add_to(h);
     return h;
+}
+
+MUDA_GENERIC Vector3 ABDJacobiDyadicMass::center_of_mass() const
+{
+    const Float m = static_cast<Float>(m_mass);
+    MUDA_ASSERT(m > 0, "ABDJacobiDyadicMass::center_of_mass requires positive mass");
+    return m_mass_times_x_bar / m;
 }
 
 MUDA_GENERIC Matrix3x3 ABDJacobiDyadicMass::inertia_tensor_cm() const

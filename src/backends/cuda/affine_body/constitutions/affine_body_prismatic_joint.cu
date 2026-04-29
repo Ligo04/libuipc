@@ -1064,12 +1064,10 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
     static constexpr U64 ReporterUID = 667;
     using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
 
-    SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
     SimSystemSlot<AffineBodyPrismaticJointExternalForceConstraint> constraint;
 
     void do_build(BuildInfo& info) override
     {
-        affine_body_dynamics = require<AffineBodyDynamics>();
         constraint = require<AffineBodyPrismaticJointExternalForceConstraint>();
     }
 
@@ -1083,6 +1081,8 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
         if(force_count == 0)
             return;
 
+        auto abd = constraint->prismatic_joint->affine_body_dynamics;
+
         using namespace muda;
         ParallelFor()
             .file_line(__FILE__, __LINE__)
@@ -1093,7 +1093,7 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
                     rest_tangents =
                         constraint->prismatic_joint->rest_ts.cviewer().name("rest_tangents"),
                     constrained_flags = constraint->is_constrained.cviewer().name("constrained_flags"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
+                    qs = abd->qs().cviewer().name("qs")] __device__(int i) mutable
                    {
                        if(constrained_flags(i) == 0)
                            return;
@@ -1111,12 +1111,16 @@ class AffineBodyPrismaticJointExternalForce final : public AffineBodyExternalFor
                        Vector3   t_i   = JT[0].vec_x(q_i);
                        Vector3   t_j   = JT[1].vec_x(q_j);
 
-                       // Build 12D force vectors: +f*t to body_i, -f*t to body_j
+                       // symmetrize to avoid numerical issues when the joint is near singularity
+                       t_j = 0.5 * (t_i + t_j);
+                       t_i = -t_j;
+
+                       // Build 12D force vectors: -f*t to body_i, +f*t to body_j
                        Vector12 F_i      = Vector12::Zero();
                        F_i.segment<3>(0) = f * t_i;
 
                        Vector12 F_j      = Vector12::Zero();
-                       F_j.segment<3>(0) = -f * t_j;
+                       F_j.segment<3>(0) = f * t_j;
 
                        eigen::atomic_add(external_forces(bids(0)), F_i);
                        eigen::atomic_add(external_forces(bids(1)), F_j);

@@ -1026,12 +1026,10 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
     static constexpr U64 ReporterUID = 668;
     using AffineBodyExternalForceReporter::AffineBodyExternalForceReporter;
 
-    SimSystemSlot<AffineBodyDynamics> affine_body_dynamics;
     SimSystemSlot<AffineBodyRevoluteJointExternalForceConstraint> constraint;
 
     void do_build(BuildInfo& info) override
     {
-        affine_body_dynamics = require<AffineBodyDynamics>();
         constraint = require<AffineBodyRevoluteJointExternalForceConstraint>();
     }
 
@@ -1045,6 +1043,8 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
         if(torque_count == 0)
             return;
 
+        auto abd = constraint->revolute_joint->affine_body_dynamics;
+
         using namespace muda;
         ParallelFor()
             .file_line(__FILE__, __LINE__)
@@ -1055,7 +1055,7 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                     rest_positions =
                         constraint->revolute_joint->rest_positions.cviewer().name("rest_positions"),
                     constrained_flags = constraint->is_constrained.cviewer().name("constrained_flags"),
-                    qs = affine_body_dynamics->qs().cviewer().name("qs")] __device__(int i) mutable
+                    qs = abd->qs().cviewer().name("qs")] __device__(int i) mutable
                    {
                        if(constrained_flags(i) == 0)
                            return;
@@ -1068,47 +1068,31 @@ class AffineBodyRevoluteJointExternalForce final : public AffineBodyExternalForc
                        Vector12 q_i = qs(bids(0));
                        Vector12 q_j = qs(bids(1));
 
-                       Vector3 x0_bar = X_bar.segment<3>(0);
-                       Vector3 x1_bar = X_bar.segment<3>(3);
-                       Vector3 x2_bar = X_bar.segment<3>(6);
-                       Vector3 x3_bar = X_bar.segment<3>(9);
+                       // position direction of the applied torque on body j (right-hand rule)
+                       ABDJacobi e_bar[2] = {
+                           ABDJacobi{X_bar.segment<3>(3) - X_bar.segment<3>(0)},
+                           ABDJacobi{X_bar.segment<3>(9) - X_bar.segment<3>(6)}};
+                       Vector3 e_i = e_bar[0].vec_x(q_i).normalized();
+                       Vector3 e_j = e_bar[1].vec_x(q_j).normalized();
 
-                       // Axis direction in world frame
-                       Vector3 e_world_i =
-                           ABDJacobi{x1_bar - x0_bar}.vec_x(q_i).normalized();
-                       Vector3 e_world_j =
-                           ABDJacobi{x3_bar - x2_bar}.vec_x(q_j).normalized();
+                       // symmetrize to avoid numerical issues when the joint is near singularity
+                       e_j = 0.5 * (e_j + e_i);
+                       e_i = -e_j;
 
-                       // Vector from axis point x0 to center of mass (x_bar=0) in world:
-                       //   c - x0_world = c - (c + A * x0_bar) = -A * x0_bar
-                       Vector3 d_i = -ABDJacobi{x0_bar}.vec_x(q_i);
-                       Vector3 d_j = -ABDJacobi{x2_bar}.vec_x(q_j);
-
-                       // Project center of mass onto axis, lever arm is the
-                       // perpendicular component: r = d - (d·e)*e
-                       Vector3 r_i = d_i - d_i.dot(e_world_i) * e_world_i;
-                       Vector3 r_j = d_j - d_j.dot(e_world_j) * e_world_j;
-
-                       Float r_sq_i = r_i.squaredNorm();
-                       Float r_sq_j = r_j.squaredNorm();
-
-                       // Tangential force at center of mass:
-                       //   F = tau * (e × r) / |r|^2
-                       // Body_i receives +tau, body_j receives -tau (reaction).
-
-                       constexpr Float eps = 1e-12;
-
-                       Vector12 F_i = Vector12::Zero();
-                       if(r_sq_i > eps)
+                       // affine-body rotational DOF (virtual-work form)
+                       //  F^A_b  = (tau/2) * [e_world_b]_x * A_b^{-T}    (3x3)
+                       auto torque_to_F = [](Float tau, const Vector3& e, const Vector12& q)
                        {
-                           F_i.segment<3>(0) = tau * e_world_i.cross(r_i) / r_sq_i;
-                       }
+                           Matrix3x3 A_inv_T = q_to_A(q).inverse().transpose();
+                           Matrix3x3 FA      = (0.5 * tau) * skew(e) * A_inv_T;
 
-                       Vector12 F_j = Vector12::Zero();
-                       if(r_sq_j > eps)
-                       {
-                           F_j.segment<3>(0) = tau * e_world_j.cross(r_j) / r_sq_j;
-                       }
+                           Vector12 F      = Vector12::Zero();
+                           F.segment<9>(3) = A_to_q(FA);
+                           return F;
+                       };
+
+                       Vector12 F_i = torque_to_F(tau, e_i, q_i);
+                       Vector12 F_j = torque_to_F(tau, e_j, q_j);
 
                        eigen::atomic_add(external_forces(bids(0)), F_i);
                        eigen::atomic_add(external_forces(bids(1)), F_j);

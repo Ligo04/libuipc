@@ -40,14 +40,7 @@ where $K$ is the stiffness constant of the joint, we choose $K=\gamma (m_i + m_j
 
 ## Angle State
 
-The revolute joint tracks a scalar joint angle $\theta$ that extra-per-joint constitutions (driving joint, angle limit, external torque) share. The backend builds, for each body $k \in \{i,j\}$, an orthonormal basis $(\hat{\mathbf{t}}_k, \hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k)$ aligned with the joint axis at setup, where
-
-$$
-\hat{\mathbf{t}}_k = \frac{\mathbf{x}^1_k - \mathbf{x}^0_k}{\|\mathbf{x}^1_k - \mathbf{x}^0_k\|}, \quad
-\hat{\mathbf{b}}_k = \hat{\mathbf{t}}_k \times \hat{\mathbf{n}}_k,
-$$
-
-and the $(\hat{\mathbf{n}}, \hat{\mathbf{b}})$ pair is stored per body in the layout $[\hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k]$. The current relative angle between the two bodies is extracted as
+The revolute joint tracks a scalar joint angle $\theta$ that extra-per-joint constitutions (driving joint, angle limit, external torque) share. The backend constructs per body $k \in \{i,j\}$ an orthonormal basis $(\hat{\mathbf{t}}_k, \hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k)$ from the hinge geometry embedded in symbolic generation and Jacobian layout for this constitution (see `sym/affine_body_revolute_joint` alongside deployed kernels): $\hat{\mathbf{t}}_k$ is the **unit tangent** along body $k$’s hinge segment; $\hat{\mathbf{b}}_k = \hat{\mathbf{t}}_k \times \hat{\mathbf{n}}_k$. Pair $[\hat{\mathbf{n}}_k, \hat{\mathbf{b}}_k]$ is the rotating perpendicular frame used downstream. Current relative angle is
 
 $$
 \cos\theta = \frac{\hat{\mathbf{n}}_i \cdot \hat{\mathbf{n}}_j + \hat{\mathbf{b}}_i \cdot \hat{\mathbf{b}}_j}{2}, \quad
@@ -58,7 +51,21 @@ $$
 \theta = \operatorname{atan2}(\sin\theta,\; \cos\theta) \in (-\pi, \pi].
 $$
 
-The sign follows the right-hand rule around $+\hat{\mathbf{t}}$ (counterclockwise when viewed along $+\hat{\mathbf{t}}$).
+The sign follows the right-hand rule **about the child tangent** $+\hat{\mathbf{t}}_{\mathrm{child}}$ (see below): counterclockwise when viewed along $+\hat{\mathbf{t}}_{\mathrm{child}}$.
+
+### Parent vs. child along the axis
+
+Map **left geometry** (`l_*`, body $i$) to **parent** and **right geometry** (`r_*`, body $j$) to **child**, matching typical kinematic-tree layout.
+
+At a valid configuration, the mapped joint axis rays are **anti-parallel** on the shared line:
+
+$$
+\hat{\mathbf{t}}_{\mathrm{parent}} = \hat{\mathbf{t}}_i = -\,\hat{\mathbf{t}}_{\mathrm{child}} = -\,\hat{\mathbf{t}}_j,
+$$
+
+because each body carries its edge from attachment point $\mathbf{x}^0_k$ to $\mathbf{x}^1_k$ while the pairing links endpoints across bodies along the same physical axis.
+
+Angular state $\theta$, `angle`, limits, and driving use **both** bodies’ bases symmetrically via the formulas above. Which ray defines **positive external torque** is specified **only** for constitution **Affine Body Revolute Joint External Force** (UID 668): actuator torque follows **child-positive** $+\hat{\mathbf{t}}_{\mathrm{child}}$; see [Parent vs. child axis and positive torque](./affine_body_revolute_joint_external_force.md#parent-vs-child-axis-and-positive-torque).
 
 ### State Update
 

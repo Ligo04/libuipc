@@ -16,4 +16,7 @@ UIPC_GENERIC Matrix4x4 q_v_to_transform_v(const Vector12& q);
 UIPC_GENERIC Vector12  transform_v_to_q_v(const Matrix4x4& transform_v);
 
 UIPC_GENERIC void orthonormal_basis(Vector3& t, Vector3& n, Vector3& b);
+
+// Skew-symmetric matrix [v]_x such that [v]_x * w = v.cross(w).
+UIPC_GENERIC Matrix3x3 skew(const Vector3& v);
 }  // namespace uipc::backend::cuda
