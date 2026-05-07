@@ -15,18 +15,6 @@
 #include <muda/buffer.h>
 #include <muda/launch.h>
 
-namespace std
-{
-template <>
-struct less<uipc::Vector2i>
-{
-    bool operator()(const uipc::Vector2i& lhs, const uipc::Vector2i& rhs) const
-    {
-        return lhs[0] < rhs[0] || (lhs[0] == rhs[0] && lhs[1] < rhs[1]);
-    }
-};
-}  // namespace std
-
 namespace uipc::backend::cuda
 {
 class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
@@ -52,13 +40,21 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
         Vector2  distance          = {0, 0};
     };
 
+    struct Vector2iLess
+    {
+        bool operator()(const Vector2i& lhs, const Vector2i& rhs) const
+        {
+            return lhs[0] < rhs[0] || (lhs[0] == rhs[0] && lhs[1] < rhs[1]);
+        }
+    };
+
     struct ViolationResult
     {
-        bool                    is_too_close = false;
-        vector<ViolationInfo>   violations;
-        map<Vector2i, Vector2i> close_geo_ids;
-        map<Vector2i, Vector2>  close_geo_distances;
-        IndexT                  total_violations = 0;
+        bool                                  is_too_close = false;
+        vector<ViolationInfo>                 violations;
+        map<Vector2i, Vector2i, Vector2iLess> close_geo_ids;
+        map<Vector2i, Vector2, Vector2iLess>  close_geo_distances;
+        IndexT                                total_violations = 0;
     };
 
     struct Impl
