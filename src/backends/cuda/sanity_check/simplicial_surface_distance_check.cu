@@ -98,8 +98,6 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
             DeviceBuffer<IndexT> vert_cids(num_verts);
             DeviceBuffer<IndexT> vert_scids(num_verts);
             DeviceBuffer<IndexT> self_collision(num_verts);
-            DeviceBuffer<IndexT> vert_geo_ids(num_verts);
-            DeviceBuffer<IndexT> vert_object_ids(num_verts);
 
             positions.view().copy_from(Vs.data());
             if(num_edges > 0)
@@ -114,8 +112,6 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
             vert_cids.view().copy_from(h_vert_cids.data());
             vert_scids.view().copy_from(h_vert_scids.data());
             self_collision.view().copy_from(h_vert_self_collision.data());
-            vert_geo_ids.view().copy_from(h_vert_geo_ids.data());
-            vert_object_ids.view().copy_from(h_vert_object_ids.data());
 
             DeviceBuffer<AABB> point_aabbs(num_verts);
             ParallelFor()
@@ -301,22 +297,12 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
             auto ContactMask = cmts.viewer();
 
             InfoStacklessBVH::QueryBuffer pp_qbuf, pe_qbuf, pt_qbuf, ee_qbuf;
-            SizeT                         violation_capacity =
-                pp_qbuf.m_pairs.size() + pe_qbuf.m_pairs.size()
-                + pt_qbuf.m_pairs.size() + ee_qbuf.m_pairs.size();
-            DeviceBuffer<ViolationInfo> violation_infos(violation_capacity);
-            DeviceVar<IndexT>           violation_count;
-            BufferLaunch().fill(violation_count.view(), IndexT(0));
 
-            auto CIds           = vert_cids.cviewer();
-            auto SCIds          = vert_scids.cviewer();
-            auto SelfCollision  = self_collision.cviewer();
-            auto VGeoIds        = vert_geo_ids.cviewer();
-            auto VObjectIds     = vert_object_ids.cviewer();
-            auto ViolationInfos = violation_infos.viewer();
-            auto ViolationCount = violation_count.viewer();
-            auto ContactTable   = cmts.cviewer();
-            auto SubsceneTable  = scmts.cviewer();
+            auto CIds          = vert_cids.cviewer();
+            auto SCIds         = vert_scids.cviewer();
+            auto SelfCollision = self_collision.cviewer();
+            auto ContactTable  = cmts.cviewer();
+            auto SubsceneTable = scmts.cviewer();
 
             // Phase 1: CodimP vs AllP
             if(num_codim > 0 && num_verts > 0)
@@ -341,19 +327,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                                         && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [Vs,
-                     VThickness,
-                     CodimPs,
-                     CIds,
-                     SCIds,
-                     SelfCollision,
-                     VGeoIds,
-                     VObjectIds,
-                     ViolationInfos,
-                     ViolationCount,
-                     violation_capacity,
-                     ContactTable,
-                     SubsceneTable] __device__(const InfoStacklessBVH::LeafPredInfo& info) -> bool
+                    [Vs, VThickness, CodimPs, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
+                        const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT codim_idx = info.i;
                         IndexT P         = info.j;
@@ -382,18 +357,7 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            IndexT i = atomicAdd(ViolationCount.data(), 1);
-                            if(i < violation_capacity)
-                            {
-                                ViolationInfos(i) = {PP,
-                                                     {codim_idx, P},
-                                                     {VGeoIds(CodimP), VGeoIds(P)},
-                                                     {VObjectIds(CodimP), VObjectIds(P)},
-                                                     {D, thickness2}};
-                            }
-                            return false;
-                        }
+                            return true;
                         return false;
                     },
                     pp_qbuf);
@@ -422,20 +386,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                                         && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [Vs,
-                     VThickness,
-                     Es,
-                     CodimPs,
-                     CIds,
-                     SCIds,
-                     SelfCollision,
-                     VGeoIds,
-                     VObjectIds,
-                     ViolationInfos,
-                     ViolationCount,
-                     violation_capacity,
-                     ContactTable,
-                     SubsceneTable] __device__(const InfoStacklessBVH::LeafPredInfo& info) -> bool
+                    [Vs, VThickness, Es, CodimPs, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
+                        const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT   codim_idx = info.i;
                         IndexT   edge_idx  = info.j;
@@ -468,19 +420,7 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            IndexT i = atomicAdd(ViolationCount.data(), 1);
-                            if(i < violation_capacity)
-                            {
-                                ViolationInfos(
-                                    i) = {PE,
-                                          {codim_idx, edge_idx},
-                                          {VGeoIds(CodimP), VGeoIds(E[0])},
-                                          {VObjectIds(CodimP), VObjectIds(E[0])},
-                                          {D, thickness2}};
-                            }
-                            return false;
-                        }
+                            return true;
                         return false;
                     },
                     pe_qbuf);
@@ -508,19 +448,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                                         && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [Vs,
-                     VThickness,
-                     Fs,
-                     CIds,
-                     SCIds,
-                     SelfCollision,
-                     VGeoIds,
-                     VObjectIds,
-                     ViolationInfos,
-                     ViolationCount,
-                     violation_capacity,
-                     ContactTable,
-                     SubsceneTable] __device__(const InfoStacklessBVH::LeafPredInfo& info) -> bool
+                    [Vs, VThickness, Fs, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
+                        const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT   P       = info.i;
                         IndexT   tri_idx = info.j;
@@ -551,18 +480,7 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            IndexT i = atomicAdd(ViolationCount.data(), 1);
-                            if(i < violation_capacity)
-                            {
-                                ViolationInfos(i) = {PT,
-                                                     {P, tri_idx},
-                                                     {VGeoIds(P), VGeoIds(T[0])},
-                                                     {VObjectIds(P), VObjectIds(T[0])},
-                                                     {D, thickness2}};
-                            }
-                            return false;
-                        }
+                            return true;
                         return false;
                     },
                     pt_qbuf);
@@ -587,19 +505,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                                         && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [Vs,
-                     VThickness,
-                     Es,
-                     CIds,
-                     SCIds,
-                     SelfCollision,
-                     VGeoIds,
-                     VObjectIds,
-                     ViolationInfos,
-                     ViolationCount,
-                     violation_capacity,
-                     ContactTable,
-                     SubsceneTable] __device__(const InfoStacklessBVH::LeafPredInfo& info) -> bool
+                    [Vs, VThickness, Es, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
+                        const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT   ei = info.i;
                         IndexT   ej = info.j;
@@ -634,38 +541,111 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            IndexT i = atomicAdd(ViolationCount.data(), 1);
-                            if(i < violation_capacity)
-                            {
-                                ViolationInfos(
-                                    i) = {EE,
-                                          {ei, ej},
-                                          {VGeoIds(E0[0]), VGeoIds(E1[0])},
-                                          {VObjectIds(E0[0]), VObjectIds(E1[0])},
-                                          {D, thickness2}};
-                            }
-                            return false;
-                        }
+                            return true;
                         return false;
                     },
                     ee_qbuf);
             }
 
-            ViolationResult result;
-            result.total_violations = violation_count;
-            result.is_too_close     = result.total_violations > 0;
-
-            UIPC_ASSERT(result.total_violations <= violation_capacity,
-                        "GPU distance check found {} violations, but can only store {} violation infos",
-                        result.total_violations,
-                        violation_capacity);
-
-            if(result.is_too_close)
+            auto copy_pairs = [](InfoStacklessBVH::QueryBuffer& qbuf) -> vector<Vector2i>
             {
-                result.violations.resize(result.total_violations);
-                violation_infos.view(0, result.total_violations)
-                    .copy_to(result.violations.data());
+                vector<Vector2i> pairs(qbuf.size());
+                if(!pairs.empty())
+                    qbuf.view().copy_to(pairs.data());
+                return pairs;
+            };
+
+            auto pp_pairs = copy_pairs(pp_qbuf);
+            auto pe_pairs = copy_pairs(pe_qbuf);
+            auto pt_pairs = copy_pairs(pt_qbuf);
+            auto ee_pairs = copy_pairs(ee_qbuf);
+
+            ViolationResult result;
+            result.total_violations = static_cast<IndexT>(
+                pp_pairs.size() + pe_pairs.size() + pt_pairs.size() + ee_pairs.size());
+            result.is_too_close = result.total_violations > 0;
+            result.violations.reserve(result.total_violations);
+
+            for(const auto& p : pp_pairs)
+            {
+                IndexT CodimP = CodimIndices[p[0]];
+                Float  D;
+                distance::point_point_distance2(Vs[CodimP], Vs[p[1]], D);
+
+                Float thickness = h_thickness_span[CodimP] + h_thickness_span[p[1]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {PP,
+                     p,
+                     {h_vert_geo_ids[CodimP], h_vert_geo_ids[p[1]]},
+                     {h_vert_object_ids[CodimP], h_vert_object_ids[p[1]]},
+                     {D, thickness2}});
+            }
+
+            for(const auto& p : pe_pairs)
+            {
+                IndexT   CodimP = CodimIndices[p[0]];
+                Vector2i E      = Es[p[1]];
+
+                auto pe_flag =
+                    distance::point_edge_distance_flag(Vs[CodimP], Vs[E[0]], Vs[E[1]]);
+                Float D;
+                distance::point_edge_distance2(pe_flag, Vs[CodimP], Vs[E[0]], Vs[E[1]], D);
+
+                Float thickness = h_thickness_span[CodimP] + h_thickness_span[E[0]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {PE,
+                     p,
+                     {h_vert_geo_ids[CodimP], h_vert_geo_ids[E[0]]},
+                     {h_vert_object_ids[CodimP], h_vert_object_ids[E[0]]},
+                     {D, thickness2}});
+            }
+
+            for(const auto& p : pt_pairs)
+            {
+                IndexT   P = p[0];
+                Vector3i F = Fs[p[1]];
+
+                auto pt_flag = distance::point_triangle_distance_flag(
+                    Vs[P], Vs[F[0]], Vs[F[1]], Vs[F[2]]);
+                Float D;
+                distance::point_triangle_distance2(
+                    pt_flag, Vs[P], Vs[F[0]], Vs[F[1]], Vs[F[2]], D);
+
+                Float thickness  = h_thickness_span[P] + h_thickness_span[F[0]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {PT,
+                     p,
+                     {h_vert_geo_ids[P], h_vert_geo_ids[F[0]]},
+                     {h_vert_object_ids[P], h_vert_object_ids[F[0]]},
+                     {D, thickness2}});
+            }
+
+            for(const auto& p : ee_pairs)
+            {
+                Vector2i E0 = Es[p[0]];
+                Vector2i E1 = Es[p[1]];
+
+                auto ee_flag = distance::edge_edge_distance_flag(
+                    Vs[E0[0]], Vs[E0[1]], Vs[E1[0]], Vs[E1[1]]);
+                Float D;
+                distance::edge_edge_distance2(
+                    ee_flag, Vs[E0[0]], Vs[E0[1]], Vs[E1[0]], Vs[E1[1]], D);
+
+                Float thickness = h_thickness_span[E0[0]] + h_thickness_span[E1[0]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {EE,
+                     p,
+                     {h_vert_geo_ids[E0[0]], h_vert_geo_ids[E1[0]]},
+                     {h_vert_object_ids[E0[0]], h_vert_object_ids[E1[0]]},
+                     {D, thickness2}});
             }
 
             auto set_geo_distance = [&](const Vector2i& geo_ids, const Vector2& distance)
