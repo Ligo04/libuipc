@@ -1,10 +1,12 @@
 #include <type_define.h>
 #include <uipc/core/contact_tabular.h>
+#include <uipc/core/object.h>
 #include <uipc/core/subscene_tabular.h>
 #include <sanity_check/backend_sanity_checker.h>
 #include <uipc/backend/visitors/sanity_check_message_visitor.h>
 #include <uipc/geometry/simplicial_complex.h>
 #include <uipc/builtin/attribute_name.h>
+#include <uipc/common/map.h>
 #include <uipc/io/simplicial_complex_io.h>
 #include <collision_detection/aabb.h>
 #include <collision_detection/info_stackless_bvh.h>
@@ -21,13 +23,38 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
     constexpr static U64 SanityCheckerUID = 3;
     using BackendSanityChecker::BackendSanityChecker;
 
+    enum ViolationType : IndexT
+    {
+        PP = 0,
+        PE = 1,
+        PT = 2,
+        EE = 3
+    };
+
+    struct ViolationInfo
+    {
+        IndexT   type              = 0;
+        Vector2i primitive_indices = {-1, -1};
+        Vector2i geo_ids           = {-1, -1};
+        Vector2i obj_ids           = {-1, -1};
+        Vector2  distance          = {0, 0};
+    };
+
+    struct Vector2iLess
+    {
+        bool operator()(const Vector2i& lhs, const Vector2i& rhs) const
+        {
+            return lhs[0] < rhs[0] || (lhs[0] == rhs[0] && lhs[1] < rhs[1]);
+        }
+    };
+
     struct ViolationResult
     {
-        vector<Vector2i> pp_pairs;
-        vector<Vector2i> pe_pairs;
-        vector<Vector2i> pt_pairs;
-        vector<Vector2i> ee_pairs;
-        IndexT           total_violations = 0;
+        bool                                  is_too_close = false;
+        vector<ViolationInfo>                 violations;
+        map<Vector2i, Vector2i, Vector2iLess> close_geo_ids;
+        map<Vector2i, Vector2, Vector2iLess>  close_geo_distances;
+        IndexT                                total_violations = 0;
     };
 
     struct Impl
@@ -42,6 +69,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                               span<const IndexT>   h_vert_cids,
                               span<const IndexT>   h_vert_scids,
                               span<const IndexT>   h_vert_self_collision,
+                              span<const IndexT>   h_vert_geo_ids,
+                              span<const IndexT>   h_vert_object_ids,
                               span<const IndexT>   h_contact_mask,
                               SizeT                contact_element_count,
                               span<const IndexT>   h_subscene_mask,
@@ -89,8 +118,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                         d_hat     = d_hat.cviewer().name("d_hat"),
                         point_aabbs = point_aabbs.viewer().name("point_aabbs")] __device__(int i) mutable
                        {
-                           Float expansion = d_hat(i);
-                           Float extend_f  = thickness(i) + expansion;
+                           Float           expansion = d_hat(i);
+                           Float           extend_f  = thickness(i) + expansion;
                            Eigen::Vector3f ext =
                                Eigen::Vector3f::Constant(static_cast<float>(extend_f));
                            Eigen::Vector3f pos = positions(i).cast<float>();
@@ -204,8 +233,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                     .file_line(__FILE__, __LINE__)
                     .apply(num_codim,
                            [codim_indices = codim_indices.cviewer().name("codim_indices"),
-                            vert_bids = vert_bids.cviewer().name("vert_bids"),
-                            vert_cids = vert_cids.cviewer().name("vert_cids"),
+                            vert_bids  = vert_bids.cviewer().name("vert_bids"),
+                            vert_cids  = vert_cids.cviewer().name("vert_cids"),
                             codim_bids = codim_bids.viewer().name("codim_bids"),
                             codim_cids = codim_cids.viewer().name("codim_cids")] __device__(int i) mutable
                            {
@@ -244,7 +273,7 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                             vert_bids = vert_bids.cviewer().name("vert_bids"),
                             vert_cids = vert_cids.cviewer().name("vert_cids"),
                             tri_bids  = tri_bids.viewer().name("tri_bids"),
-                            tri_cids  = tri_cids.viewer().name("tri_cids")] __device__(int i) mutable
+                            tri_cids = tri_cids.viewer().name("tri_cids")] __device__(int i) mutable
                            {
                                tri_bids(i) = vert_bids(triangles(i)[0]);
                                tri_cids(i) = vert_cids(triangles(i)[0]);
@@ -261,78 +290,70 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
             scmts.resize(Extent2D{SN, SN});
             scmts.view().copy_from(h_subscene_mask.data());
 
-            DeviceVar<IndexT> violation_count;
-            BufferLaunch().fill(violation_count.view(), IndexT(0));
-
-            auto cmts_v = cmts.viewer();
+            auto ContactMask = cmts.viewer();
 
             InfoStacklessBVH::QueryBuffer pp_qbuf, pe_qbuf, pt_qbuf, ee_qbuf;
 
-            auto vert_cids_v    = vert_cids.cviewer();
-            auto vert_scids_v   = vert_scids.cviewer();
-            auto self_coll_v    = self_collision.cviewer();
-            auto contact_cmts_v = cmts.cviewer();
-            auto subscene_cmts_v = scmts.cviewer();
+            auto CIds          = vert_cids.cviewer();
+            auto SCIds         = vert_scids.cviewer();
+            auto SelfCollision = self_collision.cviewer();
+            auto ContactTable  = cmts.cviewer();
+            auto SubsceneTable = scmts.cviewer();
 
             // Phase 1: CodimP vs AllP
             if(num_codim > 0 && num_verts > 0)
             {
                 InfoStacklessBVH point_bvh;
-                point_bvh.build(point_aabbs.view(), point_bids.view(), point_cids.view());
+                point_bvh.build(
+                    point_aabbs.view(), point_bids.view(), point_cids.view());
 
-                auto violation_viewer = violation_count.viewer();
-                auto pos_viewer       = positions.cviewer();
-                auto thick_viewer     = thickness.cviewer();
-                auto codim_viewer     = codim_indices.cviewer();
+                auto Vs         = positions.cviewer();
+                auto VThickness = thickness.cviewer();
+                auto CodimPs    = codim_indices.cviewer();
 
                 point_bvh.query(
                     codim_point_aabbs.view(),
                     codim_bids.view(),
                     codim_cids.view(),
                     cmts.view(),
-                    [cmts_v] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
+                    [ContactMask] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
                     {
                         constexpr IndexT invalid = static_cast<IndexT>(-1);
                         bool cid_cull = info.node_cid != invalid && info.query_cid != invalid
-                                        && !cmts_v(info.query_cid, info.node_cid);
+                                        && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [violation_viewer, pos_viewer, thick_viewer, codim_viewer,
-                     vert_cids_v, vert_scids_v, self_coll_v,
-                     contact_cmts_v, subscene_cmts_v] __device__(
+                    [Vs, VThickness, CodimPs, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
                         const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT codim_idx = info.i;
                         IndexT P         = info.j;
-                        IndexT CodimP    = codim_viewer(codim_idx);
+                        IndexT CodimP    = CodimPs(codim_idx);
 
                         if(CodimP == P)
                             return false;
 
-                        Vector2i scids = {vert_scids_v(CodimP), vert_scids_v(P)};
-                        if(!allow_PP_contact(subscene_cmts_v, scids))
+                        Vector2i scids = {SCIds(CodimP), SCIds(P)};
+                        if(!allow_PP_contact(SubsceneTable, scids))
                             return false;
 
-                        Vector2i cids = {vert_cids_v(CodimP), vert_cids_v(P)};
-                        if(!allow_PP_contact(contact_cmts_v, cids))
+                        Vector2i cids = {CIds(CodimP), CIds(P)};
+                        if(!allow_PP_contact(ContactTable, cids))
                             return false;
 
                         if(info.bid_i == info.bid_j
                            && info.bid_i != static_cast<IndexT>(-1)
-                           && !self_coll_v(CodimP))
+                           && !SelfCollision(CodimP))
                             return false;
 
                         Float D;
-                        distance::point_point_distance2(pos_viewer(CodimP), pos_viewer(P), D);
+                        distance::point_point_distance2(Vs(CodimP), Vs(P), D);
 
-                        Float thickness  = thick_viewer(CodimP) + thick_viewer(P);
+                        Float thickness  = VThickness(CodimP) + VThickness(P);
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            atomicAdd(violation_viewer.data(), 1);
                             return true;
-                        }
                         return false;
                     },
                     pp_qbuf);
@@ -344,63 +365,58 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                 InfoStacklessBVH edge_bvh;
                 edge_bvh.build(edge_aabbs.view(), edge_bids.view(), edge_cids.view());
 
-                auto violation_viewer = violation_count.viewer();
-                auto pos_viewer       = positions.cviewer();
-                auto thick_viewer     = thickness.cviewer();
-                auto edge_viewer      = edges.cviewer();
-                auto codim_viewer     = codim_indices.cviewer();
+                auto Vs         = positions.cviewer();
+                auto VThickness = thickness.cviewer();
+                auto Es         = edges.cviewer();
+                auto CodimPs    = codim_indices.cviewer();
 
                 edge_bvh.query(
                     codim_point_aabbs.view(),
                     codim_bids.view(),
                     codim_cids.view(),
                     cmts.view(),
-                    [cmts_v] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
+                    [ContactMask] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
                     {
                         constexpr IndexT invalid = static_cast<IndexT>(-1);
                         bool cid_cull = info.node_cid != invalid && info.query_cid != invalid
-                                        && !cmts_v(info.query_cid, info.node_cid);
+                                        && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [violation_viewer, pos_viewer, thick_viewer, edge_viewer, codim_viewer,
-                     vert_cids_v, vert_scids_v, self_coll_v,
-                     contact_cmts_v, subscene_cmts_v] __device__(
+                    [Vs, VThickness, Es, CodimPs, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
                         const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT   codim_idx = info.i;
                         IndexT   edge_idx  = info.j;
-                        IndexT   CodimP    = codim_viewer(codim_idx);
-                        Vector2i E         = edge_viewer(edge_idx);
+                        IndexT   CodimP    = CodimPs(codim_idx);
+                        Vector2i E         = Es(edge_idx);
 
                         if(CodimP == E[0] || CodimP == E[1])
                             return false;
 
-                        Vector3i scids = {vert_scids_v(CodimP), vert_scids_v(E[0]), vert_scids_v(E[1])};
-                        if(!allow_PE_contact(subscene_cmts_v, scids))
+                        Vector3i scids = {SCIds(CodimP), SCIds(E[0]), SCIds(E[1])};
+                        if(!allow_PE_contact(SubsceneTable, scids))
                             return false;
 
-                        Vector3i cids = {vert_cids_v(CodimP), vert_cids_v(E[0]), vert_cids_v(E[1])};
-                        if(!allow_PE_contact(contact_cmts_v, cids))
+                        Vector3i cids = {CIds(CodimP), CIds(E[0]), CIds(E[1])};
+                        if(!allow_PE_contact(ContactTable, cids))
                             return false;
 
                         if(info.bid_i == info.bid_j
                            && info.bid_i != static_cast<IndexT>(-1)
-                           && !self_coll_v(CodimP))
+                           && !SelfCollision(CodimP))
                             return false;
 
                         auto pe_flag = distance::point_edge_distance_flag(
-                            pos_viewer(CodimP), pos_viewer(E[0]), pos_viewer(E[1]));
+                            Vs(CodimP), Vs(E[0]), Vs(E[1]));
                         Float D;
-                        distance::point_edge_distance2(pe_flag, pos_viewer(CodimP), pos_viewer(E[0]), pos_viewer(E[1]), D);
+                        distance::point_edge_distance2(
+                            pe_flag, Vs(CodimP), Vs(E[0]), Vs(E[1]), D);
 
-                        Float thickness = thick_viewer(CodimP) + thick_viewer(E[0]);
+                        Float thickness = VThickness(CodimP) + VThickness(E[0]);
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            atomicAdd(violation_viewer.data(), 1);
                             return true;
-                        }
                         return false;
                     },
                     pe_qbuf);
@@ -412,66 +428,55 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                 InfoStacklessBVH tri_bvh;
                 tri_bvh.build(tri_aabbs.view(), tri_bids.view(), tri_cids.view());
 
-                auto violation_viewer = violation_count.viewer();
-                auto pos_viewer       = positions.cviewer();
-                auto thick_viewer     = thickness.cviewer();
-                auto tri_viewer       = triangles.cviewer();
+                auto Vs         = positions.cviewer();
+                auto VThickness = thickness.cviewer();
+                auto Fs         = triangles.cviewer();
 
                 tri_bvh.query(
                     point_aabbs.view(),
                     point_bids.view(),
                     point_cids.view(),
                     cmts.view(),
-                    [cmts_v] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
+                    [ContactMask] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
                     {
                         constexpr IndexT invalid = static_cast<IndexT>(-1);
                         bool cid_cull = info.node_cid != invalid && info.query_cid != invalid
-                                        && !cmts_v(info.query_cid, info.node_cid);
+                                        && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [violation_viewer, pos_viewer, thick_viewer, tri_viewer,
-                     vert_cids_v, vert_scids_v, self_coll_v,
-                     contact_cmts_v, subscene_cmts_v] __device__(
+                    [Vs, VThickness, Fs, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
                         const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT   P       = info.i;
                         IndexT   tri_idx = info.j;
-                        Vector3i T       = tri_viewer(tri_idx);
+                        Vector3i T       = Fs(tri_idx);
 
                         if(P == T[0] || P == T[1] || P == T[2])
                             return false;
 
-                        Vector4i scids = {vert_scids_v(P), vert_scids_v(T[0]), vert_scids_v(T[1]), vert_scids_v(T[2])};
-                        if(!allow_PT_contact(subscene_cmts_v, scids))
+                        Vector4i scids = {SCIds(P), SCIds(T[0]), SCIds(T[1]), SCIds(T[2])};
+                        if(!allow_PT_contact(SubsceneTable, scids))
                             return false;
 
-                        Vector4i cids = {vert_cids_v(P), vert_cids_v(T[0]), vert_cids_v(T[1]), vert_cids_v(T[2])};
-                        if(!allow_PT_contact(contact_cmts_v, cids))
+                        Vector4i cids = {CIds(P), CIds(T[0]), CIds(T[1]), CIds(T[2])};
+                        if(!allow_PT_contact(ContactTable, cids))
                             return false;
 
                         if(info.bid_i == info.bid_j
-                           && info.bid_i != static_cast<IndexT>(-1)
-                           && !self_coll_v(P))
+                           && info.bid_i != static_cast<IndexT>(-1) && !SelfCollision(P))
                             return false;
 
                         auto pt_flag = distance::point_triangle_distance_flag(
-                            pos_viewer(P), pos_viewer(T[0]), pos_viewer(T[1]), pos_viewer(T[2]));
+                            Vs(P), Vs(T[0]), Vs(T[1]), Vs(T[2]));
                         Float D;
-                        distance::point_triangle_distance2(pt_flag,
-                                                           pos_viewer(P),
-                                                           pos_viewer(T[0]),
-                                                           pos_viewer(T[1]),
-                                                           pos_viewer(T[2]),
-                                                           D);
+                        distance::point_triangle_distance2(
+                            pt_flag, Vs(P), Vs(T[0]), Vs(T[1]), Vs(T[2]), D);
 
-                        Float thickness  = thick_viewer(P) + thick_viewer(T[0]);
+                        Float thickness  = VThickness(P) + VThickness(T[0]);
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            atomicAdd(violation_viewer.data(), 1);
                             return true;
-                        }
                         return false;
                     },
                     pt_qbuf);
@@ -483,74 +488,60 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                 InfoStacklessBVH edge_bvh;
                 edge_bvh.build(edge_aabbs.view(), edge_bids.view(), edge_cids.view());
 
-                auto violation_viewer = violation_count.viewer();
-                auto pos_viewer       = positions.cviewer();
-                auto thick_viewer     = thickness.cviewer();
-                auto edge_viewer      = edges.cviewer();
+                auto Vs         = positions.cviewer();
+                auto VThickness = thickness.cviewer();
+                auto Es         = edges.cviewer();
 
                 edge_bvh.detect(
                     cmts.view(),
-                    [cmts_v] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
+                    [ContactMask] __device__(const InfoStacklessBVH::NodePredInfo& info) -> bool
                     {
                         constexpr IndexT invalid = static_cast<IndexT>(-1);
                         bool cid_cull = info.node_cid != invalid && info.query_cid != invalid
-                                        && !cmts_v(info.query_cid, info.node_cid);
+                                        && !ContactMask(info.query_cid, info.node_cid);
                         return !cid_cull;
                     },
-                    [violation_viewer, pos_viewer, thick_viewer, edge_viewer,
-                     vert_cids_v, vert_scids_v, self_coll_v,
-                     contact_cmts_v, subscene_cmts_v] __device__(
+                    [Vs, VThickness, Es, CIds, SCIds, SelfCollision, ContactTable, SubsceneTable] __device__(
                         const InfoStacklessBVH::LeafPredInfo& info) -> bool
                     {
                         IndexT   ei = info.i;
                         IndexT   ej = info.j;
-                        Vector2i E0 = edge_viewer(ei);
-                        Vector2i E1 = edge_viewer(ej);
+                        Vector2i E0 = Es(ei);
+                        Vector2i E1 = Es(ej);
 
-                        if(E0[0] == E1[0] || E0[0] == E1[1] || E0[1] == E1[0] || E0[1] == E1[1])
+                        if(E0[0] == E1[0] || E0[0] == E1[1] || E0[1] == E1[0]
+                           || E0[1] == E1[1])
                             return false;
 
-                        Vector4i scids = {vert_scids_v(E0[0]), vert_scids_v(E0[1]),
-                                          vert_scids_v(E1[0]), vert_scids_v(E1[1])};
-                        if(!allow_EE_contact(subscene_cmts_v, scids))
+                        Vector4i scids = {
+                            SCIds(E0[0]), SCIds(E0[1]), SCIds(E1[0]), SCIds(E1[1])};
+                        if(!allow_EE_contact(SubsceneTable, scids))
                             return false;
 
-                        Vector4i cids = {vert_cids_v(E0[0]), vert_cids_v(E0[1]),
-                                         vert_cids_v(E1[0]), vert_cids_v(E1[1])};
-                        if(!allow_EE_contact(contact_cmts_v, cids))
+                        Vector4i cids = {CIds(E0[0]), CIds(E0[1]), CIds(E1[0]), CIds(E1[1])};
+                        if(!allow_EE_contact(ContactTable, cids))
                             return false;
 
                         if(info.bid_i == info.bid_j
                            && info.bid_i != static_cast<IndexT>(-1)
-                           && !self_coll_v(E0[0]))
+                           && !SelfCollision(E0[0]))
                             return false;
 
                         auto ee_flag = distance::edge_edge_distance_flag(
-                            pos_viewer(E0[0]), pos_viewer(E0[1]),
-                            pos_viewer(E1[0]), pos_viewer(E1[1]));
+                            Vs(E0[0]), Vs(E0[1]), Vs(E1[0]), Vs(E1[1]));
                         Float D;
-                        distance::edge_edge_distance2(ee_flag,
-                                                      pos_viewer(E0[0]),
-                                                      pos_viewer(E0[1]),
-                                                      pos_viewer(E1[0]),
-                                                      pos_viewer(E1[1]),
-                                                      D);
+                        distance::edge_edge_distance2(
+                            ee_flag, Vs(E0[0]), Vs(E0[1]), Vs(E1[0]), Vs(E1[1]), D);
 
-                        Float thickness = thick_viewer(E0[0]) + thick_viewer(E1[0]);
+                        Float thickness = VThickness(E0[0]) + VThickness(E1[0]);
                         Float thickness2 = thickness * thickness;
 
                         if(D <= thickness2)
-                        {
-                            atomicAdd(violation_viewer.data(), 1);
                             return true;
-                        }
                         return false;
                     },
                     ee_qbuf);
             }
-
-            ViolationResult result;
-            result.total_violations = violation_count;
 
             auto copy_pairs = [](InfoStacklessBVH::QueryBuffer& qbuf) -> vector<Vector2i>
             {
@@ -560,10 +551,123 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                 return pairs;
             };
 
-            result.pp_pairs = copy_pairs(pp_qbuf);
-            result.pe_pairs = copy_pairs(pe_qbuf);
-            result.pt_pairs = copy_pairs(pt_qbuf);
-            result.ee_pairs = copy_pairs(ee_qbuf);
+            auto pp_pairs = copy_pairs(pp_qbuf);
+            auto pe_pairs = copy_pairs(pe_qbuf);
+            auto pt_pairs = copy_pairs(pt_qbuf);
+            auto ee_pairs = copy_pairs(ee_qbuf);
+
+            ViolationResult result;
+            result.total_violations = static_cast<IndexT>(
+                pp_pairs.size() + pe_pairs.size() + pt_pairs.size() + ee_pairs.size());
+            result.is_too_close = result.total_violations > 0;
+            result.violations.reserve(result.total_violations);
+
+            for(const auto& p : pp_pairs)
+            {
+                IndexT CodimP = CodimIndices[p[0]];
+                Float  D;
+                distance::point_point_distance2(Vs[CodimP], Vs[p[1]], D);
+
+                Float thickness = h_thickness_span[CodimP] + h_thickness_span[p[1]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {PP,
+                     p,
+                     {h_vert_geo_ids[CodimP], h_vert_geo_ids[p[1]]},
+                     {h_vert_object_ids[CodimP], h_vert_object_ids[p[1]]},
+                     {D, thickness2}});
+            }
+
+            for(const auto& p : pe_pairs)
+            {
+                IndexT   CodimP = CodimIndices[p[0]];
+                Vector2i E      = Es[p[1]];
+
+                auto pe_flag =
+                    distance::point_edge_distance_flag(Vs[CodimP], Vs[E[0]], Vs[E[1]]);
+                Float D;
+                distance::point_edge_distance2(pe_flag, Vs[CodimP], Vs[E[0]], Vs[E[1]], D);
+
+                Float thickness = h_thickness_span[CodimP] + h_thickness_span[E[0]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {PE,
+                     p,
+                     {h_vert_geo_ids[CodimP], h_vert_geo_ids[E[0]]},
+                     {h_vert_object_ids[CodimP], h_vert_object_ids[E[0]]},
+                     {D, thickness2}});
+            }
+
+            for(const auto& p : pt_pairs)
+            {
+                IndexT   P = p[0];
+                Vector3i F = Fs[p[1]];
+
+                auto pt_flag = distance::point_triangle_distance_flag(
+                    Vs[P], Vs[F[0]], Vs[F[1]], Vs[F[2]]);
+                Float D;
+                distance::point_triangle_distance2(
+                    pt_flag, Vs[P], Vs[F[0]], Vs[F[1]], Vs[F[2]], D);
+
+                Float thickness  = h_thickness_span[P] + h_thickness_span[F[0]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {PT,
+                     p,
+                     {h_vert_geo_ids[P], h_vert_geo_ids[F[0]]},
+                     {h_vert_object_ids[P], h_vert_object_ids[F[0]]},
+                     {D, thickness2}});
+            }
+
+            for(const auto& p : ee_pairs)
+            {
+                Vector2i E0 = Es[p[0]];
+                Vector2i E1 = Es[p[1]];
+
+                auto ee_flag = distance::edge_edge_distance_flag(
+                    Vs[E0[0]], Vs[E0[1]], Vs[E1[0]], Vs[E1[1]]);
+                Float D;
+                distance::edge_edge_distance2(
+                    ee_flag, Vs[E0[0]], Vs[E0[1]], Vs[E1[0]], Vs[E1[1]], D);
+
+                Float thickness = h_thickness_span[E0[0]] + h_thickness_span[E1[0]];
+                Float thickness2 = thickness * thickness;
+
+                result.violations.push_back(
+                    {EE,
+                     p,
+                     {h_vert_geo_ids[E0[0]], h_vert_geo_ids[E1[0]]},
+                     {h_vert_object_ids[E0[0]], h_vert_object_ids[E1[0]]},
+                     {D, thickness2}});
+            }
+
+            auto set_geo_distance = [&](const Vector2i& geo_ids, const Vector2& distance)
+            {
+                if(auto it = result.close_geo_distances.find(geo_ids);
+                   it == result.close_geo_distances.end())
+                {
+                    result.close_geo_distances[geo_ids] = distance;
+                }
+                else if(distance[0] < it->second[0])
+                {
+                    it->second = distance;
+                }
+            };
+
+            for(auto info : result.violations)
+            {
+                if(info.geo_ids[0] > info.geo_ids[1])
+                {
+                    std::swap(info.geo_ids[0], info.geo_ids[1]);
+                    std::swap(info.obj_ids[0], info.obj_ids[1]);
+                }
+
+                result.close_geo_ids[info.geo_ids] = info.obj_ids;
+                set_geo_distance(info.geo_ids, info.distance);
+            }
 
             return result;
         }
@@ -637,8 +741,7 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
     {
         auto& ctx = context();
 
-        const geometry::SimplicialComplex& scene_surface =
-            ctx.scene_simplicial_surface();
+        const geometry::SimplicialComplex& scene_surface = ctx.scene_simplicial_surface();
 
         auto Vs = scene_surface.vertices().size() ? scene_surface.positions().view() :
                                                     span<const Vector3>{};
@@ -688,6 +791,16 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                     "`sanity_check/instance_id` is not found in scene surface");
         auto VInstanceIds = attr_v_instance_id->view();
 
+        auto attr_v_geo_ids =
+            scene_surface.vertices().find<IndexT>("sanity_check/geometry_id");
+        UIPC_ASSERT(attr_v_geo_ids, "`sanity_check/geometry_id` is not found in scene surface");
+        auto VGeoIds = attr_v_geo_ids->view();
+
+        auto attr_v_object_id =
+            scene_surface.vertices().find<IndexT>("sanity_check/object_id");
+        UIPC_ASSERT(attr_v_object_id, "`sanity_check/object_id` is not found in scene surface");
+        auto VObjectIds = attr_v_object_id->view();
+
         auto attr_cids =
             scene_surface.vertices().find<IndexT>("sanity_check/contact_element_id");
         UIPC_ASSERT(attr_cids, "`sanity_check/contact_element_id` is not found in scene surface");
@@ -710,7 +823,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
         vector<IndexT> h_contact_mask(CN * CN);
         for(IndexT i = 0; i < (IndexT)CN; ++i)
             for(IndexT j = 0; j < (IndexT)CN; ++j)
-                h_contact_mask[i * CN + j] = contact_tabular.at(i, j).is_enabled() ? 1 : 0;
+                h_contact_mask[i * CN + j] =
+                    contact_tabular.at(i, j).is_enabled() ? 1 : 0;
 
         auto& subscene_tabular = ctx.subscene_tabular();
         SizeT SN               = subscene_tabular.element_count();
@@ -718,7 +832,8 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
         vector<IndexT> h_subscene_mask(SN * SN);
         for(IndexT i = 0; i < (IndexT)SN; ++i)
             for(IndexT j = 0; j < (IndexT)SN; ++j)
-                h_subscene_mask[i * SN + j] = subscene_tabular.at(i, j).is_enabled() ? 1 : 0;
+                h_subscene_mask[i * SN + j] =
+                    subscene_tabular.at(i, j).is_enabled() ? 1 : 0;
 
         auto result =
             m_impl.check(Vs,
@@ -731,12 +846,14 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
                          span<const IndexT>{CIds.data(), CIds.size()},
                          span<const IndexT>{SCIds.data(), SCIds.size()},
                          span<const IndexT>{SelfCollision.data(), SelfCollision.size()},
+                         span<const IndexT>{VGeoIds.data(), VGeoIds.size()},
+                         span<const IndexT>{VObjectIds.data(), VObjectIds.size()},
                          span<const IndexT>{h_contact_mask},
                          CN,
                          span<const IndexT>{h_subscene_mask},
                          SN);
 
-        if(result.total_violations == 0)
+        if(!result.is_too_close)
             return SanityCheckResult::Success;
 
         SizeT num_edges = Es.size();
@@ -748,50 +865,76 @@ class SimplicialSurfaceDistanceCheck final : public BackendSanityChecker
 
         auto mark_vert = [&](IndexT v) { vertex_too_close[v] = 1; };
 
-        for(auto& p : result.pp_pairs)
+        for(auto& info : result.violations)
         {
-            IndexT codim_v = h_codim_indices[p[0]];
-            mark_vert(codim_v);
-            mark_vert(p[1]);
-        }
-
-        for(auto& p : result.pe_pairs)
-        {
-            IndexT codim_v = h_codim_indices[p[0]];
-            mark_vert(codim_v);
-            Vector2i E = Es[p[1]];
-            mark_vert(E[0]);
-            mark_vert(E[1]);
-            edge_too_close[p[1]] = 1;
-        }
-
-        for(auto& p : result.pt_pairs)
-        {
-            mark_vert(p[0]);
-            Vector3i F = Fs[p[1]];
-            mark_vert(F[0]);
-            mark_vert(F[1]);
-            mark_vert(F[2]);
-            tri_too_close[p[1]] = 1;
-        }
-
-        for(auto& p : result.ee_pairs)
-        {
-            Vector2i E0 = Es[p[0]];
-            Vector2i E1 = Es[p[1]];
-            mark_vert(E0[0]);
-            mark_vert(E0[1]);
-            mark_vert(E1[0]);
-            mark_vert(E1[1]);
-            edge_too_close[p[0]] = 1;
-            edge_too_close[p[1]] = 1;
+            switch(info.type)
+            {
+                case PP: {
+                    IndexT CodimP = h_codim_indices[info.primitive_indices[0]];
+                    mark_vert(CodimP);
+                    mark_vert(info.primitive_indices[1]);
+                    break;
+                }
+                case PE: {
+                    IndexT CodimP = h_codim_indices[info.primitive_indices[0]];
+                    mark_vert(CodimP);
+                    Vector2i E = Es[info.primitive_indices[1]];
+                    mark_vert(E[0]);
+                    mark_vert(E[1]);
+                    edge_too_close[info.primitive_indices[1]] = 1;
+                    break;
+                }
+                case PT: {
+                    mark_vert(info.primitive_indices[0]);
+                    Vector3i F = Fs[info.primitive_indices[1]];
+                    mark_vert(F[0]);
+                    mark_vert(F[1]);
+                    mark_vert(F[2]);
+                    tri_too_close[info.primitive_indices[1]] = 1;
+                    break;
+                }
+                case EE: {
+                    Vector2i E0 = Es[info.primitive_indices[0]];
+                    Vector2i E1 = Es[info.primitive_indices[1]];
+                    mark_vert(E0[0]);
+                    mark_vert(E0[1]);
+                    mark_vert(E1[0]);
+                    mark_vert(E1[1]);
+                    edge_too_close[info.primitive_indices[0]] = 1;
+                    edge_too_close[info.primitive_indices[1]] = 1;
+                    break;
+                }
+                default:
+                    UIPC_ASSERT(false, "Unknown violation type: {}", info.type);
+            }
         }
 
         ::uipc::backend::SanityCheckMessageVisitor scmv{msg};
-        auto& buffer = scmv.message();
-        fmt::format_to(std::back_inserter(buffer),
-                       "GPU distance check: detected {} primitive pair(s) closer than their combined thickness.\n",
-                       result.total_violations);
+        auto&                                      buffer = scmv.message();
+
+        for(auto& [GeoIds, ObjIds] : result.close_geo_ids)
+        {
+            auto obj_0 = find_object(ObjIds[0]);
+            auto obj_1 = find_object(ObjIds[1]);
+
+            UIPC_ASSERT(obj_0 != nullptr, "Object[{}] not found", ObjIds[0]);
+            UIPC_ASSERT(obj_1 != nullptr, "Object[{}] not found", ObjIds[1]);
+
+            std::string name_0{obj_0->name()};
+            std::string name_1{obj_1->name()};
+
+            fmt::format_to(std::back_inserter(buffer),
+                           "Geometry({}) in Object[{}({})] is too close (distance={}, thickness={}) to Geometry({}) in "
+                           "Object[{}({})]\n",
+                           GeoIds[0],
+                           name_0,
+                           obj_0->id(),
+                           std::sqrt(result.close_geo_distances[GeoIds][0]),
+                           std::sqrt(result.close_geo_distances[GeoIds][1]),
+                           GeoIds[1],
+                           name_1,
+                           obj_1->id());
+        }
 
         auto close_mesh =
             extract_close_mesh(scene_surface, vertex_too_close, edge_too_close, tri_too_close);
