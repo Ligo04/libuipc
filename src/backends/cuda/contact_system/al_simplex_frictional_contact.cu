@@ -13,8 +13,8 @@ void ALSimplexFrictionalContact::do_build(ContactReporter::BuildInfo& info)
     m_impl.global_surf_manager    = require<GlobalSimplicialSurfaceManager>();
     m_impl.global_active_set_manager = require<GlobalActiveSetManager>();
 
-    auto dt_attr = world().scene().config().find<Float>("dt");
-    m_impl.dt    = dt_attr->view()[0];
+    m_impl.dt_attr = world().scene().config().find<Float>("dt");
+    UIPC_ASSERT(m_impl.dt_attr, "Scene config must have a 'dt' attribute.");
 }
 
 void ALSimplexFrictionalContact::do_report_energy_extent(GlobalContactManager::EnergyExtentInfo& info)
@@ -77,7 +77,7 @@ void ALSimplexFrictionalContact::Impl::do_compute_energy(GlobalContactManager::E
                 contact_ids =
                     global_vertex_manager->contact_element_ids().cviewer().name("contact_element_ids"),
                 eps_v  = global_contact_manager->eps_velocity(),
-                dt     = dt,
+                dt     = dt_attr->view()[0],
                 PTs    = PTs.cviewer().name("PTs"),
                 lambda = PT_lambda.cviewer().name("lambda"),
                 x      = x.cviewer().name("x"),
@@ -114,7 +114,7 @@ void ALSimplexFrictionalContact::Impl::do_compute_energy(GlobalContactManager::E
                 contact_ids =
                     global_vertex_manager->contact_element_ids().cviewer().name("contact_element_ids"),
                 eps_v  = global_contact_manager->eps_velocity(),
-                dt     = dt,
+                dt     = dt_attr->view()[0],
                 EEs    = EEs.cviewer().name("EEs"),
                 lambda = EE_lambda.cviewer().name("lambda"),
                 x      = x.cviewer().name("x"),
@@ -176,7 +176,7 @@ void ALSimplexFrictionalContact::Impl::do_assemble(GlobalContactManager::Gradien
                 contact_ids =
                     global_vertex_manager->contact_element_ids().cviewer().name("contact_element_ids"),
                 eps_v  = global_contact_manager->eps_velocity(),
-                dt     = dt,
+                dt     = dt_attr->view()[0],
                 PTs    = PTs.cviewer().name("PTs"),
                 lambda = PT_lambda.cviewer().name("lambda"),
                 x      = x.cviewer().name("x"),
@@ -223,7 +223,7 @@ void ALSimplexFrictionalContact::Impl::do_assemble(GlobalContactManager::Gradien
                 contact_ids =
                     global_vertex_manager->contact_element_ids().cviewer().name("contact_element_ids"),
                 eps_v  = global_contact_manager->eps_velocity(),
-                dt     = dt,
+                dt     = dt_attr->view()[0],
                 EEs    = EEs.cviewer().name("EEs"),
                 lambda = EE_lambda.cviewer().name("lambda"),
                 x      = x.cviewer().name("x"),

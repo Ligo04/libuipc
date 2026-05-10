@@ -36,8 +36,8 @@ REGISTER_SIM_SYSTEM(InterAffineBodyConstitutionManager);
 void InterAffineBodyConstitutionManager::do_build()
 {
     m_impl.affine_body_dynamics = &require<AffineBodyDynamics>();
-    auto dt_attr                = world().scene().config().find<Float>("dt");
-    m_impl.dt                   = dt_attr->view()[0];
+    m_impl.dt_attr              = world().scene().config().find<Float>("dt");
+    UIPC_ASSERT(m_impl.dt_attr, "Scene config must have a 'dt' attribute.");
 }
 
 void InterAffineBodyConstitutionManager::Impl::init(SceneVisitor& scene)
@@ -65,7 +65,7 @@ void InterAffineBodyConstitutionManager::Impl::init(SceneVisitor& scene)
 
     for(auto&& [i, slot] : enumerate(geo_slots))
     {
-        auto& geo = slot->geometry();
+        auto& geo      = slot->geometry();
         auto  base_uid = geo.meta().find<U64>(builtin::constitution_uid);
 
         if(base_uid)
@@ -162,7 +162,8 @@ void InterAffineBodyConstitutionManager::Impl::report_energy_extent(ABDLineSearc
 
 void InterAffineBodyConstitutionManager::Impl::compute_energy(ABDLineSearchReporter::ComputeEnergyInfo& info)
 {
-    auto constitution_view = constitutions.view();
+    Float dt                = dt_attr->view()[0];
+    auto  constitution_view = constitutions.view();
     for(auto&& [i, c] : enumerate(constitution_view))
     {
         EnergyInfo this_info{this, c->m_index, dt, info.energies()};
@@ -196,7 +197,8 @@ void InterAffineBodyConstitutionManager::Impl::report_gradient_hessian_extent(
 
 void InterAffineBodyConstitutionManager::Impl::compute_gradient_hessian(ABDLinearSubsystem::AssembleInfo& info)
 {
-    auto constitution_view = constitutions.view();
+    Float dt                = dt_attr->view()[0];
+    auto  constitution_view = constitutions.view();
     for(auto&& [i, c] : enumerate(constitution_view))
     {
         GradientHessianInfo this_info{
@@ -312,7 +314,7 @@ geometry::SimplicialComplex* InterAffineBodyConstitutionManager::FilteredInfo::b
 
 Float InterAffineBodyConstitutionManager::BaseInfo::dt() const noexcept
 {
-    return m_impl->dt;
+    return m_impl->dt_attr->view()[0];
 }
 
 muda::CBufferView<Vector12> InterAffineBodyConstitutionManager::BaseInfo::qs() const noexcept
