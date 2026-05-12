@@ -8,6 +8,7 @@
 #include <uipc/builtin/attribute_name.h>
 #include <uipc/io/simplicial_complex_io.h>
 #include <uipc/common/map.h>
+#include <uipc/common/log.h>
 #include <collision_detection/aabb.h>
 #include <collision_detection/info_stackless_bvh.h>
 #include <utils/simplex_contact_mask_utils.h>
@@ -82,11 +83,11 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
                                               span<const IndexT>   h_vert_bids,
                                               span<const IndexT>   h_vert_cids,
                                               span<const IndexT>   h_vert_scids,
-                                              span<const IndexT>   h_vert_self_collision,
-                                              span<const IndexT>   h_contact_mask,
-                                              SizeT                contact_element_count,
-                                              span<const IndexT>   h_subscene_mask,
-                                              SizeT                subscene_element_count)
+                                              span<const IndexT> h_vert_self_collision,
+                                              span<const IndexT> h_contact_mask,
+                                              SizeT contact_element_count,
+                                              span<const IndexT> h_subscene_mask,
+                                              SizeT subscene_element_count)
         {
             using namespace muda;
 
@@ -122,7 +123,7 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
                         vert_cids = vert_cids.cviewer().name("vert_cids"),
                         tri_aabbs = tri_aabbs.viewer().name("tri_aabbs"),
                         tri_bids  = tri_bids.viewer().name("tri_bids"),
-                        tri_cids  = tri_cids.viewer().name("tri_cids")] __device__(int i) mutable
+                        tri_cids = tri_cids.viewer().name("tri_cids")] __device__(int i) mutable
                        {
                            Vector3i F = triangles(i);
                            AABB     box;
@@ -146,7 +147,7 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
                         vert_cids  = vert_cids.cviewer().name("vert_cids"),
                         edge_aabbs = edge_aabbs.viewer().name("edge_aabbs"),
                         edge_bids  = edge_bids.viewer().name("edge_bids"),
-                        edge_cids  = edge_cids.viewer().name("edge_cids")] __device__(int i) mutable
+                        edge_cids = edge_cids.viewer().name("edge_cids")] __device__(int i) mutable
                        {
                            Vector2i E = edges(i);
                            AABB     box;
@@ -176,10 +177,10 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
             auto edge_viewer = edges.cviewer();
             auto tri_viewer  = triangles.cviewer();
 
-            auto vert_cids_v    = vert_cids.cviewer();
-            auto vert_scids_v   = vert_scids.cviewer();
-            auto self_coll_v    = self_collision.cviewer();
-            auto contact_cmts_v = cmts.cviewer();
+            auto vert_cids_v     = vert_cids.cviewer();
+            auto vert_scids_v    = vert_scids.cviewer();
+            auto self_coll_v     = self_collision.cviewer();
+            auto contact_cmts_v  = cmts.cviewer();
             auto subscene_cmts_v = scmts.cviewer();
 
             auto cmts_v = cmts.viewer();
@@ -196,16 +197,14 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
                                     && !cmts_v(info.query_cid, info.node_cid);
                     return !cid_cull;
                 },
-                [pos_viewer, edge_viewer, tri_viewer,
-                 vert_cids_v, vert_scids_v, self_coll_v,
-                 contact_cmts_v, subscene_cmts_v] __device__(
+                [pos_viewer, edge_viewer, tri_viewer, vert_cids_v, vert_scids_v, self_coll_v, contact_cmts_v, subscene_cmts_v] __device__(
                     const InfoStacklessBVH::LeafPredInfo& info) -> bool
                 {
                     Vector2i E = edge_viewer(info.i);
                     Vector3i F = tri_viewer(info.j);
 
-                    if(E[0] == F[0] || E[0] == F[1] || E[0] == F[2] || E[1] == F[0]
-                       || E[1] == F[1] || E[1] == F[2])
+                    if(E[0] == F[0] || E[0] == F[1] || E[0] == F[2]
+                       || E[1] == F[0] || E[1] == F[1] || E[1] == F[2])
                         return false;
 
                     {
@@ -237,8 +236,7 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
                     }
 
                     if(info.bid_i == info.bid_j
-                       && info.bid_i != static_cast<IndexT>(-1)
-                       && !self_coll_v(E[0]))
+                       && info.bid_i != static_cast<IndexT>(-1) && !self_coll_v(E[0]))
                         return false;
 
                     return tri_edge_intersect_device(pos_viewer(F[0]),
@@ -326,8 +324,7 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
     {
         auto& ctx = context();
 
-        const geometry::SimplicialComplex& scene_surface =
-            ctx.scene_simplicial_surface();
+        const geometry::SimplicialComplex& scene_surface = ctx.scene_simplicial_surface();
 
         auto Vs = scene_surface.vertices().size() ? scene_surface.positions().view() :
                                                     span<const Vector3>{};
@@ -375,17 +372,19 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
         UIPC_ASSERT(attr_v_object_id, "`sanity_check/object_id` is not found in scene surface");
         auto VObjectIds = attr_v_object_id->view();
 
-        SizeT CN = contact_tabular.element_count();
+        SizeT          CN = contact_tabular.element_count();
         vector<IndexT> h_contact_mask(CN * CN);
         for(IndexT i = 0; i < (IndexT)CN; ++i)
             for(IndexT j = 0; j < (IndexT)CN; ++j)
-                h_contact_mask[i * CN + j] = contact_tabular.at(i, j).is_enabled() ? 1 : 0;
+                h_contact_mask[i * CN + j] =
+                    contact_tabular.at(i, j).is_enabled() ? 1 : 0;
 
-        SizeT SN = subscene_tabular.element_count();
+        SizeT          SN = subscene_tabular.element_count();
         vector<IndexT> h_subscene_mask(SN * SN);
         for(IndexT i = 0; i < (IndexT)SN; ++i)
             for(IndexT j = 0; j < (IndexT)SN; ++j)
-                h_subscene_mask[i * SN + j] = subscene_tabular.at(i, j).is_enabled() ? 1 : 0;
+                h_subscene_mask[i * SN + j] =
+                    subscene_tabular.at(i, j).is_enabled() ? 1 : 0;
 
         auto pairs = m_impl.detect_intersections(
             Vs,
@@ -431,9 +430,34 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
             vertex_intersected[F[2]] = 1;
 
             auto GeoIdL = VGeoIds[E[0]];
-            auto GeoIdR = VGeoIds[F[0]];
+            auto GeoIdR = VGeoIds[F[1]];
+
             auto ObjIdL = VObjectIds[E[0]];
-            auto ObjIdR = VObjectIds[F[0]];
+            auto ObjIdR = VObjectIds[F[1]];
+
+            auto InstIdL = VInstanceIds[E[0]];
+            auto InstIdR = VInstanceIds[F[1]];
+
+            auto SelfCollL = SelfCollision[InstIdL];
+            auto SelfCollR = SelfCollision[InstIdR];
+
+            logger::error(
+                "Intersection detected between Edge({},{}) in Geometry({}) "
+                "Instance({}) Object[{}] and Triangle({},{},{}) in "
+                "Geometry({}) Instance({}) Object[{}], SelfColl({},{})",
+                E[0],
+                E[1],
+                GeoIdL,
+                InstIdL,
+                ObjIdL,
+                F[0],
+                F[1],
+                F[2],
+                GeoIdR,
+                InstIdR,
+                ObjIdR,
+                SelfCollL,
+                SelfCollR);
 
             if(GeoIdL > GeoIdR)
             {
@@ -444,7 +468,7 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
         }
 
         ::uipc::backend::SanityCheckMessageVisitor scmv{msg};
-        auto& buffer = scmv.message();
+        auto&                                      buffer = scmv.message();
 
         for(auto& [GeoIds, ObjIds] : intersected_geo_ids)
         {
