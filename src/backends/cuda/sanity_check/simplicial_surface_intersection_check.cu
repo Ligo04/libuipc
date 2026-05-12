@@ -430,16 +430,16 @@ class SimplicialSurfaceIntersectionCheck final : public BackendSanityChecker
             vertex_intersected[F[2]] = 1;
 
             auto GeoIdL = VGeoIds[E[0]];
-            auto GeoIdR = VGeoIds[F[1]];
+            auto GeoIdR = VGeoIds[F[0]];
 
             auto ObjIdL = VObjectIds[E[0]];
-            auto ObjIdR = VObjectIds[F[1]];
+            auto ObjIdR = VObjectIds[F[0]];
 
             auto InstIdL = VInstanceIds[E[0]];
-            auto InstIdR = VInstanceIds[F[1]];
+            auto InstIdR = VInstanceIds[F[0]];
 
-            auto SelfCollL = SelfCollision[InstIdL];
-            auto SelfCollR = SelfCollision[InstIdR];
+            auto SelfCollL = SelfCollision[E[0]];
+            auto SelfCollR = SelfCollision[F[0]];
 
             logger::error(
                 "Intersection detected between Edge({},{}) in Geometry({}) "
