@@ -2,10 +2,39 @@
 #include <sim_engine.h>
 #include <linear_system/global_linear_system.h>
 #include <uipc/common/timer.h>
+#include <muda/cub/device/device_reduce.h>
 #include <cub/warp/warp_reduce.cuh>
+#include <muda/ext/eigen/inverse.h>
+#include <muda/ext/eigen/atomic.h>
+#include <muda/launch/launch.h>
 namespace uipc::backend::cuda
 {
 REGISTER_SIM_SYSTEM(LinearFusedPCG);
+
+// Coarse PCG advances in chunks before the ordinary fused_pcg() definition below.
+// Keep these helpers forward-declared so the chunked path reuses the exact same
+// device update kernels as the fine fused PCG path instead of duplicating logic.
+void fused_dot(muda::CDenseVectorView<Float> x,
+               muda::CDenseVectorView<Float> y,
+               muda::VarView<Float>          d_result);
+
+void fused_update_xr(muda::CVarView<Float>         d_rz,
+                     muda::CVarView<Float>         d_pAp,
+                     muda::CVarView<IndexT>        d_converged,
+                     muda::DenseVectorView<Float>  x,
+                     muda::CDenseVectorView<Float> p,
+                     muda::DenseVectorView<Float>  r,
+                     muda::CDenseVectorView<Float> Ap);
+
+void fused_update_p(muda::CVarView<Float>         d_rz_new,
+                    muda::CVarView<Float>         d_rz,
+                    muda::CVarView<IndexT>        d_converged,
+                    muda::DenseVectorView<Float>  p,
+                    muda::CDenseVectorView<Float> z);
+
+void fused_swap_rz(muda::CVarView<Float>  d_rz_new,
+                   muda::VarView<Float>   d_rz,
+                   muda::CVarView<IndexT> d_converged);
 
 void LinearFusedPCG::do_build(BuildInfo& info)
 {
@@ -19,7 +48,10 @@ void LinearFusedPCG::do_build(BuildInfo& info)
         throw SimSystemException("LinearFusedPCG unused");
     }
 
-    auto& global_linear_system = require<GlobalLinearSystem>();
+    // Register the build-time dependency on GlobalLinearSystem (it owns the
+    // assembled system and drives this solver). The reference is not retained;
+    // do_solve receives everything it needs through SolvingInfo.
+    require<GlobalLinearSystem>();
 
     max_iter_ratio = 2;
 
@@ -48,7 +80,8 @@ void LinearFusedPCG::do_solve(GlobalLinearSystem::SolvingInfo& info)
     auto x = info.x();
     auto b = info.b();
 
-    x.buffer_view().fill(0);
+    if(!info.use_initial_guess())
+        x.buffer_view().fill(0);
 
     auto N = x.size();
     if(r.capacity() < N)
@@ -65,10 +98,175 @@ void LinearFusedPCG::do_solve(GlobalLinearSystem::SolvingInfo& info)
     p.resize(N);
     Ap.resize(N);
 
-    auto iter = fused_pcg(x, b, max_iter_ratio * b.size());
+    auto max_iter =
+        info.max_iter_override() != 0 ?
+            info.max_iter_override() :
+            static_cast<SizeT>(max_iter_ratio * static_cast<Float>(b.size()));
+    max_iter = std::max(max_iter, SizeT{1});
+
+    auto iter =
+        fused_pcg(x, b, max_iter, info.use_initial_guess(), info.accuracy_check_enabled());
+
+    logger::info("LinearFusedPCG: frame={} newton_iter={} dof={} max_iter={} initial_guess={} accuracy_check={} -> iters={}",
+                 engine().frame(),
+                 engine().newton_iter(),
+                 N,
+                 max_iter,
+                 info.use_initial_guess(),
+                 info.accuracy_check_enabled(),
+                 iter);
+
+    if(iter >= max_iter)
+    {
+        // A non-zero max_iter_override is used by AGIPC as bounded post-refinement
+        // (RefineCG <= 10).  Hitting that cap is an expected fixed-budget stop,
+        // unlike the ordinary full fine solve where max_iter means no convergence.
+        if(info.max_iter_override() != 0)
+        {
+            logger::info(
+                "LinearFusedPCG: consumed bounded max_iter_override = {}; "
+                "treat as fixed-budget refinement stop.",
+                max_iter);
+        }
+        else
+        {
+            logger::warn(
+                "LinearFusedPCG: reached max_iter = {} (no early convergence); "
+                "check preconditioner, coarse mode, or linear_system/tol_rate.",
+                max_iter);
+        }
+    }
 
     info.iter_count(iter);
 }
+
+void LinearFusedPCG::begin_coarse_solve(muda::DenseVectorView<Float>  x,
+                                        muda::CDenseVectorView<Float> b,
+                                        Float relative_tol)
+{
+    Timer timer{"coarse_pcg_begin"};
+
+    x.buffer_view().fill(0);
+    auto N = b.size();
+    if(r.capacity() < N)
+    {
+        auto M = reserve_ratio * N;
+        r.reserve(M);
+        z.reserve(M);
+        p.reserve(M);
+        Ap.reserve(M);
+    }
+    r.resize(N);
+    z.resize(N);
+    p.resize(N);
+    Ap.resize(N);
+    d_converged      = 0;
+    coarse_converged = false;
+
+    r.buffer_view().copy_from(b.buffer_view());
+    apply_preconditioner(z, r, d_converged.view());
+    p = z;
+    fused_dot(r.cview(), z.cview(), d_rz.view());
+    Float rz_host = d_rz;
+    check_init_rz_nan_inf(rz_host);
+    // The coarse solve is an inexact Newton-step correction (followed by fine
+    // refinement), so it uses its own looser relative residual tolerance rather
+    // than the tight fine-solve global_tol_rate. Matches the reference's
+    // solve_coarse(relative_residual_tol) (default 1e-3).
+    Float coarse_tol = relative_tol > Float{0} ? relative_tol : global_tol_rate;
+    coarse_rz_tol    = coarse_tol * std::abs(rz_host);
+    if(std::abs(rz_host) <= coarse_rz_tol)
+        coarse_converged = true;
+    coarse_started = true;
+}
+
+SizeT LinearFusedPCG::coarse_solve_iterations(muda::DenseVectorView<Float> x, SizeT iteration_count)
+{
+    if(!coarse_started || coarse_converged || iteration_count == 0)
+        return 0;
+
+    SizeT performed = 0;
+    for(; performed < iteration_count; ++performed)
+    {
+        Float rz_host = d_rz;
+        if(std::isfinite(rz_host) && std::abs(rz_host) <= coarse_rz_tol)
+        {
+            coarse_converged = true;
+            break;
+        }
+
+        {
+            Timer timer{"Coarse SpMV"};
+            spmv_dot(p.cview(), Ap.view(), d_pAp.view());
+        }
+
+        Float pAp_host = d_pAp;
+        if(!std::isfinite(pAp_host) || std::abs(pAp_host) <= Float{1e-30})
+            break;
+
+        fused_update_xr(
+            d_rz.view(), d_pAp.view(), d_converged.view(), x, p.cview(), r.view(), Ap.cview());
+
+        {
+            Timer timer{"Coarse Apply Preconditioner"};
+            apply_preconditioner(z, r, d_converged.view());
+        }
+
+        fused_dot(r.cview(), z.cview(), d_rz_new.view());
+        Float rz_new_host = d_rz_new;
+        if(!std::isfinite(rz_new_host))
+            break;
+        if(std::abs(rz_new_host) <= coarse_rz_tol)
+        {
+            d_converged      = 1;
+            coarse_converged = true;
+            ++performed;
+            break;
+        }
+
+        fused_update_p(d_rz_new.view(), d_rz.view(), d_converged.view(), p.view(), z.cview());
+        fused_swap_rz(d_rz_new.view(), d_rz.view(), d_converged.view());
+    }
+
+    return performed;
+}
+
+MUDA_DEVICE void agipc_abs_vector_kernel(int                             i,
+                                         muda::CDenseVectorViewer<Float> input,
+                                         muda::DenseVectorViewer<Float>  output)
+{
+    output(i) = abs(input(i));
+}
+
+bool LinearFusedPCG::check_displacement_converged(muda::CDenseVectorView<Float> fine_x,
+                                                  Float  tolerance,
+                                                  Float* out_inf_norm)
+{
+    if(fine_x.size() == 0)
+    {
+        if(out_inf_norm)
+            *out_inf_norm = Float{0};
+        return true;
+    }
+
+    abs_buffer.resize(fine_x.size());
+    constexpr int block_size = 256;
+    muda::ParallelFor(block_size)
+        .file_line(__FILE__, __LINE__)
+        .apply(static_cast<int>(fine_x.size()),
+               [fine_x = fine_x.cviewer().name("fine_x"),
+                abs_buffer = abs_buffer.viewer().name("abs_buffer")] MUDA_DEVICE(int i) mutable
+               { agipc_abs_vector_kernel(i, fine_x, abs_buffer); });
+
+    muda::DeviceReduce().Max(abs_buffer.buffer_view().data(),
+                             d_max_abs_value.data(),
+                             static_cast<int>(fine_x.size()));
+    Float inf_norm = d_max_abs_value;
+    if(out_inf_norm)
+        *out_inf_norm = inf_norm;
+    return tolerance > Float{0} && inf_norm <= tolerance;
+}
+
 
 void LinearFusedPCG::check_init_rz_nan_inf(Float rz)
 {
@@ -99,9 +297,9 @@ void LinearFusedPCG::check_iter_rz_nan_inf(Float rz, SizeT k)
         auto norm_z = ctx().norm(z.cview());
         bool r_ok   = std::isfinite(norm_r);
         bool z_bad  = !std::isfinite(norm_z);
-        auto hint = (r_ok && z_bad) ?
-                        "preconditioner failed, likely due to inverse matrix calculation failure" :
-                        "PCG iteration diverged";
+        auto hint   = (r_ok && z_bad) ?
+                          "preconditioner failed, likely due to inverse matrix calculation failure" :
+                          "PCG iteration diverged";
         UIPC_ASSERT(false,
                     "Frame {}, Newton {}, FusedPCG Iter {}: r^T*z = {}, norm(r) = {}, norm(z) = {}. "
                     "Hint: {}.",
@@ -136,7 +334,7 @@ void fused_dot(muda::CDenseVectorView<Float> x,
             [x        = x.cviewer().name("x"),
              y        = y.cviewer().name("y"),
              d_result = d_result.viewer().name("d_result"),
-             n] __device__() mutable
+             n] MUDA_DEVICE() mutable
             {
                 using WarpReduce = cub::WarpReduce<Float, warp_size>;
                 __shared__ typename WarpReduce::TempStorage temp_storage[num_warps];
@@ -173,7 +371,7 @@ void fused_update_xr(muda::CVarView<Float>         d_rz,
                 x           = x.viewer().name("x"),
                 p           = p.cviewer().name("p"),
                 r           = r.viewer().name("r"),
-                Ap          = Ap.cviewer().name("Ap")] __device__(int i) mutable
+                Ap = Ap.cviewer().name("Ap")] MUDA_DEVICE(int i) mutable
                {
                    if(*d_converged != 0)
                        return;
@@ -200,7 +398,7 @@ void fused_update_p(muda::CVarView<Float>         d_rz_new,
                 d_rz        = d_rz.cviewer().name("d_rz"),
                 d_converged = d_converged.cviewer().name("d_converged"),
                 p           = p.viewer().name("p"),
-                z           = z.cviewer().name("z")] __device__(int i) mutable
+                z           = z.cviewer().name("z")] MUDA_DEVICE(int i) mutable
                {
                    if(*d_converged != 0)
                        return;
@@ -221,7 +419,7 @@ void fused_swap_rz(muda::CVarView<Float>  d_rz_new,
         .apply(
             [d_rz_new = d_rz_new.cviewer().name("d_rz_new"),
              d_rz     = d_rz.viewer().name("d_rz"),
-             d_converged = d_converged.cviewer().name("d_converged")] __device__() mutable
+             d_converged = d_converged.cviewer().name("d_converged")] MUDA_DEVICE() mutable
             {
                 if(*d_converged != 0)
                     return;
@@ -240,24 +438,31 @@ void fused_update_converged(muda::CVarView<Float> d_rz_new,
         .apply(1,
                [d_rz_new    = d_rz_new.cviewer().name("d_rz_new"),
                 d_converged = d_converged.viewer().name("d_converged"),
-                rz_tol] __device__(int) mutable
+                rz_tol] MUDA_DEVICE(int) mutable
                {
                    Float rz_new = *d_rz_new;
                    *d_converged = abs(rz_new) <= rz_tol ? 1 : 0;
                });
 }
 
+
 SizeT LinearFusedPCG::fused_pcg(muda::DenseVectorView<Float>  x,
                                 muda::CDenseVectorView<Float> b,
-                                SizeT                         max_iter)
+                                SizeT                         max_iter,
+                                bool                          use_initial_guess,
+                                bool accuracy_check_enabled)
 {
     Timer pcg_timer{"FusedPCG"};
 
     SizeT k     = 0;
     d_converged = 0;
 
-    // r = b - A*x, but x0 = 0 so r = b
+    // r = b - A*x. The default path preserves the previous behavior; AGIPC coarse mode
+    // first prolongates the coarse correction as the initial x, so A*x must be subtracted
+    // explicitly.
     r.buffer_view().copy_from(b.buffer_view());
+    if(use_initial_guess)
+        spmv(-1.0, x, 1.0, r.view());
 
     // z = P^{-1} * r
     {
@@ -274,7 +479,7 @@ SizeT LinearFusedPCG::fused_pcg(muda::DenseVectorView<Float>  x,
     check_init_rz_nan_inf(rz_host);
     Float abs_rz0 = std::abs(rz_host);
 
-    if(abs_rz0 == Float{0.0})
+    if(abs_rz0 == Float{0.0} && (!accuracy_check_enabled || accuracy_statisfied(r.view())))
         return 0;
 
     Float rz_tol = global_tol_rate * abs_rz0;
@@ -308,7 +513,8 @@ SizeT LinearFusedPCG::fused_pcg(muda::DenseVectorView<Float>  x,
         {
             Float rz_new_host = d_rz_new;
             check_iter_rz_nan_inf(rz_new_host, k);
-            if((std::abs(rz_new_host) / abs_rz0) <= global_tol_rate)
+            if((!accuracy_check_enabled || accuracy_statisfied(r.view()))
+               && (std::abs(rz_new_host) / abs_rz0) <= global_tol_rate)
                 break;
         }
 

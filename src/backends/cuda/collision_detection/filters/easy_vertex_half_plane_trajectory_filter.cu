@@ -3,6 +3,7 @@
 #include <kernel_cout.h>
 #include <utils/codim_thickness.h>
 #include <pipeline/ipc_pipeline_flag.h>
+#include <muda/atomic.h>
 
 namespace uipc::backend::cuda
 {
@@ -103,7 +104,7 @@ void EasyVertexHalfPlaneTrajectoryFilter::Impl::filter_active(FilterActiveInfo& 
 
                            if(is_active_D(range, D))
                            {
-                               auto last = atomic_add(num.data(), 1);
+                               auto last = muda::atomic_add(num.data(), 1);
 
                                if(last < max_count)
                                {

@@ -1,5 +1,6 @@
 #include <collision_detection/vertex_half_plane_trajectory_filter.h>
 #include <implicit_geometry/half_plane_vertex_reporter.h>
+#include <muda/atomic.h>
 namespace uipc::backend::cuda
 {
 void VertexHalfPlaneTrajectoryFilter::do_build()
@@ -40,7 +41,7 @@ void VertexHalfPlaneTrajectoryFilter::Impl::label_active_vertices(
                    auto PH = PHs(i);
                    auto P  = PH[0];
                    if(is_active(P) == 0)
-                       atomic_exch(&is_active(P), 1);
+                       muda::atomic_exch(&is_active(P), 1);
                });
 }
 

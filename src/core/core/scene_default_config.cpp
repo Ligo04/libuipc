@@ -26,6 +26,39 @@ geometry::AttributeCollection default_scene_config() noexcept
 
     config.create("linear_system/tol_rate", Float{1e-3});
 
+    // AGIPC coarse Newton solve defaults:
+    // 1) tag protected/collapsible edges by Green-strain change,
+    // 2) aggregate nodes into algebraic supernodes,
+    // 3) solve the Galerkin coarse system, then
+    // 4) refine on the original fine Hessian for a bounded number of PCG steps.
+    // Disabled by default: AGIPC only accelerates FEM-heavy deformable scenes;
+    // for rigid/ABD-dominated scenes it adds coarse-assembly overhead without DoF
+    // reduction. Scenes that benefit must opt in via linear_system/coarse/enable=1.
+    config.create("linear_system/coarse/enable", IndexT{0});
+    config.create("linear_system/coarse/affine_threshold", IndexT{32});
+    // 0 => adaptive fine-refinement budget scaled from coarse-PCG iterations
+    // (reference behavior); a positive value forces a fixed number of fine PCG
+    // correction iterations after the coarse solve.
+    config.create("linear_system/coarse/fine_refine_iters", IndexT{0});
+    config.create("linear_system/coarse/block_size", IndexT{256});
+    config.create("linear_system/coarse/component_passes", IndexT{8});
+    config.create("linear_system/coarse/max_aggregate_size", IndexT{32});
+    config.create("linear_system/coarse/green_strain_tau", Float{5e-5});
+    // The coarse solve is an inexact Newton-step correction that is followed by
+    // bounded fine refinement, so it need not fully converge. Cap it low: most
+    // well-conditioned coarse systems converge well under this bound, while
+    // ill-conditioned (stiff-contact) frames would otherwise waste hundreds of
+    // PCG iterations on a marginal residual gain.
+    config.create("linear_system/coarse/max_iterations", IndexT{150});
+    config.create("linear_system/coarse/pcg_relative_tol", Float{1e-3});
+    config.create("linear_system/coarse/check_interval", IndexT{30});
+    // Optional prolongated-displacement early stop (paper eps_d ~ 1e-3 * bbox
+    // diagonal). 0 disables it; coarse termination then relies on the rz residual
+    // tolerance and max_iterations. Scenes may set a scale-appropriate value.
+    config.create("linear_system/coarse/displacement_tolerance", Float{0.0});
+    config.create("linear_system/coarse/use_fine_preconditioner_after_coarse", IndexT{1});
+    config.create("linear_system/coarse/use_mas_preconditioner", IndexT{0});
+
     // default:
     //  - fused_pcg
     // or:
@@ -41,7 +74,7 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("contact/friction/enable", IndexT{1});
     // friction transition velocity
     config.create("contact/eps_velocity", Float{0.01_m / 1.0_s});
-    
+
     // default:
     //  - ipc
     // or:
@@ -60,7 +93,6 @@ geometry::AttributeCollection default_scene_config() noexcept
     config.create("contact/adaptive/init_kappa", Float{1.0_GPa});
     config.create("contact/adaptive/max_kappa", Float{100.0_GPa});
 
-    
 
     // default:
     //  - info_stackless_bvh

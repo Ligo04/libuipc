@@ -6,6 +6,7 @@
 #include <cuda_device/bit_operation.h>
 #include <cuda_device/builtin.h>
 #include <Eigen/Sparse>
+#include <muda/atomic.h>
 
 namespace uipc::backend::cuda
 {
@@ -538,7 +539,7 @@ void Spmv::rbk_sym_spmv_dot(Float                           a,
                    dot_local = WarpReduceFloat(temp_storage_float[warp_id])
                                    .Sum(dot_local);
                    if(lane_id == 0)
-                       atomicAdd(d_dot.data(), dot_local);
+                       muda::atomic_add(d_dot.data(), dot_local);
                });
 }
 

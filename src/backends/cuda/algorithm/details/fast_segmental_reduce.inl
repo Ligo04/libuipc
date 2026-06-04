@@ -1,4 +1,5 @@
 #include <cub/warp/warp_reduce.cuh>
+#include <muda/atomic.h>
 #include <muda/ext/eigen/atomic.h>
 
 namespace muda
@@ -111,7 +112,7 @@ FastSegmentalReduce<BlockSize, WarpSize>& FastSegmentalReduce<BlockSize, WarpSiz
                     if(flags.is_cross_warp)
                     {
                         auto& out_value = out(i);
-                        atomic_add(&out_value, value);
+                        muda::atomic_add(&out_value, value);
                     }
                     else
                     {

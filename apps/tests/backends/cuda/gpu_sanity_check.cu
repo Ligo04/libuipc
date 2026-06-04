@@ -14,6 +14,7 @@
 #include <uipc/geometry/utils/distance.h>
 #include <uipc/common/enumerate.h>
 #include <uipc/common/timer.h>
+#include <muda/atomic.h>
 #include <chrono>
 
 using namespace muda;
@@ -345,7 +346,7 @@ SizeT gpu_distance_check(span<const Vector3>  h_Ps,
             distance::point_triangle_distance2(Ps(P), Ps(F[0]), Ps(F[1]), Ps(F[2]), D);
 
             if(D <= thickness2)
-                atomicAdd(violation.data(), IndexT(1));
+                muda::atomic_add(violation.data(), IndexT(1));
 
             return false;
         },
@@ -396,7 +397,7 @@ SizeT gpu_halfplane_check(span<const Vector3> h_Ps,
                    const Vector3& V = Ps(i);
                    Float          d = (V - plane_P).dot(plane_N) - thickness;
                    if(d <= 0.0)
-                       atomicAdd(violation.data(), IndexT(1));
+                       muda::atomic_add(violation.data(), IndexT(1));
                });
 
     IndexT h_count = violation_count;
@@ -447,7 +448,7 @@ SizeT gpu_volume_check(span<const Vector3> h_Ps, span<const Vector4i> h_Ts)
                    Vector3 e3  = Ps(T[3]) - Ps(T[0]);
                    Float   vol = e1.cross(e2).dot(e3) / 6.0;
                    if(vol <= 0.0)
-                       atomicAdd(violation.data(), IndexT(1));
+                       muda::atomic_add(violation.data(), IndexT(1));
                });
 
     IndexT h_count = violation_count;

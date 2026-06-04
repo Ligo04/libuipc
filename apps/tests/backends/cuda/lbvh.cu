@@ -3,6 +3,7 @@
 #include <app/asset_dir.h>
 #include <collision_detection/linear_bvh.h>
 #include <uipc/geometry.h>
+#include <muda/atomic.h>
 #include <muda/cub/device/device_scan.h>
 #include <uipc/common/enumerate.h>
 #include <muda/viewer/viewer_base.h>
@@ -629,4 +630,3 @@ TEST_CASE("lbvh", "[collision detection]")
         lbvh_test(mesh);
     }
 }
-

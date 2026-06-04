@@ -1,3 +1,5 @@
 includes("hello_affine_body")
 includes("hello_simplicial_complex")
 includes("wrecking_ball")
+includes("fem_bunny_cloth_sandwich")
+includes("fem_elastic_balls")

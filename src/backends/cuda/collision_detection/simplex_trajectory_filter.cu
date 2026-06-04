@@ -38,7 +38,7 @@ void SimplexTrajectoryFilter::Impl::label_active_vertices(GlobalTrajectoryFilter
                    {
                        auto P = PT[j];
                        if(is_active(P) == 0)
-                           atomic_exch(&is_active(P), 1);
+                           muda::atomic_exch(&is_active(P), 1);
                    }
                });
 
@@ -53,7 +53,7 @@ void SimplexTrajectoryFilter::Impl::label_active_vertices(GlobalTrajectoryFilter
                    {
                        auto P = EE[j];
                        if(is_active(P) == 0)
-                           atomic_exch(&is_active(P), 1);
+                           muda::atomic_exch(&is_active(P), 1);
                    }
                });
 
@@ -69,7 +69,7 @@ void SimplexTrajectoryFilter::Impl::label_active_vertices(GlobalTrajectoryFilter
                    {
                        auto P = PE[j];
                        if(is_active(P) == 0)
-                           atomic_exch(&is_active(P), 1);
+                           muda::atomic_exch(&is_active(P), 1);
                    }
                });
 
@@ -84,7 +84,7 @@ void SimplexTrajectoryFilter::Impl::label_active_vertices(GlobalTrajectoryFilter
                    {
                        auto P = PP[j];
                        if(is_active(P) == 0)
-                           atomic_exch(&is_active(P), 1);
+                           muda::atomic_exch(&is_active(P), 1);
                    }
                });
 }

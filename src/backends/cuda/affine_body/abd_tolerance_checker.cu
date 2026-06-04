@@ -1,6 +1,7 @@
 #include <newton_tolerance/newton_tolerance_checker.h>
 #include <affine_body/affine_body_dynamics.h>
 #include <uipc/geometry/attribute_slot.h>
+#include <muda/atomic.h>
 
 namespace uipc::backend::cuda
 {

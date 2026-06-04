@@ -6,6 +6,7 @@
 #include <uipc/uipc.h>
 #include <uipc/common/enumerate.h>
 #include <uipc/common/timer.h>
+#include <muda/atomic.h>
 #include <algorithm>
 #include <iterator>
 #include <list>
@@ -237,12 +238,12 @@ void run_internal_cull_proof_case()
     impl.stacklessSelf(
         [calls = node_cull_calls.data()] __device__(const InfoStacklessBVH::NodePredInfo&)
         {
-            atomicAdd(calls, 1);
+            muda::atomic_add(calls, 1);
             return false;
         },
         [leaf_calls = leaf_pair_calls.data()] __device__(const InfoStacklessBVH::LeafPredInfo&)
         {
-            atomicAdd(leaf_calls, 1);
+            muda::atomic_add(leaf_calls, 1);
             return true;
         },
         cp_num.view(),
@@ -302,10 +303,10 @@ void run_internal_cull_rate_case()
         [calls = node_cull_calls.data(),
          rejects = node_cull_rejects.data()] __device__(const InfoStacklessBVH::NodePredInfo& info)
         {
-            atomicAdd(calls, 1);
+            muda::atomic_add(calls, 1);
             bool keep = (info.query_id % 3) != 0;
             if(!keep)
-                atomicAdd(rejects, 1);
+                muda::atomic_add(rejects, 1);
             return keep;
         },
         [] __device__(const InfoStacklessBVH::LeafPredInfo&)
@@ -391,16 +392,16 @@ void run_two_leaf_nodepred_cases()
              rejects = node_rejects.data(),
              invalid_cid_hits = node_invalid_cid_hits.data()] __device__(const InfoStacklessBVH::NodePredInfo& info)
             {
-                atomicAdd(calls, 1);
+                muda::atomic_add(calls, 1);
                 if(info.node_cid == invalid)
-                    atomicAdd(invalid_cid_hits, 1);
+                    muda::atomic_add(invalid_cid_hits, 1);
                 auto qbid = bids(info.query_id);
                 bool self_contact_disabled =
                     (qbid != invalid) && (qbid < self_contact_count) && !is_self_contact(qbid);
                 bool keep = !(info.node_bid != invalid && qbid != invalid && info.node_bid == qbid
                               && self_contact_disabled);
                 if(!keep)
-                    atomicAdd(rejects, 1);
+                    muda::atomic_add(rejects, 1);
                 return keep;
             },
             [] __device__(InfoStacklessBVH::LeafPredInfo) { return true; },
@@ -461,7 +462,7 @@ void run_two_leaf_nodepred_cases()
                 bool cid_cull = info.node_cid != invalid && qcid != invalid && !cmts(qcid, info.node_cid);
                 bool keep = !(bid_cull || cid_cull);
                 if(!keep)
-                    atomicAdd(rejects, 1);
+                    muda::atomic_add(rejects, 1);
                 return keep;
             },
             [] __device__(InfoStacklessBVH::LeafPredInfo) { return true; },
@@ -519,9 +520,9 @@ void run_two_leaf_nodepred_cases()
              invalid_cid_hits = node_invalid_cid_hits.data()] __device__(const InfoStacklessBVH::NodePredInfo& info)
             {
                 if(info.node_bid == invalid)
-                    atomicAdd(invalid_bid_hits, 1);
+                    muda::atomic_add(invalid_bid_hits, 1);
                 if(info.node_cid == invalid)
-                    atomicAdd(invalid_cid_hits, 1);
+                    muda::atomic_add(invalid_cid_hits, 1);
                 auto qbid = bids(info.query_id);
                 auto qcid = cids(info.query_id);
                 bool bid_cull = info.node_bid != invalid && qbid != invalid && info.node_bid == qbid
@@ -529,12 +530,12 @@ void run_two_leaf_nodepred_cases()
                 bool cid_cull = info.node_cid != invalid && qcid != invalid && !cmts(qcid, info.node_cid);
                 bool keep = !(bid_cull || cid_cull);
                 if(!keep)
-                    atomicAdd(rejects, 1);
+                    muda::atomic_add(rejects, 1);
                 return keep;
             },
             [leaf_calls = leaf_calls.data()] __device__(InfoStacklessBVH::LeafPredInfo)
             {
-                atomicAdd(leaf_calls, 1);
+                muda::atomic_add(leaf_calls, 1);
                 return false;
             },
             qbuffer);

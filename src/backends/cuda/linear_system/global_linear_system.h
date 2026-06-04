@@ -6,8 +6,18 @@
 #include <muda/ext/linear_system.h>
 #include <algorithm/matrix_converter.h>
 #include <linear_system/spmv.h>
+#include <linear_system/agipc_coarse_linear_system.h>
 #include <utils/offset_count_collection.h>
 #include <energy_component_flags.h>
+#include <global_geometry/global_vertex_manager.h>
+#include <dytopo_effect_system/global_dytopo_effect_manager.h>
+#include <affine_body/affine_body_vertex_reporter.h>
+#include <affine_body/affine_body_body_reporter.h>
+#include <finite_element/finite_element_method.h>
+#include <finite_element/mas_preconditioner_engine.h>
+#include <finite_element/finite_element_body_reporter.h>
+#include <finite_element/finite_element_vertex_reporter.h>
+#include <global_geometry/global_simplicial_surface_manager.h>
 namespace uipc::backend::cuda
 {
 // Define a simple POD to avoid constructing CUDA's built-in vector type with pmr allocators in host code
@@ -108,7 +118,7 @@ class GlobalLinearSystem : public SimSystem
         DenseVectorView   m_gradients;
         bool              m_gradient_only   = false;
         ComponentFlags    m_component_flags = ComponentFlags::All;
-        Impl*             m_impl = nullptr;
+        Impl*             m_impl            = nullptr;
     };
 
     class OffDiagExtentInfo
@@ -188,16 +198,16 @@ class GlobalLinearSystem : public SimSystem
         {
         }
 
-        DenseVectorView  z() { return m_z; }
-        CDenseVectorView r() { return m_r; }
+        DenseVectorView        z() { return m_z; }
+        CDenseVectorView       r() { return m_r; }
         muda::CVarView<IndexT> converged() { return m_converged; }
 
       private:
         friend class Impl;
-        DenseVectorView  m_z;
-        CDenseVectorView m_r;
+        DenseVectorView        m_z;
+        CDenseVectorView       m_r;
         muda::CVarView<IndexT> m_converged;
-        Impl*            m_impl = nullptr;
+        Impl*                  m_impl = nullptr;
     };
 
     class AccuracyInfo
@@ -229,14 +239,20 @@ class GlobalLinearSystem : public SimSystem
 
         DenseVectorView  x() { return m_x; }
         CDenseVectorView b() { return m_b; }
-        void iter_count(SizeT iter_count) { m_iter_count = iter_count; }
+        void  iter_count(SizeT iter_count) { m_iter_count = iter_count; }
+        bool  use_initial_guess() const { return m_use_initial_guess; }
+        SizeT max_iter_override() const { return m_max_iter_override; }
+        bool accuracy_check_enabled() const { return m_accuracy_check_enabled; }
 
       private:
         friend class Impl;
         DenseVectorView  m_x;
         CDenseVectorView m_b;
-        SizeT            m_iter_count = 0;
-        Impl*            m_impl       = nullptr;
+        SizeT            m_iter_count             = 0;
+        bool             m_use_initial_guess      = false;
+        SizeT            m_max_iter_override      = 0;
+        bool             m_accuracy_check_enabled = true;
+        Impl*            m_impl                   = nullptr;
     };
 
     class SolutionInfo
@@ -310,17 +326,68 @@ class GlobalLinearSystem : public SimSystem
         Spmv                      spmver;
         MatrixConverter<Float, 3> converter;
 
-        bool initialized = false;
-        bool empty_system = true;
+        // AGIPC coarse solve state lives at the global linear-system layer so the
+        // same iterative solver can solve either fine or Galerkin coarse systems.
+        AGIPCCoarseLinearSystem         agipc_coarse_system;
+        AGIPCCoarseLinearSystem::Config agipc_coarse_config;
+        muda::DeviceBuffer<Matrix3x3>   agipc_coarse_diag_inv;
+        // Optional MAS (multi-level additive Schwarz) preconditioner for the coarse
+        // PCG. Far stronger than the 3x3 block-Jacobi above; enabled via
+        // linear_system/coarse/use_mas_preconditioner. Rebuilt per coarse solve
+        // because the coarse aggregation topology changes every Newton iteration.
+        MASPreconditionerEngine             agipc_coarse_mas;
+        bool                                agipc_coarse_mas_ready = false;
+        muda::DeviceBuffer<Eigen::Matrix3d> agipc_coarse_mas_values;
+        muda::DeviceBuffer<int>             agipc_coarse_mas_rows;
+        muda::DeviceBuffer<int>             agipc_coarse_mas_cols;
+        muda::DeviceBuffer<uint32_t>        agipc_coarse_mas_indices;
+        // Cache the MAS graph hierarchy across Newton iterations: the expensive
+        // init_neighbor/init_matrix only depend on the coarse graph *structure*,
+        // which is unchanged while the aggregation is stable (the common case in a
+        // settled simulation). A (block_count, triplet_count, index-checksum) key
+        // detects structural change; on a hit we skip the rebuild and only re-feed
+        // the matrix values via set_preconditioner.
+        SizeT                               agipc_mas_cached_blocks   = 0;
+        SizeT                               agipc_mas_cached_triplets = 0;
+        unsigned long long                  agipc_mas_cached_checksum = 0;
+        muda::DeviceVar<unsigned long long> agipc_mas_checksum_var;
+        bool                                agipc_solving_coarse = false;
+        bool                                agipc_refining_fine  = false;
+        SimSystemSlot<GlobalVertexManager>  global_vertex_manager;
+        SimSystemSlot<GlobalSimplicialSurfaceManager> global_simplicial_surface_manager;
+        SimSystemSlot<GlobalDyTopoEffectManager> global_dytopo_effect_manager;
+        SimSystemSlot<AffineBodyVertexReporter>  affine_body_vertex_reporter;
+        SimSystemSlot<AffineBodyBodyReporter>    affine_body_body_reporter;
+        SimSystemSlot<FiniteElementMethod>       finite_element_method;
+        SimSystemSlot<FiniteElementBodyReporter> finite_element_body_reporter;
+        SimSystemSlot<FiniteElementVertexReporter> finite_element_vertex_reporter;
+        muda::DeviceBuffer<IndexT> agipc_node_to_global_vertex;
+        SizeT                      agipc_abd_node_count = 0;
+        SizeT                      agipc_fem_node_count = 0;
+
+        void rebuild_agipc_node_to_global_vertex_map();
+
+        bool  initialized         = false;
+        bool  empty_system        = true;
+        SizeT current_frame       = 0;
+        SizeT current_newton_iter = 0;
 
         void apply_preconditioner(muda::DenseVectorView<Float>  z,
                                   muda::CDenseVectorView<Float> r,
                                   muda::CVarView<IndexT>        converged);
+        void assemble_agipc_coarse_preconditioner();
+        void assemble_agipc_coarse_mas_preconditioner();
+        void apply_agipc_coarse_preconditioner(muda::DenseVectorView<Float>  z,
+                                               muda::CDenseVectorView<Float> r,
+                                               muda::CVarView<IndexT> converged);
 
         void spmv(Float a, muda::CDenseVectorView<Float> x, Float b, muda::DenseVectorView<Float> y);
         void spmv_dot(muda::CDenseVectorView<Float> x,
                       muda::DenseVectorView<Float>  y,
                       muda::VarView<Float>          d_dot);
+        void apply_fine_preconditioner(muda::DenseVectorView<Float>  z,
+                                       muda::CDenseVectorView<Float> r,
+                                       muda::CVarView<IndexT>        converged);
 
         bool accuracy_statisfied(muda::DenseVectorView<Float> r);
         void compute_gradient(ComputeGradientInfo& info);

@@ -1,4 +1,6 @@
 #include <affine_body/abd_jacobi_matrix.h>
+#include <muda/atomic.h>
+#include <muda/ext/eigen/atomic.h>
 #include <muda/tools/debug_log.h>
 
 namespace uipc::backend::cuda

@@ -3,6 +3,7 @@
 #include <uipc/constitution/affine_body_constitution.h>
 #include <fstream>
 #include <numbers>
+#include <cstdlib>
 #include <uipc/builtin/constants.h>
 
 int main()
@@ -30,6 +31,11 @@ int main()
     config["contact"]["d_hat"]              = 0.01;
     config["line_search"]["max_iter"]       = 8;
     config["collision_detection"]["method"] = "stackless_bvh";
+
+    // Optional benchmark knob: set UIPC_WRECKING_BALL_COARSE_ENABLE=1 to compare
+    // the AGIPC coarse path against the default baseline. Off by default.
+    if(const char* env = std::getenv("UIPC_WRECKING_BALL_COARSE_ENABLE"))
+        config["linear_system"]["coarse"]["enable"] = (env[0] == '1') ? 1 : 0;
 
     test::Scene::dump_config(config, this_output_path);
 

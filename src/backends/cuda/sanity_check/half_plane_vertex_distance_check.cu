@@ -14,6 +14,7 @@
 #include <uipc/common/map.h>
 #include <muda/buffer.h>
 #include <muda/launch.h>
+#include <muda/atomic.h>
 
 namespace std
 {
@@ -319,7 +320,7 @@ class HalfPlaneVertexDistanceCheck final : public BackendSanityChecker
                            if(d <= 0.0)
                            {
                                vertex_too_close(i) = 1;
-                               atomicMax(has_violation.data(), 1);
+                               muda::atomic_max(has_violation.data(), 1);
                                return;
                            }
                        }

@@ -285,7 +285,7 @@ void MASPreconditionerEngine::prepare_prefix_sum_L0()
                     unsigned int elected_prefix =
                         __popc(connect_msk & lanemask_lt(lane_id));
                     if(elected_prefix == 0)
-                        atomicAdd(&prefix_sum(local_warp_id), 1);
+                        muda::atomic_add(&prefix_sum(local_warp_id), 1);
                     if(lane_id == 0)
                         prefix_orig(warp_id) = prefix_sum(local_warp_id);
                 }
@@ -372,7 +372,7 @@ void MASPreconditionerEngine::build_level1()
                     unsigned int conn_msk = fine_connect_mask(idx);
                     unsigned int elected_prefix = __popc(conn_msk & lanemask_lt(lane_id));
                     if(elected_prefix == 0)
-                        atomicOr(&elected_mask(local_warp_id), (1U << lane_id));
+                        muda::atomic_or(&elected_mask(local_warp_id), (1U << lane_id));
 
                     lane_prefix(threadIdx.x) =
                         __popc(elected_mask(local_warp_id) & lanemask_lt(lane_id));
@@ -464,21 +464,21 @@ void MASPreconditionerEngine::build_connect_mask_Lx(int level)
 
                 if(__popc(prefix_msk) == BANKSIZE)
                 {
-                    atomicOr(&cache_msk(local_warp_id * BANKSIZE), static_cast<int>(conn_msk));
+                    muda::atomic_or(&cache_msk(local_warp_id * BANKSIZE), static_cast<int>(conn_msk));
                     conn_msk = static_cast<unsigned int>(cache_msk(local_warp_id * BANKSIZE));
                 }
                 else
                 {
                     unsigned int elected_lane = __ffs(prefix_msk) - 1;
                     if(conn_msk)
-                        atomicOr(&cache_msk(local_warp_id * BANKSIZE + elected_lane),
+                        muda::atomic_or(&cache_msk(local_warp_id * BANKSIZE + elected_lane),
                                  static_cast<int>(conn_msk));
                     conn_msk = static_cast<unsigned int>(cache_msk(local_warp_id * BANKSIZE + elected_lane));
                 }
 
                 unsigned int elected_prefix = __popc(prefix_msk & lanemask_lt(lane_id));
                 if(conn_msk && elected_prefix == 0)
-                    atomicOr(&next_connect_mask(coarse_idx), conn_msk);
+                    muda::atomic_or(&next_connect_mask(coarse_idx), conn_msk);
             });
 }
 
@@ -533,7 +533,7 @@ void MASPreconditionerEngine::next_level_cluster(int level)
                 next_connect_mask(idx) = conn_msk;
                 unsigned int elected_prefix = __popc(conn_msk & lanemask_lt(lane_id));
                 if(elected_prefix == 0)
-                    atomicAdd(&prefix_sum_s(local_warp_id), 1);
+                    muda::atomic_add(&prefix_sum_s(local_warp_id), 1);
                 if(lane_id == 0)
                     next_prefix(idx / BANKSIZE) = prefix_sum_s(local_warp_id);
             });
@@ -597,7 +597,7 @@ void MASPreconditionerEngine::prefix_sum_Lx(int level)
                 unsigned int conn_msk = next_connect_mask(idx);
                 unsigned int elected_prefix = __popc(conn_msk & lanemask_lt(lane_id));
                 if(elected_prefix == 0)
-                    atomicOr(&elected_mask(local_warp_id), (1U << lane_id));
+                    muda::atomic_or(&elected_mask(local_warp_id), (1U << lane_id));
 
                 lane_prefix(threadIdx.x) =
                     __popc(elected_mask(local_warp_id) & lanemask_lt(lane_id));
@@ -848,10 +848,10 @@ void MASPreconditionerEngine::scatter_hessian_to_clusters(muda::CBufferView<Eige
                                 for(int i = 0; i < 3; i++)
                                     for(int j = 0; j < 3; j++)
                                     {
-                                        atomicAdd(&(cluster_hess(cluster_id).M[si](i, j)),
+                                        muda::atomic_add(&(cluster_hess(cluster_id).M[si](i, j)),
                                                   H(i, j));
                                         if(vert_col == vert_row)
-                                            atomicAdd(&(cluster_hess(cluster_id).M[si](i, j)),
+                                            muda::atomic_add(&(cluster_hess(cluster_id).M[si](i, j)),
                                                       H(j, i));
                                     }
                             }
@@ -860,7 +860,7 @@ void MASPreconditionerEngine::scatter_hessian_to_clusters(muda::CBufferView<Eige
                                 int si = sym_index(vert_col % BANKSIZE, vert_row % BANKSIZE);
                                 for(int i = 0; i < 3; i++)
                                     for(int j = 0; j < 3; j++)
-                                        atomicAdd(&(cluster_hess(cluster_id).M[si](i, j)),
+                                        muda::atomic_add(&(cluster_hess(cluster_id).M[si](i, j)),
                                                   H(j, i));
                             }
                             // NO break: keep walking up to coarser levels where
@@ -963,7 +963,7 @@ void MASPreconditionerEngine::scatter_hessian_to_clusters(muda::CBufferView<Eige
                                int si  = sym_index(bv, bv);
                                for(int i = 0; i < 3; i++)
                                    for(int j = 0; j < 3; j++)
-                                       atomicAdd(&(cluster_hess(cid).M[si](i, j)),
+                                       muda::atomic_add(&(cluster_hess(cid).M[si](i, j)),
                                                  mat3(i, j));
                                next_id = going_next(next_id);
                            }
@@ -1000,7 +1000,7 @@ void MASPreconditionerEngine::scatter_hessian_to_clusters(muda::CBufferView<Eige
                                    int si = sym_index(rdx % BANKSIZE, cdx % BANKSIZE);
                                    for(int i = 0; i < 3; i++)
                                        for(int j = 0; j < 3; j++)
-                                           atomicAdd(&(cluster_hess(cid).M[si](i, j)),
+                                           muda::atomic_add(&(cluster_hess(cid).M[si](i, j)),
                                                      mat3(i, j));
                                }
                            }
@@ -1193,9 +1193,9 @@ void MASPreconditionerEngine::build_multi_level_R(muda::CDenseVectorView<Float> 
                                         "build_R: cur=%d not in level %d [%d, %d)",
                                         cur, l + 1, level_size(l + 1).y, level_size(l + 2).y);
 
-                            atomicAdd(&(multi_lr(cur)[0]), r[0]);
-                            atomicAdd(&(multi_lr(cur)[1]), r[1]);
-                            atomicAdd(&(multi_lr(cur)[2]), r[2]);
+                            muda::atomic_add(&(multi_lr(cur)[0]), r[0]);
+                            muda::atomic_add(&(multi_lr(cur)[1]), r[1]);
+                            muda::atomic_add(&(multi_lr(cur)[2]), r[2]);
                         }
                     }
                 }
@@ -1207,11 +1207,11 @@ void MASPreconditionerEngine::build_multi_level_R(muda::CDenseVectorView<Float> 
                     sum_residual(threadIdx.x + DEFAULT_BLOCKSIZE)     = 0;
                     sum_residual(threadIdx.x + 2 * DEFAULT_BLOCKSIZE) = 0;
 
-                    atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane),
+                    muda::atomic_add(&sum_residual(local_warp_id * BANKSIZE + elected_lane),
                               r[0]);
-                    atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane + DEFAULT_BLOCKSIZE),
+                    muda::atomic_add(&sum_residual(local_warp_id * BANKSIZE + elected_lane + DEFAULT_BLOCKSIZE),
                               r[1]);
-                    atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane
+                    muda::atomic_add(&sum_residual(local_warp_id * BANKSIZE + elected_lane
                                             + 2 * DEFAULT_BLOCKSIZE),
                               r[2]);
 
@@ -1229,11 +1229,11 @@ void MASPreconditionerEngine::build_multi_level_R(muda::CDenseVectorView<Float> 
                                         "build_R: cur=%d not in level %d [%d, %d)",
                                         cur, l + 1, level_size(l + 1).y, level_size(l + 2).y);
 
-                            atomicAdd(&(multi_lr(cur)[0]),
+                            muda::atomic_add(&(multi_lr(cur)[0]),
                                       sum_residual(threadIdx.x));
-                            atomicAdd(&(multi_lr(cur)[1]),
+                            muda::atomic_add(&(multi_lr(cur)[1]),
                                       sum_residual(threadIdx.x + DEFAULT_BLOCKSIZE));
-                            atomicAdd(&(multi_lr(cur)[2]),
+                            muda::atomic_add(&(multi_lr(cur)[2]),
                                       sum_residual(threadIdx.x + DEFAULT_BLOCKSIZE * 2));
                         }
                     }
@@ -1305,9 +1305,9 @@ void MASPreconditionerEngine::schwarz_local_solve(muda::CVarView<IndexT> converg
 
                 if((threadIdx.x % BANKSIZE) == 0)
                 {
-                    atomicAdd(&(multi_lz(vert_row).x), result[0]);
-                    atomicAdd(&(multi_lz(vert_row).y), result[1]);
-                    atomicAdd(&(multi_lz(vert_row).z), result[2]);
+                    muda::atomic_add(&(multi_lz(vert_row).x), result[0]);
+                    muda::atomic_add(&(multi_lz(vert_row).y), result[1]);
+                    muda::atomic_add(&(multi_lz(vert_row).z), result[2]);
                 }
             });
 }

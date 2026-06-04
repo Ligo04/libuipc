@@ -1,4 +1,5 @@
 #include <cuda_device/builtin.h>
+#include <muda/atomic.h>
 #include <muda/launch.h>
 
 namespace uipc::info_stackless_v0_detail
@@ -43,15 +44,15 @@ MUDA_GENERIC MUDA_INLINE T mm_max(T a, T b)
 MUDA_DEVICE MUDA_INLINE float atomic_minf(float* addr, float value)
 {
     return (value >= 0) ?
-               __int_as_float(atomicMin((int*)addr, __float_as_int(value))) :
-               __uint_as_float(atomicMax((unsigned int*)addr, __float_as_uint(value)));
+               __int_as_float(muda::atomic_min((int*)addr, __float_as_int(value))) :
+               __uint_as_float(muda::atomic_max((unsigned int*)addr, __float_as_uint(value)));
 }
 
 MUDA_DEVICE MUDA_INLINE float atomic_maxf(float* addr, float value)
 {
     return (value >= 0) ?
-               __int_as_float(atomicMax((int*)addr, __float_as_int(value))) :
-               __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
+               __int_as_float(muda::atomic_max((int*)addr, __float_as_int(value))) :
+               __uint_as_float(muda::atomic_min((unsigned int*)addr, __float_as_uint(value)));
 }
 
 MUDA_GENERIC MUDA_INLINE uint expand_bits(uint v)
@@ -323,17 +324,17 @@ inline void InfoStacklessBVHV0::Impl::buildIntNodes(int size)
                 {
                     _tks_rc(cur)      = idx;
                     _tks_range_y(cur) = idx;
-                    atomicOr(&_tks_mark(cur), 0x00000002);
+                    muda::atomic_or(&_tks_mark(cur), 0x00000002u);
                 }
                 else
                 {
                     _tks_lc(cur)      = idx;
                     _tks_range_x(cur) = idx;
-                    atomicOr(&_tks_mark(cur), 0x00000001);
+                    muda::atomic_or(&_tks_mark(cur), 0x00000001u);
                 }
                 __threadfence();
 
-                while(atomicAdd(&_flag(cur), 1) == 1)
+                while(muda::atomic_add(&_flag(cur), 1u) == 1)
                 {
                     int      chl = _tks_lc(cur);
                     int      chr = _tks_rc(cur);
@@ -373,14 +374,14 @@ inline void InfoStacklessBVHV0::Impl::buildIntNodes(int size)
                     {
                         _tks_rc(par)      = cur;
                         _tks_range_y(par) = r;
-                        atomicAnd(&_tks_mark(par), 0xFFFFFFFD);
+                        muda::atomic_and(&_tks_mark(par), 0xFFFFFFFDu);
                         _tks_mark(cur) |= 0x00000004;
                     }
                     else
                     {
                         _tks_lc(par)      = cur;
                         _tks_range_x(par) = l + 1;
-                        atomicAnd(&_tks_mark(par), 0xFFFFFFFE);
+                        muda::atomic_and(&_tks_mark(par), 0xFFFFFFFEu);
                         _tks_mark(cur) &= 0xFFFFFFFB;
                     }
                     __threadfence();
@@ -623,7 +624,7 @@ void InfoStacklessBVHV0::Impl::stacklessSelf(NodeCull           node_cull,
                                     auto pair = ordered_pair(idx, _lvs_idx(st - intSize));
                                     if(pair_pred(pair.x, pair.y))
                                     {
-                                        int sidx = atomicAdd(&shared_counter, 1);
+                                        int sidx = muda::atomic_add(&shared_counter, 1);
                                         if(sidx >= MAX_RES_PER_BLOCK)
                                             break;
                                         shared_res[sidx] = pair;
@@ -639,7 +640,7 @@ void InfoStacklessBVHV0::Impl::stacklessSelf(NodeCull           node_cull,
                     __syncthreads();
                     int total = min(shared_counter, MAX_RES_PER_BLOCK);
                     if(threadIdx.x == 0)
-                        shared_global_idx = atomicAdd(resCounter.data(), total);
+                        shared_global_idx = muda::atomic_add(resCounter.data(), total);
                     __syncthreads();
                     int gidx = shared_global_idx;
                     if(threadIdx.x == 0)
@@ -726,7 +727,7 @@ void InfoStacklessBVHV0::Impl::stacklessOther(NodeCull node_cull,
                                 auto pair = int2{idx, _lvs_idx(st - intSize)};
                                 if(pair_pred(pair.x, pair.y))
                                 {
-                                    int sidx = atomicAdd(&shared_counter, 1);
+                                    int sidx = muda::atomic_add(&shared_counter, 1);
                                     if(sidx >= MAX_RES_PER_BLOCK)
                                         break;
                                     shared_res[sidx] = pair;
@@ -742,7 +743,7 @@ void InfoStacklessBVHV0::Impl::stacklessOther(NodeCull node_cull,
                     __syncthreads();
                     int total = min(shared_counter, MAX_RES_PER_BLOCK);
                     if(threadIdx.x == 0)
-                        shared_global_idx = atomicAdd(resCounter.data(), total);
+                        shared_global_idx = muda::atomic_add(resCounter.data(), total);
                     __syncthreads();
                     int gidx = shared_global_idx;
                     if(threadIdx.x == 0)
