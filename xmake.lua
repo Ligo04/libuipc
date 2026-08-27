@@ -1,5 +1,8 @@
 set_xmakever("3.0.5")
 
+-- Project-local package recipes that have not reached xmake-repo yet.
+add_repositories("libuipc-packages xmake/repository", {rootdir = os.scriptdir()})
+
 option("pybind", {default = false, description = "Build pyuipc"})
 option("examples", {default = true})
 option("tests", {default = true})

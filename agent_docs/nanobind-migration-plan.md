@@ -1,10 +1,13 @@
 # pybind11 到 nanobind 迁移方案
 
-状态：仅进行了源代码与一手文档调研。为编写本报告，未安装任何依赖，
-也未运行配置、构建、导入、测试、wheel 构建或运行时命令。
+状态：已完成阶段 0 的 XMake 依赖封装第一步。仓库内已经加入
+`nanobind 3.0.0` 本地包配方，并在 Linux x86_64、XMake 3.1.1、
+CPython 3.13 环境中通过隔离探针完成干净安装、编译、链接和导入验证。
+产品绑定仍使用 pybind11；Windows、CMake、stub、产品扩展和 wheel
+尚未验证。
 
-调研基线：分支 `codex/migrate-pybind-to-nanobind`，提交
-`09c46cceba8ace6fb924ba7d9e8012080c4670b1`，日期 2026-08-27。
+调研与实施基线：分支 `codex/migrate-pybind-to-nanobind`，提交
+`428f844caed3013919ebb9ea7d4f4268a3cab7ff`，日期 2026-08-27。
 
 ## 建议
 
@@ -42,6 +45,7 @@ Linux 和 Windows 上构建 CPython 3.10-3.14 wheel
 |---|---:|---|
 | nanobind 上游更新日志 | 3.0.0 | 本次迁移的目标 API；包含 API 破坏性变更，要求 Python >=3.10。 |
 | 官方 `xmake-repo` 的 `dev` 分支 nanobind 配方 | 2.12.0 | 直接使用官方 `add_requires("nanobind 3.0.0")` 暂时无法解析到带校验和的 3.0.0 配方。 |
+| 本仓库 XMake overlay | 3.0.0 | 精确标签和 SHA-256 已写入本地配方；Linux 隔离探针已验证。 |
 
 依据：上游带标签的更新日志明确列出了 3.0.0 及其 API 变更
 （[nanobind v3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）；
@@ -63,9 +67,12 @@ Linux 和 Windows 上构建 CPython 3.10-3.14 wheel
    `find_package(nanobind 3.0.0 EXACT CONFIG REQUIRED)`，随后调用
    `nanobind_add_module`。现有对应的 pybind 发现逻辑位于
    `src/pybind/CMakeLists.txt:1-22`。
-3. 增加一个仓库内 XMake 包 overlay，其中包含带校验和的 `v3.0.0`
-   配方和 port；通过 `system = false` 精确要求 `nanobind 3.0.0`，
-   并启用 XMake 包锁定策略。XMake 官方支持项目本地包仓库和依赖锁，
+3. 仓库内 XMake 包 overlay 已放在
+   `xmake/repository/packages/n/nanobind`，根 `xmake.lua` 已注册
+   `libuipc-packages` 本地仓库。配方包含带 SHA-256 的 `v3.0.0` 和适配后的
+   port。产品绑定切换时，通过 `system = false` 精确要求
+   `nanobind 3.0.0`，并启用 XMake 包锁定策略。XMake 官方支持项目本地
+   包仓库和依赖锁，
    也明确说明禁用校验和会带来完整性与包不完整风险
    （[XMake 包管理指南](https://xmake.io/guide/package-management/using-official-packages.html)）。
    发布构建不得使用 `{verify = false}`。只有在 `xmake-repo` 发布相同的
@@ -76,11 +83,12 @@ Linux 和 Windows 上构建 CPython 3.10-3.14 wheel
    CMake 与 XMake 的依赖和版本固定保持同步
    （`agent_docs/rule.md:48-58`）。
 
-XMake overlay 是一个**阶段 0 构建可行性门槛**，不能预设其已经可用：
-nanobind 3.0.0 增加了 split mode 并修改了多处 API，而所检查的官方 port
-目前只针对 2.12.0。在转换完整绑定树之前，应在 Linux 和 Windows 上验证
-该 overlay，并使用仓库声明的最低 XMake 3.0.5（`xmake.lua:1`）运行一个
-隔离的最小探针工程。
+XMake overlay 是一个**阶段 0 构建可行性门槛**。当前 Linux 探针已经证明：
+本地仓库能解析精确的 3.0.0，port 能编译 nanobind 核心，CPython 扩展能
+链接和导入，并且扩展的 ELF `NEEDED` 项不包含 `libpython`。这还不是完整的
+跨平台验收；在转换完整绑定树之前，仍应在 Windows 上验证该 overlay，
+仓库声明的最低 XMake 3.0.5（`xmake.lua:1`）兼容性应由 CI 矩阵持续覆盖；
+本次本地开发与验收按工作区最新 XMake 执行。
 
 ## 当前仓库范围
 
@@ -162,10 +170,19 @@ Nanobind 不支持 pybind11 风格的多重继承
 
 ### XMake 路径
 
-XMake 必须链接已编译的 nanobind 包，不能只修改
+本地配方复制自 `xmake-repo` 的
+`e063b2eb1633b9c5d37fbfe9a51b39b5115883fa`，并增加 3.0.0 标签校验和。
+port 针对 3.0.0 增加 `NB_BUILD` 和非 Windows 的
+`-fno-strict-aliasing`，同时排除只能用于 split mode 的
+`nb_backend.cpp`；通配源文件仍会纳入 3.0.0 新增的 `nb_datetime.cpp`。
+隔离探针执行过清理包缓存后的完整重装，确认这些定义、选项和源文件实际
+进入编译命令。仓库规则要求禁用 ccache，因此 port 显式设置了
+`build.ccache=false`。
+
+产品切换时，XMake 必须链接这个已编译的 nanobind 包，不能只修改
 `src/pybind/xmake.lua:1-29` 中的头文件。保留 Python 扩展后缀规则和运行时库
-复制逻辑（`src/pybind/xmake.lua:77-139`）。在 Windows 和 Linux 上验证
-本地 3.0.0 overlay 是否完整传递其 port 中的所有平台定义和链接选项。
+复制逻辑（`src/pybind/xmake.lua:77-139`）。Linux 的包级验证已经通过，
+Windows 平台定义和链接选项仍需验证。
 
 XMake 的 stub 在 wheel 打包阶段单独生成：`xmake/pack.lua` 当前会安装
 扩展、按需安装 `mypy`/NumPy，并调用 `scripts/stubgen.py`
@@ -204,9 +221,11 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 
 ## 分阶段实施与门槛
 
-1. **阶段 0——冻结行为并验证两套构建。** 从当前 pybind11 扩展记录
-   API/stub 清单。为 ndarray 转换/视图所有权、共享所有权、trampoline
-   回调、JSON、线程回调、异常、模块别名和解释器正常退出增加聚焦测试。
+1. **阶段 0（进行中）——冻结行为并验证两套构建。** Linux XMake 隔离
+   探针已经通过；Windows、CMake 和行为基线仍待完成。从当前 pybind11
+   扩展记录 API/stub 清单。为 ndarray 转换/视图所有权、共享所有权、
+   trampoline 回调、JSON、线程回调、异常、模块别名和解释器正常退出增加
+   聚焦测试。
    在 Linux 和 Windows 上，分别用 CMake 与本地 XMake overlay 构建一个
    不属于产品代码的最小 nanobind 3.0.0 探针。门槛：两套构建系统都使用
    精确依赖版本，且探针可以导入。
@@ -276,8 +295,9 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 
 ## 主要残余风险
 
-1. **XMake 的 3.0.0 打包尚未验证。** 官方配方滞后是必须通过的迁移门槛，
-   不能因此在 XMake 中静默构建 2.12.0。
+1. **XMake 的 3.0.0 打包仅完成 Linux 验证。** 官方配方滞后已经由仓库内
+   精确版本 overlay 处理，但 Windows 仍是迁移门槛；产品依赖也尚未切换，
+   不能静默回退到 2.12.0。
 2. **数组语义可能无声改变。** 字节 stride 与元素 stride、转换默认值、
    只读标志和 owner 对象都需要运行时断言及负向测试。
 3. **移除 holder 会改变生命周期语义。** 编译成功不能证明
@@ -287,8 +307,9 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
    子进程退出测试。
 5. **CMake 与 XMake 的 stub 布局可能独立退化。** 应将生成文件清单和
    类型检查器输出视为发布产物，而不是偶然生成的构建副产品。
-6. **本报告没有运行构建。** nanobind 模板的精确写法、平台选项、3.0.0
-   XMake overlay 以及所有运行时语义，仍须通过上述分阶段门槛验证。
+6. **尚未运行产品构建。** 本次只构建并导入了隔离的最小 XMake 探针；
+   CMake、完整 `pyuipc`、stub、wheel、Windows、GPU 和所有产品运行时语义，
+   仍须通过上述分阶段门槛验证。
 
 ## 一手资料
 
@@ -310,7 +331,7 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 - [pybind11 NumPy 指南](https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html)
 - [pybind11 智能指针指南](https://pybind11.readthedocs.io/en/stable/advanced/smart_ptrs.html)
 
-## 已完成的静态验证
+## 已完成的验证
 
 - 编写报告前检查了 Git 分支、提交和工作区状态。
 - 阅读了两套绑定构建描述、两条 stub 生成/打包路径、根目录和开发环境的
@@ -320,5 +341,14 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 - 使用 `find` 和 `rg` 统计了绑定文件和高风险 API token。
 - 将每项外部迁移结论与 nanobind 3.0.0 上游文档/源码、涉及当前行为时的
   pybind11 上游文档，以及 XMake 官方仓库/文档进行了交叉核对。
-- **未执行** fetch、切换分支、安装依赖、配置、构建、导入扩展、生成 stub、
-  运行测试、构建 wheel 或运行模拟器/运行时验证。
+- 从上游 `v3.0.0` 标签归档独立计算 SHA-256，并写入本地配方。
+- 清除本次安装的 nanobind 包缓存后，使用工作区最新的
+  XMake 3.1.1+HEAD.3ba37a0 和本地 overlay 重新安装并构建
+  nanobind 3.0.0；编译命令包含 `NB_BUILD`、`NB_COMPACT_ASSERTIONS` 和
+  `-fno-strict-aliasing`，编译了 `nb_datetime.cpp`，未编译
+  `nb_backend.cpp`。
+- 使用 XMake `python.module` 构建最小 CPython 3.13 扩展，导入后函数调用
+  返回预期值；`ldd`/`readelf` 确认扩展不依赖 `libpython`。
+- 根工程 `xmake show -l targets` 和 `git diff --check` 通过。
+- **未执行** 产品绑定切换、完整产品配置/构建、stub、wheel、Windows、
+  CMake、pytest、GPU 或模拟器验证。
