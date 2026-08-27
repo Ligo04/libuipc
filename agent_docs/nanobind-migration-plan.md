@@ -7,7 +7,9 @@ XMake `3.1.1+HEAD.3ba37a0`、CPython 3.13 环境中完成 debug/release 编译�
 测试集（80 项通过、54 项按标记排除）以及 ndarray 所有权、NumPy 标量、
 Buffer 回调和 Python trampoline/shared_ptr 聚焦探针。CMake 描述与
 `pyproject.toml` 已静态同步到同一精确版本，但本轮按要求没有执行 CMake；
-Windows、CUDA、stub、wheel 和跨 Python 版本矩阵仍未验证。
+此外，XMake 已使用项目 `.venv` 的 CPython 3.12.3 生成带 10 个递归 stub 的
+CPU release wheel；解包后的 wheel 可直接导入并通过同一测试集。Windows、
+CUDA、CMake wheel 和完整 CPython 3.10-3.14 矩阵仍未验证。
 
 调研与实施基线：分支 `codex/migrate-pybind-to-nanobind`，提交
 `428f844caed3013919ebb9ea7d4f4268a3cab7ff`，日期 2026-08-27。
@@ -92,6 +94,14 @@ XMake overlay 是一个**阶段 0 构建可行性门槛**。当前 Linux 探针�
 跨平台验收；在转换完整绑定树之前，仍应在 Windows 上验证该 overlay，
 仓库声明的最低 XMake 3.0.5（`xmake.lua:1`）兼容性应由 CI 矩阵持续覆盖；
 本次本地开发与验收按工作区最新 XMake 执行。
+
+`libnanobind` 的静态核心依赖 CPython ABI，因此 overlay 将
+`python_version` 和 `python_system` 声明为包配置，并由产品目标显式传入。
+这些配置进入 XMake 包哈希，防止为一个 Python 次版本编译的静态库被另一个
+次版本复用。CPython 3.12 wheel 验证曾准确捕获这种错误复用：旧缓存的
+manifest 指向 Python 3.14.3，导致 CPython 3.12 导入时报缺少
+`PyThreadState_GetUnchecked`；修复后生成独立包哈希，manifest 与目标均指向
+3.12.3，wheel 导入和测试恢复正常。
 
 ## 当前仓库范围
 
@@ -299,8 +309,8 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 ## 主要残余风险
 
 1. **XMake 的 3.0.0 打包仅完成 Linux 验证。** 官方配方滞后已经由仓库内
-   精确版本 overlay 处理，但 Windows 仍是迁移门槛；产品依赖也尚未切换，
-   不能静默回退到 2.12.0。
+   精确版本 overlay 处理，产品依赖也已切换并按 Python ABI 区分缓存；
+   Windows 仍是迁移门槛，不能静默回退到 2.12.0。
 2. **数组语义可能无声改变。** 字节 stride 与元素 stride、转换默认值、
    只读标志和 owner 对象都需要运行时断言及负向测试。
 3. **移除 holder 会改变生命周期语义。** 编译成功不能证明
@@ -310,9 +320,9 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
    子进程退出测试。
 5. **CMake 与 XMake 的 stub 布局可能独立退化。** 应将生成文件清单和
    类型检查器输出视为发布产物，而不是偶然生成的构建副产品。
-6. **尚未运行产品构建。** 本次只构建并导入了隔离的最小 XMake 探针；
-   CMake、完整 `pyuipc`、stub、wheel、Windows、GPU 和所有产品运行时语义，
-   仍须通过上述分阶段门槛验证。
+6. **产品验证仍未覆盖完整发布矩阵。** Linux XMake 产品构建、递归 stub、
+   CPython 3.12 wheel 导入和默认可移植测试已通过；CMake、Windows、GPU、
+   其他 Python 次版本和所有产品运行时语义仍须通过上述分阶段门槛验证。
 
 ## 一手资料
 
@@ -353,5 +363,10 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 - 使用 XMake `python.module` 构建最小 CPython 3.13 扩展，导入后函数调用
   返回预期值；`ldd`/`readelf` 确认扩展不依赖 `libpython`。
 - 根工程 `xmake show -l targets` 和 `git diff --check` 通过。
-- **未执行** 产品绑定切换、完整产品配置/构建、stub、wheel、Windows、
-  CMake、pytest、GPU 或模拟器验证。
+- 完成 Linux XMake 产品绑定切换及 CPython 3.13 debug/release 构建；默认
+  可移植测试集为 80 项通过、54 项按标记排除。
+- 使用项目 `.venv` 的 CPython 3.12.3 构建并解包 XMake wheel；wheel 可在
+  不设置 `LD_LIBRARY_PATH` 的情况下导入，包含 10 个递归 stub，并通过默认
+  可移植测试集。
+- **未执行** CMake、Windows、CUDA/GPU、模拟器或完整 CPython 3.10-3.14
+  wheel 矩阵验证。

@@ -10,10 +10,17 @@
 > 3.13. The staged release package passed the default portable Python suite
 > (80 passed, 54 deselected) plus focused ndarray, NumPy scalar, Buffer callback,
 > and Python-engine trampoline/shared-pointer probes. ELF inspection shows no
-> dynamic dependency on libpython or nanobind. CMake and `pyproject.toml` were
-> statically synchronized to nanobind 3.0.0, but CMake was intentionally not
-> run in this validation round. Windows, CUDA, stubs, wheels, and the full
-> CPython 3.10-3.14 matrix remain open.
+> dynamic dependency on libpython or nanobind. A second XMake release build used
+> the project `.venv` (CPython 3.12.3) and produced an importable CPU wheel with
+> ten recursive stub files; the unpacked wheel passed the same 80-test portable
+> suite. The nanobind package now keys its cache by Python version and system
+> selection after this run caught a Python 3.14 static core being reused in a
+> CPython 3.12 wheel. Under identical inputs, the wheel shrank from 6,199,419 to
+> 5,217,296 bytes (-15.84%), while the extension shrank from 6,204,864 to
+> 2,746,880 bytes (-55.73%). CMake and `pyproject.toml` were statically
+> synchronized to nanobind 3.0.0, but CMake was intentionally not run in this
+> validation round. Windows, CUDA, CMake wheels, and the full CPython 3.10-3.14
+> matrix remain open.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and

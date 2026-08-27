@@ -15,6 +15,17 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertEqual(check_constitution_api(ROOT), [])
         self.assertEqual(check_workflow_pins(ROOT), [])
 
+    def test_nanobind_package_hash_tracks_python_abi(self) -> None:
+        recipe = (
+            ROOT / "xmake/repository/packages/n/nanobind/xmake.lua"
+        ).read_text(encoding="utf-8")
+        target = (ROOT / "src/pybind/xmake.lua").read_text(encoding="utf-8")
+
+        for config in ("python_version", "python_system"):
+            self.assertIn(f'add_configs("{config}"', recipe)
+            self.assertIn(f'package:config("{config}")', recipe)
+            self.assertIn(f'{config} = get_config("{config}")', target)
+
     def test_zero_byte_detector_is_scoped_and_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

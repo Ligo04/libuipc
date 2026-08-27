@@ -1,4 +1,11 @@
-add_requires("nanobind 3.0.0", {system = false, configs = {shared = false}})
+add_requires("nanobind 3.0.0", {
+    system = false,
+    configs = {
+        shared = false,
+        python_version = get_config("python_version"),
+        python_system = get_config("python_system")
+    }
+})
 add_requires("python")
 add_requireconfs("python", "**.python", {
     override = true,
