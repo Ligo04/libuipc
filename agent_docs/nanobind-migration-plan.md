@@ -1,192 +1,176 @@
-# pybind11 to nanobind migration plan
+# pybind11 到 nanobind 迁移方案
 
-Status: source and primary-documentation research only. No dependency was
-installed and no configure, build, import, test, wheel, or runtime command was
-run for this report.
+状态：仅进行了源代码与一手文档调研。为编写本报告，未安装任何依赖，
+也未运行配置、构建、导入、测试、wheel 构建或运行时命令。
 
-Baseline inspected: branch `codex/migrate-pybind-to-nanobind`, commit
-`09c46cceba8ace6fb924ba7d9e8012080c4670b1`, 2026-08-27.
+调研基线：分支 `codex/migrate-pybind-to-nanobind`，提交
+`09c46cceba8ace6fb924ba7d9e8012080c4670b1`，日期 2026-08-27。
 
-## Recommendation
+## 建议
 
-Migrate the existing `pyuipc` extension to **nanobind 3.0.0**, while preserving
-the Python distribution name (`pyuipc`), extension name
-(`uipc._native.pyuipc`), public module layout, and Python 3.10-3.14 wheel matrix.
-Nanobind 3.0.0 is the current release line inspected for this plan; it was
-released on 2026-08-22, requires Python 3.10 or newer, and has internal ABI 22
-([3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)).
-The repository already declares Python `>=3.10, <3.15`
-(`pyproject.toml:5-15`) and builds CPython 3.10-3.14 wheels on Linux and Windows
-(`.github/workflows/python-wheels.yml:47-69`).
+建议将现有 `pyuipc` 扩展迁移到 **nanobind 3.0.0**，同时保持 Python
+发行包名称（`pyuipc`）、扩展名称（`uipc._native.pyuipc`）、公开模块布局
+以及 Python 3.10-3.14 wheel 矩阵不变。本方案调研时 nanobind 3.0.0
+是最新发布版本；该版本发布于 2026-08-22，要求 Python 3.10 或更高版本，
+内部 ABI 为 22
+（[3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）。
+本仓库已经声明 Python `>=3.10, <3.15`（`pyproject.toml:5-15`），并在
+Linux 和 Windows 上构建 CPython 3.10-3.14 wheel
+（`.github/workflows/python-wheels.yml:47-69`）。
 
-Use nanobind's conventional linked mode for the first migration:
-`nanobind_add_module(pyuipc NB_STATIC ...)`. `NB_STATIC` keeps the core runtime
-inside this single extension and is nanobind's default. Nanobind also defaults
-to size-oriented optimization for extension sources; keep that as the release
-candidate, but build a `NOMINSIZE` comparison variant before accepting any
-performance result or changing the project's optimization policy
-([CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)). Do not
-combine this migration with split mode, stable ABI, or free-threaded Python;
-those are independent packaging/ABI changes introduced or expanded in 3.0.0
-([3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst),
-[CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)).
+首次迁移使用 nanobind 的常规链接模式：
+`nanobind_add_module(pyuipc NB_STATIC ...)`。`NB_STATIC` 将核心运行时保留在
+这一个扩展内，也是 nanobind 的默认配置。Nanobind 默认还会对扩展源文件
+采用面向体积的优化；将其作为发布候选，但在接受任何性能结论或修改项目
+优化策略前，额外构建一个 `NOMINSIZE` 对照版本
+（[CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)）。
+本次迁移不要同时引入 split mode、Stable ABI 或 free-threaded Python；
+这些是 3.0.0 新增或扩展的独立打包/ABI 变更
+（[3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)、
+[CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)）。
 
-The migration should be staged, but the product extension should switch
-frameworks atomically after the central adapters are ready. Nanobind and
-pybind11 may coexist in one extension during a spike, but their registered
-types are not mutually interchangeable; every type that crosses a binding
-boundary must move together
-([porting guide](https://nanobind.readthedocs.io/en/latest/porting.html#porting-one-binding-at-a-time)).
+迁移过程应当分阶段实施，但中央适配器准备好后，产品扩展应一次性切换
+绑定框架。试验阶段可以让 nanobind 与 pybind11 共存于同一个扩展中，
+但两者注册的类型不能相互交换；所有跨越绑定边界的类型必须一起迁移
+（[迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html#porting-one-binding-at-a-time)）。
 
-## Version decision and CMake/XMake alignment
+## 版本决策与 CMake/XMake 对齐
 
-There is a release-channel mismatch that must be resolved before source
-conversion:
+在转换源代码之前，必须先解决以下发布渠道不一致问题：
 
-| Source checked on 2026-08-27 | Highest version | Consequence |
+| 2026-08-27 检查的来源 | 最高版本 | 影响 |
 |---|---:|---|
-| nanobind upstream changelog | 3.0.0 | Target API for this migration; includes API breaks and Python >=3.10. |
-| official `xmake-repo` nanobind recipe on `dev` | 2.12.0 | A plain official `add_requires("nanobind 3.0.0")` cannot currently resolve a checksum-pinned 3.0.0 recipe. |
+| nanobind 上游更新日志 | 3.0.0 | 本次迁移的目标 API；包含 API 破坏性变更，要求 Python >=3.10。 |
+| 官方 `xmake-repo` 的 `dev` 分支 nanobind 配方 | 2.12.0 | 直接使用官方 `add_requires("nanobind 3.0.0")` 暂时无法解析到带校验和的 3.0.0 配方。 |
 
-Evidence: upstream's tagged changelog identifies 3.0.0 and its API changes
-([nanobind v3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst));
-the official recipe lists `v2.12.0` as its newest entry
-([xmake-repo recipe](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/xmake.lua#L1-L16)).
-The official XMake port builds a compiled `nanobind` library from nanobind's
-`src/*.cpp` and exports its headers, rather than treating nanobind as a
-header-only dependency
-([xmake-repo port](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/port/xmake.lua#L26-L54)).
-That matches nanobind's own warning that an extension needs both a module and a
-compiled library component with platform-specific compile/link handling
-([nanobind CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)).
+依据：上游带标签的更新日志明确列出了 3.0.0 及其 API 变更
+（[nanobind v3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）；
+官方配方当前最新条目为 `v2.12.0`
+（[xmake-repo 配方](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/xmake.lua#L1-L16)）。
+官方 XMake port 会从 nanobind 的 `src/*.cpp` 构建一个已编译的
+`nanobind` 库并导出其头文件，而不是把 nanobind 当作纯头文件依赖
+（[xmake-repo port](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/port/xmake.lua#L26-L54)）。
+这与 nanobind 自身的说明一致：一个扩展既需要模块，也需要已编译的库组件，
+并且要处理平台相关的编译与链接选项
+（[nanobind CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)）。
 
-Recommended dependency contract:
+建议采用以下依赖契约：
 
-1. Pin `nanobind==3.0.0` exactly in root `pyproject.toml` under
-   `[build-system].requires`. The current isolated build requirements contain
-   only scikit-build-core and setuptools-scm (`pyproject.toml:1-3`).
-2. Make CMake import nanobind from the selected Python interpreter and use
-   `find_package(nanobind 3.0.0 EXACT CONFIG REQUIRED)` followed by
-   `nanobind_add_module`. The
-   current equivalent pybind discovery is in `src/pybind/CMakeLists.txt:1-22`.
-3. Add a repository-local XMake package overlay containing a checksum-pinned
-   `v3.0.0` recipe and port, require exactly `nanobind 3.0.0` with
-   `system = false`, and enable XMake's package lock policy. XMake officially
-   supports project-local package repositories and dependency locks; it also
-   documents that disabling checksum verification carries integrity and
-   incomplete-package risk
-   ([XMake package guide](https://xmake.io/guide/package-management/using-official-packages.html)).
-   Do not use `{verify = false}` for the release build. Replace the overlay with
-   the official recipe only after `xmake-repo` publishes and CI validates the
-   same 3.0.0 recipe.
-4. Add a repository-contract check that extracts the version from the root
-   build requirement, CMake configure check, XMake exact requirement, and
-   overlay recipe, and fails on any mismatch. This is deliberately redundant:
-   it makes drift visible in both build systems. The owner rule already requires
-   CMake and XMake dependencies and pins to stay synchronized
-   (`agent_docs/rule.md:48-58`).
+1. 在根目录 `pyproject.toml` 的 `[build-system].requires` 中精确固定
+   `nanobind==3.0.0`。当前隔离构建依赖只有 scikit-build-core 和
+   setuptools-scm（`pyproject.toml:1-3`）。
+2. 让 CMake 从选定的 Python 解释器导入 nanobind，使用
+   `find_package(nanobind 3.0.0 EXACT CONFIG REQUIRED)`，随后调用
+   `nanobind_add_module`。现有对应的 pybind 发现逻辑位于
+   `src/pybind/CMakeLists.txt:1-22`。
+3. 增加一个仓库内 XMake 包 overlay，其中包含带校验和的 `v3.0.0`
+   配方和 port；通过 `system = false` 精确要求 `nanobind 3.0.0`，
+   并启用 XMake 包锁定策略。XMake 官方支持项目本地包仓库和依赖锁，
+   也明确说明禁用校验和会带来完整性与包不完整风险
+   （[XMake 包管理指南](https://xmake.io/guide/package-management/using-official-packages.html)）。
+   发布构建不得使用 `{verify = false}`。只有在 `xmake-repo` 发布相同的
+   3.0.0 配方并通过 CI 验证后，才用官方配方替换该 overlay。
+4. 增加一个仓库契约检查，从根构建依赖、CMake 配置检查、XMake 精确版本
+   要求和 overlay 配方中提取版本，发现任何不一致时直接失败。这里有意
+   保留冗余，以便两套构建系统中的版本漂移都能被发现。项目规则已经要求
+   CMake 与 XMake 的依赖和版本固定保持同步
+   （`agent_docs/rule.md:48-58`）。
 
-The XMake overlay is a **Stage 0 build-feasibility gate**, not assumed working:
-nanobind 3.0.0 adds split mode and changes several APIs, while the inspected
-official port is currently exercised against 2.12.0. Validate the overlay on
-Linux and Windows, including an isolated probe with the repository's declared
-minimum XMake 3.0.5 (`xmake.lua:1`), before converting the full binding tree.
+XMake overlay 是一个**阶段 0 构建可行性门槛**，不能预设其已经可用：
+nanobind 3.0.0 增加了 split mode 并修改了多处 API，而所检查的官方 port
+目前只针对 2.12.0。在转换完整绑定树之前，应在 Linux 和 Windows 上验证
+该 overlay，并使用仓库声明的最低 XMake 3.0.5（`xmake.lua:1`）运行一个
+隔离的最小探针工程。
 
-## Current repository surface
+## 当前仓库范围
 
-The native Python surface is large: a static scan found 216 C++ binding files
-(106 `.cpp`, 110 `.h`, 10,484 lines), 130 `py::class_` declaration lines, 25
-class declarations containing the project `S<T>` shared-pointer holder, 137
-`py::array_t` occurrences, 48 explicit return-value policies, eight trampoline
-macros, and ten references to pybind11 internals. These counts were produced by
-`find`/`rg` over `src/pybind/pyuipc/**/*.{cpp,h}` and should be regenerated on
-the implementation branch before mechanical conversion.
+原生 Python 绑定规模较大：静态扫描发现 216 个 C++ 绑定文件
+（106 个 `.cpp`、110 个 `.h`，共 10,484 行）、130 行 `py::class_`
+声明、25 个包含项目 `S<T>` 共享指针 holder 的类声明、137 处
+`py::array_t`、48 个显式返回值策略、8 个 trampoline 宏，以及 10 处
+对 pybind11 内部实现的引用。这些统计由 `find`/`rg` 扫描
+`src/pybind/pyuipc/**/*.{cpp,h}` 得到；开始机械转换前，应在实际实现分支
+重新生成统计结果。
 
-The important concentration points are:
+需要重点处理的位置如下：
 
-- The common header imports pybind11 and defines the global alias used by the
-  whole tree (`src/pybind/pyuipc/pyuipc.h:1-14`).
-- The module entry point creates eight submodules and exposes top-level aliases
-  (`src/pybind/pyuipc/module.cpp:50-63`, `:108-162`). Preserve this registration
-  order because early types are registered before consumers (`:114-144`).
-- CMake discovers pybind11, creates `pyuipc`, and runs a post-build package/stub
-  script (`src/pybind/CMakeLists.txt:1-22`,
-  `src/pybind/pyuipc/CMakeLists.txt:1-20`, `:65-100`).
-- XMake currently treats pybind11 as a header dependency, builds a shared
-  extension, and copies the extension/runtime libraries after build
-  (`src/pybind/xmake.lua:1-29`, `:77-112`). Its separate wheel packer installs
-  the target and runs mypy stubgen (`xmake/pack.lua:21-71`).
-- The public package imports `uipc._native.pyuipc`, initializes the native
-  library, and re-exports its symbols (`python/src/uipc/__init__.py:1-26`). The
-  wrapper modules are one-line re-exports from native submodules, for example
-  `python/src/uipc/core.py:1` and `python/src/uipc/geometry.py:1`.
-- There are 21 `python/tests/test_*.py` files with 89 static test-function
-  matches. The wheel workflow already runs the no-GPU smoke test and portable
-  pytest suite for every supported CPython/OS pair
-  (`.github/workflows/python-wheels.yml:132-168`).
+- 公共头文件导入 pybind11，并定义整棵绑定树使用的全局别名
+  （`src/pybind/pyuipc/pyuipc.h:1-14`）。
+- 模块入口创建 8 个子模块并暴露顶层别名
+  （`src/pybind/pyuipc/module.cpp:50-63`、`:108-162`）。必须保留注册顺序，
+  因为前面的类型会先于其使用方完成注册（`:114-144`）。
+- CMake 发现 pybind11、创建 `pyuipc`，并运行构建后的包整理/stub 脚本
+  （`src/pybind/CMakeLists.txt:1-22`、
+  `src/pybind/pyuipc/CMakeLists.txt:1-20`、`:65-100`）。
+- XMake 当前把 pybind11 当作头文件依赖，构建共享扩展，并在构建后复制
+  扩展及运行时库（`src/pybind/xmake.lua:1-29`、`:77-112`）。其独立的
+  wheel 打包器会安装目标并运行 mypy stubgen（`xmake/pack.lua:21-71`）。
+- 公开包导入 `uipc._native.pyuipc`、初始化原生库并重新导出其中的符号
+  （`python/src/uipc/__init__.py:1-26`）。包装模块只是从原生子模块执行
+  单行重新导出，例如 `python/src/uipc/core.py:1` 和
+  `python/src/uipc/geometry.py:1`。
+- `python/tests/test_*.py` 下共有 21 个文件，静态匹配到 89 个测试函数。
+  wheel 工作流已经针对每组受支持的 CPython/操作系统组合运行无 GPU
+  smoke test 和可移植 pytest 测试集
+  （`.github/workflows/python-wheels.yml:132-168`）。
 
-## Required source migrations
+## 必须实施的源代码迁移
 
-| Current construct and local evidence | Required nanobind treatment | Risk |
+| 当前结构与本地依据 | 所需 nanobind 处理 | 风险 |
 |---|---|---|
-| `PYBIND11_MODULE`, `py::module`, `py::register_exception`, and `py::module::import` (`src/pybind/pyuipc/module.cpp:41-63`, `src/pybind/pyuipc/common/json.h:107-118`) | Use `NB_MODULE`, `nb::module_`, `nb::exception<T>`, and `nb::module_::import_`. The official rename table covers these API families ([porting guide](https://nanobind.readthedocs.io/en/latest/porting.html)). | Medium, because every initializer currently accepts `py::module&`. |
-| `g_top_module = &m` and `top_module()` returns a wrapper reference (`src/pybind/pyuipc/module.cpp:41-52`) | Do not retain `&m`. In nanobind 3.0.0, `NB_MODULE` passes its `module_` wrapper by value, so the address is invalid after module initialization ([tagged macro source](https://github.com/wjakob/nanobind/blob/v3.0.0/include/nanobind/nb_defs.h#L201-L236)). Store a borrowed raw `PyObject *` and return a fresh borrowed `nb::module_` by value, or pass the top module explicitly. | Critical lifetime bug if mechanically renamed. |
-| Holder-bearing classes such as `py::class_<PyIEngine, PyIEngine_, IEngine, S<PyIEngine>>` (`src/pybind/pyuipc/core/engine.cpp:164-171`) and other `S<T>` declarations | Remove holder template arguments. Include `nanobind/stl/shared_ptr.h` wherever APIs exchange `std::shared_ptr`; audit raw-pointer calls to `shared_from_this()`. Nanobind deliberately removed holders and has different `enable_shared_from_this` timing ([porting guide](https://nanobind.readthedocs.io/en/latest/porting.html#shared-pointers-and-holders), [ownership guide](https://nanobind.readthedocs.io/en/latest/ownership.html)). | Critical ownership/identity/lifetime behavior. |
-| `py::array_t`, `py::buffer_info`, and private write-flag mutation (`src/pybind/pyuipc/as_numpy.h:14-69`, `:71-145`) | Replace the central adapter with typed `nb::ndarray` aliases for NumPy/CPU/dtype/rank/contiguity. Specify an owner for every returned view and use supported read-only annotations rather than `py::detail`. Nanobind ndarray strides count elements, while this helper currently builds byte strides ([ndarray guide](https://nanobind.readthedocs.io/en/latest/ndarray.html#dynamic-array-configurations)). | Critical data corruption, mutability, and dangling-view risk. |
-| Owning arrays created with `py::array_t(shape)` and `mutable_unchecked`, e.g. `src/pybind/pyuipc/geometry/affine_body.cpp` | Add one tested allocation helper using an owning capsule or a NumPy allocation reached through the public Python API. Nanobind's documented C++-to-Python ownership mechanism is the ndarray `owner` object/capsule ([ndarray ownership](https://nanobind.readthedocs.io/en/latest/ndarray.html#data-ownership)). | High. Do not scatter ad-hoc allocation code. |
-| JSON conversion depends on `py::detail::*_accessor` and `PYBIND11_TYPE_CASTER` (`src/pybind/pyuipc/common/json.h:143-225`) | Rewrite using public nanobind wrapper APIs and `NB_TYPE_CASTER`. Implement `from_python(handle, uint32_t flags, cleanup_list*) noexcept` and `from_cpp(..., rv_policy, cleanup_list*) noexcept`, including the documented asymmetric Python-error handling ([porting guide](https://nanobind.readthedocs.io/en/latest/porting.html#type-casters), [3.0.0 caster change](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)). | Critical; JSON is used across configuration and metadata APIs. |
-| Eight `PYBIND11_OVERRIDE_PURE` calls (`src/pybind/pyuipc/core/pyengine.h:31-90`) | Add `NB_TRAMPOLINE(PyIEngine)` to the alias class and convert to `NB_OVERRIDE_PURE`. Nanobind 3 no longer needs a trampoline slot count ([porting guide](https://nanobind.readthedocs.io/en/latest/porting.html#trampoline-classes), [3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)). | High; verify Python subclass dispatch and pure-virtual failures. |
-| Factory lambda passed to `py::init` captures Python callbacks (`src/pybind/pyuipc/backend/buffer.cpp:8-49`) | Convert to nanobind's placement-new `__init__` pattern. Explicitly test callback reference cycles, GIL acquisition, exceptions, destruction, and interpreter shutdown ([custom constructors](https://nanobind.readthedocs.io/en/latest/porting.html#custom-constructors), [reference leaks](https://nanobind.readthedocs.io/en/latest/refleaks.html)). | High. |
-| Resident-thread callback captures `py::function` and later acquires the GIL (`src/pybind/pyuipc/common/resident_thread.cpp:14-44`) | Convert wrappers/GIL guards and check guard validity before using Python during shutdown. Nanobind 3 documents that `gil_scoped_acquire` may fail when Python is finalizing ([3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)). | High concurrency/shutdown risk. |
-| `py::make_iterator(begin, end)` (`src/pybind/pyuipc/common/span.h:6-44`, `src/pybind/pyuipc/geometry/attribute_slot.cpp:40-76`) | Include `nanobind/make_iterator.h` and provide the required scope and installed iterator name ([iterator porting](https://nanobind.readthedocs.io/en/latest/porting.html#iterator-bindings)). | Medium. |
-| `.def_readwrite`, `py::return_value_policy`, `py::doc`, and `py::none`/typed wrapper mixing (`src/pybind/pyuipc/builtin/uid_info.cpp:7-20`, `src/pybind/pyuipc/geometry/attribute_slot.cpp:128-164`) | Use `.def_rw`, `nb::rv_policy`, direct doc strings, and explicit `nb::object` return types where a branch can return `None`. Audit every nullable argument because nanobind rejects `None` unless annotated or defaulted ([porting guide](https://nanobind.readthedocs.io/en/latest/porting.html#none-null-arguments), [3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)). | Medium API compatibility risk. |
-| Eigen casters are included in two external-force bindings (`src/pybind/pyuipc/constitution/affine_body_external_force.cpp:1-15`, `src/pybind/pyuipc/constitution/finite_element_external_force.cpp:1-15`) | Use `nanobind/eigen/dense.h` and verify reference/copy behavior rather than relying on include-name substitution ([Eigen guide](https://nanobind.readthedocs.io/en/latest/eigen.html)). | Medium. |
+| `PYBIND11_MODULE`、`py::module`、`py::register_exception` 和 `py::module::import`（`src/pybind/pyuipc/module.cpp:41-63`、`src/pybind/pyuipc/common/json.h:107-118`） | 使用 `NB_MODULE`、`nb::module_`、`nb::exception<T>` 和 `nb::module_::import_`。官方重命名表覆盖了这些 API 系列（[迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html)）。 | 中等，因为每个初始化器当前都接收 `py::module&`。 |
+| `g_top_module = &m`，且 `top_module()` 返回包装对象引用（`src/pybind/pyuipc/module.cpp:41-52`） | 不得保留 `&m`。在 nanobind 3.0.0 中，`NB_MODULE` 按值传入 `module_` 包装对象，因此模块初始化结束后该地址会失效（[带标签的宏源码](https://github.com/wjakob/nanobind/blob/v3.0.0/include/nanobind/nb_defs.h#L201-L236)）。应保存借用的原始 `PyObject *`，并按值返回新构造的借用 `nb::module_`；或者显式传递顶层模块。 | 如果只机械重命名，会产生严重生命周期错误。 |
+| 带 holder 的类，例如 `py::class_<PyIEngine, PyIEngine_, IEngine, S<PyIEngine>>`（`src/pybind/pyuipc/core/engine.cpp:164-171`）以及其他 `S<T>` 声明 | 移除 holder 模板参数。凡 API 交换 `std::shared_ptr` 的位置都应包含 `nanobind/stl/shared_ptr.h`；审计通过裸指针调用 `shared_from_this()` 的位置。Nanobind 有意移除了 holder，并且 `enable_shared_from_this` 的生效时机不同（[迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html#shared-pointers-and-holders)、[所有权指南](https://nanobind.readthedocs.io/en/latest/ownership.html)）。 | 严重的所有权、对象标识和生命周期风险。 |
+| `py::array_t`、`py::buffer_info` 和对可写标志的私有修改（`src/pybind/pyuipc/as_numpy.h:14-69`、`:71-145`） | 用带 NumPy/CPU/dtype/维度/连续性约束的 `nb::ndarray` 类型别名重写中央适配器。为每个返回视图指定 owner，并使用受支持的只读标注，不再使用 `py::detail`。Nanobind ndarray 的 stride 单位是元素，而当前辅助函数构造的是字节 stride（[ndarray 指南](https://nanobind.readthedocs.io/en/latest/ndarray.html#dynamic-array-configurations)）。 | 严重的数据损坏、可变性和悬空视图风险。 |
+| 使用 `py::array_t(shape)` 和 `mutable_unchecked` 创建自有数据数组，例如 `src/pybind/pyuipc/geometry/affine_body.cpp` | 增加一个经过测试的统一分配辅助函数，使用拥有数据的 capsule，或通过公开 Python API 创建 NumPy 分配。Nanobind 文档规定的 C++ 到 Python 所有权机制是 ndarray 的 `owner` 对象/capsule（[ndarray 所有权](https://nanobind.readthedocs.io/en/latest/ndarray.html#data-ownership)）。 | 高。不要把临时分配代码散落到各处。 |
+| JSON 转换依赖 `py::detail::*_accessor` 和 `PYBIND11_TYPE_CASTER`（`src/pybind/pyuipc/common/json.h:143-225`） | 使用公开 nanobind 包装 API 和 `NB_TYPE_CASTER` 重写。实现 `from_python(handle, uint32_t flags, cleanup_list*) noexcept` 和 `from_cpp(..., rv_policy, cleanup_list*) noexcept`，并遵循文档规定的非对称 Python 错误处理（[迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html#type-casters)、[3.0.0 caster 变更](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）。 | 严重；JSON 广泛用于配置和元数据 API。 |
+| 8 处 `PYBIND11_OVERRIDE_PURE` 调用（`src/pybind/pyuipc/core/pyengine.h:31-90`） | 在别名类中增加 `NB_TRAMPOLINE(PyIEngine)`，并转换为 `NB_OVERRIDE_PURE`。Nanobind 3 不再需要 trampoline 槽位数量（[迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html#trampoline-classes)、[3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）。 | 高；必须验证 Python 子类分派和纯虚函数失败行为。 |
+| 传给 `py::init` 的工厂 lambda 捕获 Python 回调（`src/pybind/pyuipc/backend/buffer.cpp:8-49`） | 转换为 nanobind 的 placement-new `__init__` 模式。显式测试回调引用环、GIL 获取、异常、析构和解释器关闭（[自定义构造函数](https://nanobind.readthedocs.io/en/latest/porting.html#custom-constructors)、[引用泄漏](https://nanobind.readthedocs.io/en/latest/refleaks.html)）。 | 高。 |
+| 常驻线程回调捕获 `py::function`，随后再获取 GIL（`src/pybind/pyuipc/common/resident_thread.cpp:14-44`） | 转换包装对象和 GIL guard，并在解释器关闭期间调用 Python 前检查 guard 是否有效。Nanobind 3 明确说明 Python 正在 finalizing 时 `gil_scoped_acquire` 可能失败（[3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）。 | 高并发/关闭风险。 |
+| `py::make_iterator(begin, end)`（`src/pybind/pyuipc/common/span.h:6-44`、`src/pybind/pyuipc/geometry/attribute_slot.cpp:40-76`） | 包含 `nanobind/make_iterator.h`，并传入必需的作用域和已安装迭代器名称（[迭代器迁移](https://nanobind.readthedocs.io/en/latest/porting.html#iterator-bindings)）。 | 中等。 |
+| `.def_readwrite`、`py::return_value_policy`、`py::doc`，以及 `py::none` 与强类型包装对象混用（`src/pybind/pyuipc/builtin/uid_info.cpp:7-20`、`src/pybind/pyuipc/geometry/attribute_slot.cpp:128-164`） | 使用 `.def_rw`、`nb::rv_policy`、直接文档字符串；当某个分支可能返回 `None` 时，使用显式 `nb::object` 返回类型。审计每个可空参数，因为除非显式标注或提供默认值，否则 nanobind 会拒绝 `None`（[迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html#none-null-arguments)、[3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)）。 | 中等 API 兼容风险。 |
+| 两个外力绑定包含 Eigen caster（`src/pybind/pyuipc/constitution/affine_body_external_force.cpp:1-15`、`src/pybind/pyuipc/constitution/finite_element_external_force.cpp:1-15`） | 使用 `nanobind/eigen/dense.h`，并验证引用/复制行为，不能只替换 include 名称（[Eigen 指南](https://nanobind.readthedocs.io/en/latest/eigen.html)）。 | 中等。 |
 
-No clear product use of pybind11 multiple inheritance was found by the static
-scan; the most complex declaration combines one C++ base, one trampoline, and
-one holder (`src/pybind/pyuipc/core/engine.cpp:164-171`). This is not compile
-proof. Nanobind does not support pybind11-style multiple inheritance
-([removed features](https://nanobind.readthedocs.io/en/latest/porting.html#removed-features)),
-so the converted declaration inventory must be checked before the first full
-compile.
+静态扫描没有发现产品代码明确使用 pybind11 多重继承；最复杂的声明组合了
+一个 C++ 基类、一个 trampoline 和一个 holder
+（`src/pybind/pyuipc/core/engine.cpp:164-171`）。这不能作为编译通过的证明。
+Nanobind 不支持 pybind11 风格的多重继承
+（[已移除功能](https://nanobind.readthedocs.io/en/latest/porting.html#removed-features)），
+因此首次完整编译前必须检查转换后的声明清单。
 
-## Build, packaging, and stub generation
+## 构建、打包与 stub 生成
 
-### CMake path
+### CMake 路径
 
-Replace `pybind11_add_module` and `pybind11::module` in
-`src/pybind/pyuipc/CMakeLists.txt:1-5` with the pinned nanobind target. Preserve
-all backend dependencies, `LINK_DEPENDS`, compile-time build metadata, output
-directory, RPATH, install, and runtime-library copy behavior
-(`src/pybind/pyuipc/CMakeLists.txt:6-63`, `:93-100`). Remove
-`PYBIND11_DETAILED_ERROR_MESSAGES` (`:19`) rather than inventing an equivalent.
+将 `src/pybind/pyuipc/CMakeLists.txt:1-5` 中的 `pybind11_add_module` 和
+`pybind11::module` 替换为固定版本的 nanobind 目标。保留所有后端依赖、
+`LINK_DEPENDS`、编译期构建元数据、输出目录、RPATH、安装和运行时库复制行为
+（`src/pybind/pyuipc/CMakeLists.txt:6-63`、`:93-100`）。删除
+`PYBIND11_DETAILED_ERROR_MESSAGES`（`:19`），不要虚构等价配置。
 
-The current CMake post-build script stages Python sources and runtime libraries,
-generates stubs with `pybind11_stubgen`, and optionally installs the development
-package (`scripts/after_build_pyuipc.py:54-97`, `:99-142`, `:143-188`). Keep
-that ordering, but replace the generator with the stable nanobind CLI, not the
-experimental `nanobind.stubgen.StubGen` Python API
-([stubgen CLI](https://nanobind.readthedocs.io/en/latest/typing.html#command-line-interface)).
-The official CMake `nanobind_add_stub` helper is valid, but it imports the target
-module and therefore must depend on the fully staged extension and runtime
-libraries
-([CMake stub generation](https://nanobind.readthedocs.io/en/latest/api_cmake.html#stub-generation)).
-For this repository, a small shared CLI wrapper called after staging is less
-likely to regress the existing backend-copy/development-install behavior.
+当前 CMake 构建后脚本会暂存 Python 源文件和运行时库，使用
+`pybind11_stubgen` 生成 stub，并按需安装开发包
+（`scripts/after_build_pyuipc.py:54-97`、`:99-142`、`:143-188`）。
+保留这个执行顺序，但将生成器替换为稳定的 nanobind CLI，而不是实验性的
+`nanobind.stubgen.StubGen` Python API
+（[stubgen CLI](https://nanobind.readthedocs.io/en/latest/typing.html#command-line-interface)）。
+官方 CMake `nanobind_add_stub` 辅助函数可以使用，但它会导入目标模块，
+因此必须依赖已经完整暂存的扩展和运行时库
+（[CMake stub 生成](https://nanobind.readthedocs.io/en/latest/api_cmake.html#stub-generation)）。
+对于本仓库，在暂存完成后调用一个两套构建共用的小型 CLI 包装脚本，
+更不容易破坏现有的后端复制/开发安装行为。
 
-### XMake path
+### XMake 路径
 
-XMake must link the compiled nanobind package rather than only changing headers
-in `src/pybind/xmake.lua:1-29`. Preserve the Python extension suffix rule and
-runtime library copy (`src/pybind/xmake.lua:77-139`). Validate that the local
-3.0.0 overlay propagates every platform definition/link option from its port on
-Windows and Linux.
+XMake 必须链接已编译的 nanobind 包，不能只修改
+`src/pybind/xmake.lua:1-29` 中的头文件。保留 Python 扩展后缀规则和运行时库
+复制逻辑（`src/pybind/xmake.lua:77-139`）。在 Windows 和 Linux 上验证
+本地 3.0.0 overlay 是否完整传递其 port 中的所有平台定义和链接选项。
 
-XMake stubs are generated separately at wheel-package time: `xmake/pack.lua`
-currently installs the extension, installs `mypy`/NumPy if needed, and invokes
-`scripts/stubgen.py` (`xmake/pack.lua:21-71`); that script calls mypy's
-inspection-based API (`scripts/stubgen.py:1-60`). Replace this with the same
-repository wrapper around:
+XMake 的 stub 在 wheel 打包阶段单独生成：`xmake/pack.lua` 当前会安装
+扩展、按需安装 `mypy`/NumPy，并调用 `scripts/stubgen.py`
+（`xmake/pack.lua:21-71`）；该脚本调用 mypy 基于自省的 API
+（`scripts/stubgen.py:1-60`）。将它替换为对以下命令的同一个仓库包装脚本：
 
 ```text
 python -m nanobind.stubgen \
@@ -196,158 +180,145 @@ python -m nanobind.stubgen \
   -M <staged-package>/src/uipc/py.typed
 ```
 
-Nanobind documents `-r`, `-O`, `-M`, and repeatable pattern files as stable CLI
-features ([typing/stubgen](https://nanobind.readthedocs.io/en/latest/typing.html#command-line-interface)).
-Use a shared output manifest/pattern file for CMake and XMake, then assert the
-same generated file set and normalized contents from both paths. Do not assume
-`add_packages("nanobind")` alone makes `python -m nanobind.stubgen` importable;
-the Stage 0 XMake probe must verify or explicitly add the overlay's Python
-directory to the selected interpreter environment.
+Nanobind 将 `-r`、`-O`、`-M` 和可重复指定的 pattern file 记录为稳定的
+CLI 功能
+（[typing/stubgen](https://nanobind.readthedocs.io/en/latest/typing.html#command-line-interface)）。
+CMake 与 XMake 应使用同一个输出清单/pattern file，随后断言两条路径生成的
+文件集合及规范化内容一致。不要假定只调用 `add_packages("nanobind")`
+就能导入 `python -m nanobind.stubgen`；阶段 0 的 XMake 探针必须验证这一点，
+或者把 overlay 的 Python 目录显式加入选定解释器的环境。
 
-Importing the dotted native module executes `uipc/__init__.py`, which currently
-calls `init()` unconditionally (`python/src/uipc/__init__.py:6-24`). The
-nanobind CLI sets `NB_STUBGEN=1` specifically so packages can skip runtime/device
-initialization ([stubgen detection](https://nanobind.readthedocs.io/en/latest/typing.html#detecting-stub-generation)).
-Guard only the runtime `init()` call during stub generation; keep native module
-registration and re-exports active. Add a normal-import regression test to
-prove production initialization remains unchanged.
+导入带点号的原生模块会执行 `uipc/__init__.py`，它当前无条件调用 `init()`
+（`python/src/uipc/__init__.py:6-24`）。Nanobind CLI 会专门设置
+`NB_STUBGEN=1`，使包能够跳过运行时/设备初始化
+（[stubgen 检测](https://nanobind.readthedocs.io/en/latest/typing.html#detecting-stub-generation)）。
+stub 生成期间只保护运行时 `init()` 调用；原生模块注册和重新导出必须继续
+执行。增加正常导入回归测试，证明生产环境初始化行为没有改变。
 
-The wheel gate must inspect the installed archive for the native extension,
-recursive native stubs, public wrapper modules, and `uipc/py.typed`. Existing
-stub tests encode an expected `pyuipc` stub directory but are not in the active
-wheel command (`scripts/test_wheel.py:19-67`,
-`scripts/test_user_experience.py:118-167` versus
-`.github/workflows/python-wheels.yml:132-168`), so add a maintained assertion to
-`scripts/smoke_test_wheel.py` rather than relying on those legacy scripts.
+wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原生 stub、公开包装
+模块和 `uipc/py.typed`。现有 stub 测试编码了预期的 `pyuipc` stub 目录，
+但没有被当前 wheel 命令执行（`scripts/test_wheel.py:19-67`、
+`scripts/test_user_experience.py:118-167`，对比
+`.github/workflows/python-wheels.yml:132-168`），因此应在
+`scripts/smoke_test_wheel.py` 中增加持续维护的断言，而不是依赖这些旧脚本。
 
-## Staged implementation and gates
+## 分阶段实施与门槛
 
-1. **Stage 0 -- freeze behavior and prove both builds.** Record an API/stub
-   manifest from the current pybind11 extension. Add focused tests for ndarray
-   conversion/view ownership, shared ownership, trampoline callbacks, JSON,
-   thread callbacks, exceptions, module aliases, and clean interpreter exit.
-   Build a tiny non-product nanobind 3.0.0 probe with CMake and the local XMake
-   overlay on Linux and Windows. Gate: exact dependency version and importable
-   probe in both systems.
-2. **Stage 1 -- dependency/build/stub infrastructure.** Add the exact version
-   contract, CMake integration, XMake overlay/compiled-core link, shared stub CLI
-   wrapper, `NB_STUBGEN` guard, and version-drift contract test. Keep the product
-   binding on pybind11 until the nanobind product source is ready. Gate: both
-   build descriptions configure the same version and produce the expected probe
-   artifact/stubs.
-3. **Stage 2 -- central high-risk adapters.** Implement and test ndarray
-   ownership/shape/stride/mutability, JSON caster, shared-pointer exchange,
-   trampoline, custom Buffer constructor, iterator helper, and top-module
-   lifetime. Gate: focused tests pass under sanitizers where supported and a
-   subprocess exit test emits no unexpected nanobind leak warnings.
-4. **Stage 3 -- mechanical binding conversion.** Convert leaf modules in
-   registration order, remove holder arguments, update fields/policies/docs and
-   nullable arguments, then switch the product entry point to `NB_MODULE`.
-   Update the constitution source checker, which currently hard-codes
-   `py::class_`, `py::module`, and “pybind module”
-   (`scripts/check_constitution_api.py:12-28`, `:44-76`, `:115-124`) and its
-   pybind-specific fixtures (`scripts/tests/test_repository_contracts.py:36-76`).
-   Gate: no active pybind11 API/include remains and the full portable suite
-   passes.
-5. **Stage 4 -- package and wheel parity.** Generate identical stubs through
-   CMake and XMake, build fresh wheels, install into clean environments, compare
-   the API/stub manifest against Stage 0, and run wheel smoke/pytest for
-   CPython 3.10-3.14 on Linux and Windows. Gate: wheel contents, imports,
-   `build_info()`, `Engine("none")`, stubs, and shutdown all pass.
-6. **Stage 5 -- runtime/performance validation.** Run CUDA-marked tests on a
-   supported GPU and compare clean build time, extension size, import time,
-   representative binding-call latency, and ndarray view throughput against the
-   frozen pybind11 baseline. Measure nanobind's default size optimization and a
-   `NOMINSIZE` variant before selecting the release policy. Gate: no unexplained
-   semantic or material performance regression; document accepted differences.
+1. **阶段 0——冻结行为并验证两套构建。** 从当前 pybind11 扩展记录
+   API/stub 清单。为 ndarray 转换/视图所有权、共享所有权、trampoline
+   回调、JSON、线程回调、异常、模块别名和解释器正常退出增加聚焦测试。
+   在 Linux 和 Windows 上，分别用 CMake 与本地 XMake overlay 构建一个
+   不属于产品代码的最小 nanobind 3.0.0 探针。门槛：两套构建系统都使用
+   精确依赖版本，且探针可以导入。
+2. **阶段 1——依赖/构建/stub 基础设施。** 增加精确版本契约、CMake 集成、
+   XMake overlay/已编译核心链接、共用 stub CLI 包装脚本、`NB_STUBGEN`
+   保护，以及版本漂移契约测试。在 nanobind 产品源代码准备完成前，
+   产品绑定继续使用 pybind11。门槛：两份构建描述配置相同版本，并生成
+   预期的探针产物/stub。
+3. **阶段 2——中央高风险适配器。** 实现并测试 ndarray 的所有权/形状/
+   stride/可变性、JSON caster、共享指针交换、trampoline、自定义 Buffer
+   构造函数、迭代器辅助函数和顶层模块生命周期。门槛：在支持的平台上，
+   聚焦测试通过 sanitizer；子进程退出测试没有产生非预期的 nanobind
+   泄漏警告。
+4. **阶段 3——机械转换绑定。** 按注册顺序转换叶子模块，移除 holder 参数，
+   更新字段/策略/文档及可空参数，最后将产品入口切换为 `NB_MODULE`。
+   更新 constitution 源码检查器；该检查器当前硬编码了 `py::class_`、
+   `py::module` 和“pybind module”
+   （`scripts/check_constitution_api.py:12-28`、`:44-76`、`:115-124`），
+   以及对应的 pybind 专用 fixture
+   （`scripts/tests/test_repository_contracts.py:36-76`）。
+   门槛：活动代码中不再残留 pybind11 API/include，完整可移植测试集通过。
+5. **阶段 4——包与 wheel 对等。** 通过 CMake 和 XMake 生成一致的 stub，
+   构建全新 wheel，安装到干净环境，与阶段 0 的 API/stub 清单对比，并在
+   Linux 和 Windows 上针对 CPython 3.10-3.14 运行 wheel smoke/pytest。
+   门槛：wheel 内容、导入、`build_info()`、`Engine("none")`、stub 和关闭
+   流程全部通过。
+6. **阶段 5——运行时/性能验证。** 在受支持的 GPU 上运行带 CUDA 标记的
+   测试，并与冻结的 pybind11 基线比较干净构建耗时、扩展体积、导入耗时、
+   代表性绑定调用延迟和 ndarray 视图吞吐量。在确定发布策略前，同时测量
+   nanobind 默认的体积优化和 `NOMINSIZE` 版本。门槛：没有无法解释的语义
+   或显著性能退化；记录所有接受的差异。
 
-Keep the existing option and source-directory names (`UIPC_BUILD_PYBIND`,
-`--pybind`, `src/pybind`) as compatibility names during this migration. Renaming
-them is a separate cleanup that would add downstream and CI churn without
-proving binding parity.
+迁移期间保留现有选项和源目录名称（`UIPC_BUILD_PYBIND`、`--pybind`、
+`src/pybind`）作为兼容名称。重命名属于独立清理任务；在尚未证明绑定行为
+对等时一起修改，只会给下游和 CI 增加额外变动。
 
-## Required regression tests
+## 必需的回归测试
 
-- **Arrays:** list/NumPy inputs; accepted/rejected dtype conversions; C/F and
-  non-contiguous layouts; 1D/2D/3D shape failures; empty spans; writable versus
-  read-only views; `OWNDATA`/base owner; use after the originating C++ wrapper is
-  deleted. Existing array behavior is exercised in
-  `python/tests/test_attribute.py:1-25` and type/value basics in
-  `python/tests/test_typing.py:1-16`, but neither is a complete ownership suite.
-- **Ownership:** `Scene`/geometry/attribute shared objects, base/derived returns,
-  Python-created `PyIEngine`, identity on repeated returns, and destruction
-  order. Existing scene coverage starts at `python/tests/test_scene.py:1-40`.
-- **Callbacks/GIL:** every `PyIEngine` pure virtual, Buffer resize/view callbacks,
-  ResidentThread success/exception/destruction, and subprocess shutdown while a
-  callback is queued. Keep nanobind leak warnings enabled in CI; the official
-  guide explains that wrappers, functions, and shared ownership can form
-  uncollectable cycles ([reference-leak guide](https://nanobind.readthedocs.io/en/latest/refleaks.html)).
-- **API/stubs:** module/class/function names, signatures, defaults, docstrings,
-  exceptions, top-level aliases, recursive native stubs, `py.typed`, and a real
-  static type-check sample. The existing `test_typing.py` is a runtime value
-  test, not a stub/type-checker validation (`python/tests/test_typing.py:1-16`).
-- **Wheel/runtime:** fresh-environment import, compatibility metadata, native
-  library colocation, `Engine("none")`, CUDA backend load on a GPU runner, and
-  clean interpreter exit. The existing smoke test provides the first four
-  checks except stubs and exit diagnostics (`scripts/smoke_test_wheel.py:13-73`).
+- **数组：** list/NumPy 输入；接受/拒绝的 dtype 转换；C/F 连续和不连续
+  布局；1D/2D/3D 形状失败；空 span；可写与只读视图；`OWNDATA`/base owner；
+  删除来源 C++ 包装对象后继续使用视图。现有数组行为在
+  `python/tests/test_attribute.py:1-25` 中有所覆盖，类型/值基础行为在
+  `python/tests/test_typing.py:1-16` 中有所覆盖，但两者都不是完整的
+  所有权测试集。
+- **所有权：** `Scene`/geometry/attribute 共享对象、基类/派生类返回值、
+  Python 创建的 `PyIEngine`、重复返回时的对象标识，以及析构顺序。现有
+  Scene 覆盖从 `python/tests/test_scene.py:1-40` 开始。
+- **回调/GIL：** `PyIEngine` 的每个纯虚函数、Buffer resize/view 回调、
+  ResidentThread 成功/异常/析构，以及回调仍在队列中时的子进程关闭。
+  在 CI 中保持 nanobind 泄漏警告开启；官方指南说明包装对象、函数和共享
+  所有权可能形成无法回收的环
+  （[引用泄漏指南](https://nanobind.readthedocs.io/en/latest/refleaks.html)）。
+- **API/stub：** 模块/类/函数名称、签名、默认值、文档字符串、异常、
+  顶层别名、递归原生 stub、`py.typed`，以及真实的静态类型检查样例。
+  现有 `test_typing.py` 是运行时值测试，不是 stub/类型检查器验证
+  （`python/tests/test_typing.py:1-16`）。
+- **Wheel/运行时：** 在全新环境中导入、兼容性元数据、原生库共置、
+  `Engine("none")`、在 GPU runner 上加载 CUDA 后端，以及解释器正常退出。
+  现有 smoke test 覆盖了前四项中的大部分，但不检查 stub 和退出诊断
+  （`scripts/smoke_test_wheel.py:13-73`）。
 
-The current general XMake workflow never enables `--pybind=y`
-(`.github/workflows/xmake.yml:79-93`), while the wheel workflow ignores all
-`xmake.lua` changes (`.github/workflows/python-wheels.yml:9-37`). Add a dedicated
-XMake Python-binding configure/build/import/stub job; otherwise CMake wheel
-success cannot validate the required build-system parity.
+当前通用 XMake 工作流从不启用 `--pybind=y`
+（`.github/workflows/xmake.yml:79-93`），而 wheel 工作流忽略所有
+`xmake.lua` 变更（`.github/workflows/python-wheels.yml:9-37`）。应增加
+专用的 XMake Python 绑定配置/构建/导入/stub 任务；否则 CMake wheel 成功
+无法验证所要求的构建系统对等性。
 
-## Main residual risks
+## 主要残余风险
 
-1. **XMake 3.0.0 packaging is unproven.** The official recipe lag is a hard
-   migration gate, not a reason to silently build 2.12.0 with XMake.
-2. **Array semantics may change silently.** Byte-versus-element strides,
-   conversion defaults, read-only flags, and owner objects require runtime
-   assertions and negative tests.
-3. **Holder removal changes lifetime semantics.** Compilation success does not
-   prove `shared_from_this`, identity, or base/derived ownership behavior.
-4. **Python callback cycles/shutdown are high risk.** Buffer and ResidentThread
-   retain Python callables across C++ lifetimes; leak warnings and subprocess
-   exit tests are required.
-5. **Stub layout can regress independently in CMake and XMake.** Treat generated
-   file manifests and type-checker output as release artifacts, not incidental
-   build by-products.
-6. **No build has been run for this report.** Exact nanobind template spellings,
-   platform flags, the 3.0.0 XMake overlay, and all runtime semantics remain to
-   be proven by the staged gates above.
+1. **XMake 的 3.0.0 打包尚未验证。** 官方配方滞后是必须通过的迁移门槛，
+   不能因此在 XMake 中静默构建 2.12.0。
+2. **数组语义可能无声改变。** 字节 stride 与元素 stride、转换默认值、
+   只读标志和 owner 对象都需要运行时断言及负向测试。
+3. **移除 holder 会改变生命周期语义。** 编译成功不能证明
+   `shared_from_this`、对象标识或基类/派生类所有权行为正确。
+4. **Python 回调引用环和关闭过程风险很高。** Buffer 和 ResidentThread
+   会跨越 C++ 生命周期保留 Python 可调用对象；必须检查泄漏警告，并运行
+   子进程退出测试。
+5. **CMake 与 XMake 的 stub 布局可能独立退化。** 应将生成文件清单和
+   类型检查器输出视为发布产物，而不是偶然生成的构建副产品。
+6. **本报告没有运行构建。** nanobind 模板的精确写法、平台选项、3.0.0
+   XMake overlay 以及所有运行时语义，仍须通过上述分阶段门槛验证。
 
-## Primary sources
+## 一手资料
 
-- [nanobind 3.0.0 changelog](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)
-- [nanobind pybind11 porting guide](https://nanobind.readthedocs.io/en/latest/porting.html)
+- [nanobind 3.0.0 更新日志](https://github.com/wjakob/nanobind/blob/v3.0.0/docs/changelog.rst)
+- [nanobind 的 pybind11 迁移指南](https://nanobind.readthedocs.io/en/latest/porting.html)
 - [nanobind CMake API](https://nanobind.readthedocs.io/en/latest/api_cmake.html)
-- [nanobind build guide](https://nanobind.readthedocs.io/en/latest/building.html)
-- [nanobind packaging guide](https://nanobind.readthedocs.io/en/latest/packaging.html)
-- [nanobind ndarray guide](https://nanobind.readthedocs.io/en/latest/ndarray.html)
-- [nanobind ownership guide](https://nanobind.readthedocs.io/en/latest/ownership.html)
-- [nanobind advanced ownership guide](https://nanobind.readthedocs.io/en/latest/ownership_adv.html)
-- [nanobind Eigen guide](https://nanobind.readthedocs.io/en/latest/eigen.html)
-- [nanobind typing and stubgen guide](https://nanobind.readthedocs.io/en/latest/typing.html)
-- [nanobind reference-leak guide](https://nanobind.readthedocs.io/en/latest/refleaks.html)
-- [nanobind 3.0.0 module macro source](https://github.com/wjakob/nanobind/blob/v3.0.0/include/nanobind/nb_defs.h#L201-L236)
-- [official xmake-repo nanobind recipe](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/xmake.lua)
-- [official xmake-repo nanobind port](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/port/xmake.lua)
-- [XMake official package-management guide](https://xmake.io/guide/package-management/using-official-packages.html)
-- [pybind11 NumPy guide](https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html)
-- [pybind11 smart-pointer guide](https://pybind11.readthedocs.io/en/stable/advanced/smart_ptrs.html)
+- [nanobind 构建指南](https://nanobind.readthedocs.io/en/latest/building.html)
+- [nanobind 打包指南](https://nanobind.readthedocs.io/en/latest/packaging.html)
+- [nanobind ndarray 指南](https://nanobind.readthedocs.io/en/latest/ndarray.html)
+- [nanobind 所有权指南](https://nanobind.readthedocs.io/en/latest/ownership.html)
+- [nanobind 高级所有权指南](https://nanobind.readthedocs.io/en/latest/ownership_adv.html)
+- [nanobind Eigen 指南](https://nanobind.readthedocs.io/en/latest/eigen.html)
+- [nanobind 类型与 stubgen 指南](https://nanobind.readthedocs.io/en/latest/typing.html)
+- [nanobind 引用泄漏指南](https://nanobind.readthedocs.io/en/latest/refleaks.html)
+- [nanobind 3.0.0 模块宏源码](https://github.com/wjakob/nanobind/blob/v3.0.0/include/nanobind/nb_defs.h#L201-L236)
+- [官方 xmake-repo nanobind 配方](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/xmake.lua)
+- [官方 xmake-repo nanobind port](https://github.com/xmake-io/xmake-repo/blob/dev/packages/n/nanobind/port/xmake.lua)
+- [XMake 官方包管理指南](https://xmake.io/guide/package-management/using-official-packages.html)
+- [pybind11 NumPy 指南](https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html)
+- [pybind11 智能指针指南](https://pybind11.readthedocs.io/en/stable/advanced/smart_ptrs.html)
 
-## Static verification performed
+## 已完成的静态验证
 
-- Inspected Git branch, commit, and worktree status before writing this report.
-- Read both binding build descriptions, both stub-generation/package paths,
-  root and development Python metadata, module initialization, central ndarray
-  and JSON adapters, shared-holder declarations, trampoline/callback code,
-  Python package re-exports, test inventory, repository-contract checker, and
-  wheel/XMake workflows.
-- Counted binding files and high-risk API tokens with `find` and `rg`.
-- Cross-checked every external migration claim against upstream nanobind 3.0.0
-  documentation/source, upstream pybind11 documentation where current behavior
-  matters, and the official XMake repository/documentation.
-- Did **not** fetch, switch branches, install dependencies, configure, build,
-  import the extension, generate stubs, run tests, build wheels, or execute a
-  simulator/runtime validation.
+- 编写报告前检查了 Git 分支、提交和工作区状态。
+- 阅读了两套绑定构建描述、两条 stub 生成/打包路径、根目录和开发环境的
+  Python 元数据、模块初始化、中央 ndarray 与 JSON 适配器、共享 holder
+  声明、trampoline/回调代码、Python 包重新导出、测试清单、仓库契约检查器，
+  以及 wheel/XMake 工作流。
+- 使用 `find` 和 `rg` 统计了绑定文件和高风险 API token。
+- 将每项外部迁移结论与 nanobind 3.0.0 上游文档/源码、涉及当前行为时的
+  pybind11 上游文档，以及 XMake 官方仓库/文档进行了交叉核对。
+- **未执行** fetch、切换分支、安装依赖、配置、构建、导入扩展、生成 stub、
+  运行测试、构建 wheel 或运行模拟器/运行时验证。
