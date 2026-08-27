@@ -6,7 +6,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PyAffineBodySphericalJoint::PyAffineBodySphericalJoint(py::module& m)
+PyAffineBodySphericalJoint::PyAffineBodySphericalJoint(py::module_& m)
 {
     auto class_AffineBodySphericalJoint =
         py::class_<AffineBodySphericalJoint, InterAffineBodyConstitution>(
@@ -32,13 +32,13 @@ Returns:
     // World create_geometry
     class_AffineBodySphericalJoint.def(
         "create_geometry",
-        [](AffineBodySphericalJoint&    self,
-           py::array_t<Float>           positions,
-           py::list                     l_geo_slots,
-           py::array_t<IndexT>          l_instance_ids,
-           py::list                     r_geo_slots,
-           py::array_t<IndexT>          r_instance_ids,
-           py::array_t<Float>           strength_ratios)
+        [](AffineBodySphericalJoint& self,
+           PyArray<Float>            positions,
+           py::list                  l_geo_slots,
+           PyArray<IndexT>           l_instance_ids,
+           py::list                  r_geo_slots,
+           PyArray<IndexT>           r_instance_ids,
+           PyArray<Float>            strength_ratios)
         {
             vector<S<geometry::SimplicialComplexSlot>> l_slots;
             vector<S<geometry::SimplicialComplexSlot>> r_slots;
@@ -78,14 +78,14 @@ Returns:
     // Local create_geometry
     class_AffineBodySphericalJoint.def(
         "create_geometry",
-        [](AffineBodySphericalJoint&    self,
-           py::array_t<Float>           l_positions,
-           py::array_t<Float>           r_positions,
-           py::list                     l_geo_slots,
-           py::array_t<IndexT>          l_instance_ids,
-           py::list                     r_geo_slots,
-           py::array_t<IndexT>          r_instance_ids,
-           py::array_t<Float>           strength_ratios)
+        [](AffineBodySphericalJoint& self,
+           PyArray<Float>            l_positions,
+           PyArray<Float>            r_positions,
+           py::list                  l_geo_slots,
+           PyArray<IndexT>           l_instance_ids,
+           py::list                  r_geo_slots,
+           PyArray<IndexT>           r_instance_ids,
+           PyArray<Float>            strength_ratios)
         {
             vector<S<geometry::SimplicialComplexSlot>> l_slots;
             vector<S<geometry::SimplicialComplexSlot>> r_slots;
@@ -149,11 +149,11 @@ Returns:
         py::arg("l_geo_slots"),
         py::arg("r_geo_slots"),
         py::arg("strength_ratio") = Float{100.0},
-        py::doc(R"(Bind spherical joint geometry to affine bodies (single-instance mode).
+        R"(Bind spherical joint geometry to affine bodies (single-instance mode).
 sc: A SimplicialComplex with vertices representing joint anchor points.
 l_geo_slots: Left geometry slots for each joint.
 r_geo_slots: Right geometry slots for each joint.
-strength_ratio: Stiffness = strength_ratio * (BodyMassA + BodyMassB) for all joints.)"));
+strength_ratio: Stiffness = strength_ratio * (BodyMassA + BodyMassB) for all joints.)");
 
     // Multi-instance apply_to
     class_AffineBodySphericalJoint.def(
@@ -161,10 +161,10 @@ strength_ratio: Stiffness = strength_ratio * (BodyMassA + BodyMassB) for all joi
         [](AffineBodySphericalJoint&    self,
            geometry::SimplicialComplex& sc,
            py::list                     l_geo_slots,
-           py::array_t<IndexT>          l_instance_ids,
+           PyArray<IndexT>              l_instance_ids,
            py::list                     r_geo_slots,
-           py::array_t<IndexT>          r_instance_ids,
-           py::array_t<Float>           strength_ratios)
+           PyArray<IndexT>              r_instance_ids,
+           PyArray<Float>               strength_ratios)
         {
             vector<S<geometry::SimplicialComplexSlot>> l_slots;
             vector<S<geometry::SimplicialComplexSlot>> r_slots;
@@ -188,12 +188,12 @@ strength_ratio: Stiffness = strength_ratio * (BodyMassA + BodyMassB) for all joi
         py::arg("r_geo_slots"),
         py::arg("r_instance_ids"),
         py::arg("strength_ratios"),
-        py::doc(R"(Bind spherical joint geometry to affine bodies (multi-instance mode).
+        R"(Bind spherical joint geometry to affine bodies (multi-instance mode).
 sc: A SimplicialComplex with vertices representing joint anchor points.
 l_geo_slots: Left geometry slots for each joint.
 l_instance_ids: Instance IDs for left geometries.
 r_geo_slots: Right geometry slots for each joint.
 r_instance_ids: Instance IDs for right geometries.
-strength_ratios: Strength ratios for each joint (one per vertex).)"));
+strength_ratios: Strength ratios for each joint (one per vertex).)");
 }
 }  // namespace pyuipc::constitution

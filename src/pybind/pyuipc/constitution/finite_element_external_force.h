@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyFiniteElementExternalForce
 {
   public:
-    PyFiniteElementExternalForce(py::module& m);
+    PyFiniteElementExternalForce(py::module_& m);
 };
 }  // namespace pyuipc::constitution

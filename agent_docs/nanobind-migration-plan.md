@@ -1,10 +1,13 @@
 # pybind11 到 nanobind 迁移方案
 
-状态：已完成阶段 0 的 XMake 依赖封装第一步。仓库内已经加入
-`nanobind 3.0.0` 本地包配方，并在 Linux x86_64、XMake 3.1.1、
-CPython 3.13 环境中通过隔离探针完成干净安装、编译、链接和导入验证。
-产品绑定仍使用 pybind11；Windows、CMake、stub、产品扩展和 wheel
-尚未验证。
+状态：产品绑定源码和 XMake 产品目标已经切换到 `nanobind 3.0.0`。
+仓库内的本地包配方及产品扩展均已在 Linux x86_64、工作区最新版
+XMake `3.1.1+HEAD.3ba37a0`、CPython 3.13 环境中完成 debug/release 编译、
+链接、导入和运行时验证；release 产物通过仓库默认的非 CUDA、非 example
+测试集（80 项通过、54 项按标记排除）以及 ndarray 所有权、NumPy 标量、
+Buffer 回调和 Python trampoline/shared_ptr 聚焦探针。CMake 描述与
+`pyproject.toml` 已静态同步到同一精确版本，但本轮按要求没有执行 CMake；
+Windows、CUDA、stub、wheel 和跨 Python 版本矩阵仍未验证。
 
 调研与实施基线：分支 `codex/migrate-pybind-to-nanobind`，提交
 `428f844caed3013919ebb9ea7d4f4268a3cab7ff`，日期 2026-08-27。
@@ -222,31 +225,31 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 ## 分阶段实施与门槛
 
 1. **阶段 0（进行中）——冻结行为并验证两套构建。** Linux XMake 隔离
-   探针已经通过；Windows、CMake 和行为基线仍待完成。从当前 pybind11
+   探针及产品扩展已经通过；Windows、CMake 和完整行为基线仍待完成。从迁移前 pybind11
    扩展记录 API/stub 清单。为 ndarray 转换/视图所有权、共享所有权、
    trampoline 回调、JSON、线程回调、异常、模块别名和解释器正常退出增加
    聚焦测试。
    在 Linux 和 Windows 上，分别用 CMake 与本地 XMake overlay 构建一个
    不属于产品代码的最小 nanobind 3.0.0 探针。门槛：两套构建系统都使用
    精确依赖版本，且探针可以导入。
-2. **阶段 1——依赖/构建/stub 基础设施。** 增加精确版本契约、CMake 集成、
-   XMake overlay/已编译核心链接、共用 stub CLI 包装脚本、`NB_STUBGEN`
-   保护，以及版本漂移契约测试。在 nanobind 产品源代码准备完成前，
-   产品绑定继续使用 pybind11。门槛：两份构建描述配置相同版本，并生成
-   预期的探针产物/stub。
-3. **阶段 2——中央高风险适配器。** 实现并测试 ndarray 的所有权/形状/
+2. **阶段 1（部分完成）——依赖/构建/stub 基础设施。** 精确版本、CMake
+   描述、XMake overlay 和已编译核心链接已经完成；共用 stub CLI 包装脚本、
+   `NB_STUBGEN` 保护及版本漂移契约测试仍待实现。门槛：两份构建描述配置
+   相同版本，并生成预期的探针产物/stub。
+3. **阶段 2（XMake 已验证）——中央高风险适配器。** ndarray 的所有权/形状/
    stride/可变性、JSON caster、共享指针交换、trampoline、自定义 Buffer
    构造函数、迭代器辅助函数和顶层模块生命周期。门槛：在支持的平台上，
    聚焦测试通过 sanitizer；子进程退出测试没有产生非预期的 nanobind
    泄漏警告。
-4. **阶段 3——机械转换绑定。** 按注册顺序转换叶子模块，移除 holder 参数，
+4. **阶段 3（XMake 已验证）——机械转换绑定。** 已按注册顺序转换叶子模块并移除 holder 参数，
    更新字段/策略/文档及可空参数，最后将产品入口切换为 `NB_MODULE`。
    更新 constitution 源码检查器；该检查器当前硬编码了 `py::class_`、
    `py::module` 和“pybind module”
    （`scripts/check_constitution_api.py:12-28`、`:44-76`、`:115-124`），
    以及对应的 pybind 专用 fixture
    （`scripts/tests/test_repository_contracts.py:36-76`）。
-   门槛：活动代码中不再残留 pybind11 API/include，完整可移植测试集通过。
+   当前活动绑定源码中不再残留 pybind11 API/include，XMake release 的默认
+   可移植测试集通过；CMake、Windows 和 CUDA 验证仍是阶段门槛的一部分。
 5. **阶段 4——包与 wheel 对等。** 通过 CMake 和 XMake 生成一致的 stub，
    构建全新 wheel，安装到干净环境，与阶段 0 的 API/stub 清单对比，并在
    Linux 和 Windows 上针对 CPython 3.10-3.14 运行 wheel smoke/pytest。

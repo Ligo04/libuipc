@@ -1,5 +1,20 @@
 # Handoff — Current State of the Repo
 
+> **Nanobind 3.0.0 XMake product migration (2026-08-27,
+> `codex/migrate-pybind-to-nanobind`)**: the complete `pyuipc` binding tree now
+> uses nanobind, including ndarray ownership/strides, JSON conversion,
+> shared-pointer exchange, trampolines, custom constructors, and iterators.
+> The repository-local XMake package overlay provides the exact 3.0.0 source
+> and statically links its core. On Linux x86_64, workspace XMake
+> `3.1.1+HEAD.3ba37a0` completed clean debug and release builds against CPython
+> 3.13. The staged release package passed the default portable Python suite
+> (80 passed, 54 deselected) plus focused ndarray, NumPy scalar, Buffer callback,
+> and Python-engine trampoline/shared-pointer probes. ELF inspection shows no
+> dynamic dependency on libpython or nanobind. CMake and `pyproject.toml` were
+> statically synchronized to nanobind 3.0.0, but CMake was intentionally not
+> run in this validation round. Windows, CUDA, stubs, wheels, and the full
+> CPython 3.10-3.14 matrix remain open.
+
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and
 > `info_stackless_bvh_v0` builders now use CUB radix sort and exclusive scan,

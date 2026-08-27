@@ -38,20 +38,20 @@ using namespace uipc;
 
 namespace pyuipc
 {
-static py::module* g_top_module = nullptr;
+static PyObject* g_top_module = nullptr;
 
-py::module& top_module()
+py::module_ top_module()
 {
     PYUIPC_ASSERT(g_top_module != nullptr, "top module is not initialized");
-    return *g_top_module;
+    return py::borrow<py::module_>(g_top_module);
 }
 }  // namespace pyuipc
 
-PYBIND11_MODULE(pyuipc, m)
+NB_MODULE(pyuipc, m)
 {
-    pyuipc::g_top_module = &m;
+    pyuipc::g_top_module = m.ptr();
 
-    py::register_exception<uipc::Exception>(m, "Exception");
+    py::exception<uipc::Exception>(m, "Exception");
 
     auto unit         = m.def_submodule("unit");
     auto geometry     = m.def_submodule("geometry");

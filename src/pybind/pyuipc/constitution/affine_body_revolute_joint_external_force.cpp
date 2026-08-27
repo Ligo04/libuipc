@@ -7,7 +7,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PyAffineBodyRevoluteJointExternalForce::PyAffineBodyRevoluteJointExternalForce(py::module& m)
+PyAffineBodyRevoluteJointExternalForce::PyAffineBodyRevoluteJointExternalForce(py::module_& m)
 {
     auto class_AffineBodyRevoluteJointExternalForce =
         py::class_<AffineBodyRevoluteJointExternalForce, Constraint>(
@@ -36,21 +36,21 @@ Returns:
         { self.apply_to(sc, torque); },
         py::arg("sc"),
         py::arg("torque") = Float{0},
-        py::doc(R"(Apply uniform external torque around revolute joint axis to all joints.
+        R"(Apply uniform external torque around revolute joint axis to all joints.
 sc: Simplicial complex with edges representing the joints (must have AffineBodyRevoluteJoint applied).
-torque: Scalar torque value applied to all joints (default: 0).)"));
+torque: Scalar torque value applied to all joints (default: 0).)");
 
     // Per-joint torques
     class_AffineBodyRevoluteJointExternalForce.def(
         "apply_to",
         [](AffineBodyRevoluteJointExternalForce& self,
            geometry::SimplicialComplex&          sc,
-           py::array_t<Float>                    torques)
+           PyArray<Float>                        torques)
         { self.apply_to(sc, as_span<Float>(torques)); },
         py::arg("sc"),
         py::arg("torques"),
-        py::doc(R"(Apply per-joint external torques around revolute joint axis.
+        R"(Apply per-joint external torques around revolute joint axis.
 sc: Simplicial complex with edges representing the joints (must have AffineBodyRevoluteJoint applied).
-torques: List of scalar torque values (one per edge).)"));
+torques: List of scalar torque values (one per edge).)");
 }
 }  // namespace pyuipc::constitution

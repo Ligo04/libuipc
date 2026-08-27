@@ -1,4 +1,5 @@
-add_requires("pybind11","python")
+add_requires("nanobind 3.0.0", {system = false, configs = {shared = false}})
+add_requires("python")
 add_requireconfs("python", "**.python", {
     override = true,
     version = get_config("python_version"),
@@ -26,7 +27,10 @@ target("pyuipc")
         "uipc_io",
         "uipc_sanity_check"
     )
-    add_packages("pybind11")
+    add_packages("nanobind")
+    if not is_plat("windows") then
+        add_cxflags("-fvisibility=hidden", "-fno-strict-aliasing")
+    end
     on_load(function (target)
         import("core.base.semver")
 
@@ -81,10 +85,12 @@ target("pyuipc")
         local python_build_dir = path.join(build_dir, "python")
         local modules_target_dir = path.join(python_build_dir, "src", "uipc", "_native")
 
-        -- Copy the entire python folder to build directory
+        -- Copy the Python project contents into the staging root. Passing the
+        -- source directory itself would create build/python/python and leave
+        -- the extension outside the importable package tree.
         print("Copying python folder from " .. python_source_dir .. " to " .. python_build_dir)
         os.mkdir(modules_target_dir)
-        os.cp(python_source_dir, python_build_dir, {
+        os.cp(path.join(python_source_dir, "*"), python_build_dir, {
             copy_if_different = true
         })
 

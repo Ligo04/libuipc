@@ -5,7 +5,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 using namespace uipc::geometry;
-PyStableNeoHookean::PyStableNeoHookean(py::module& m)
+PyStableNeoHookean::PyStableNeoHookean(py::module_& m)
 {
     auto class_StableNeoHookean = py::class_<StableNeoHookean, FiniteElementConstitution>(
         m, "StableNeoHookean", R"(StableNeoHookean constitution for stable neo-Hookean hyperelastic material.)");
@@ -22,17 +22,14 @@ Args:
 Returns:
     dict: Default configuration dictionary.)");
 
-    class_StableNeoHookean.def("apply_to",
-                               [](StableNeoHookean& self,
-                                  SimplicialComplex& sc,
-                                  const ElasticModuli& moduli,
-                                  Float mass_density)
-                               { self.apply_to(sc, moduli, mass_density); },
-                               py::arg("sc"),
-                               py::arg("moduli") =
-                                   ElasticModuli::youngs_poisson(120.0_kPa, 0.49),
-                               py::arg("mass_density") = 1.0e3,
-                               R"(Apply StableNeoHookean constitution to a simplicial complex.
+    class_StableNeoHookean.def(
+        "apply_to",
+        [](StableNeoHookean& self, SimplicialComplex& sc, const ElasticModuli& moduli, Float mass_density)
+        { self.apply_to(sc, moduli, mass_density); },
+        py::arg("sc"),
+        py::arg("moduli") = ElasticModuli::youngs_poisson(120.0_kPa, 0.49),
+        py::arg("mass_density") = 1.0e3,
+        R"(Apply StableNeoHookean constitution to a simplicial complex.
 Args:
     sc: SimplicialComplex to apply to.
     moduli: ElasticModuli (default: Young's modulus 120.0 kPa, Poisson's ratio 0.49).

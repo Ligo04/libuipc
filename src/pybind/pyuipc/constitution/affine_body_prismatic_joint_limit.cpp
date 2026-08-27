@@ -6,7 +6,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PyAffineBodyPrismaticJointLimit::PyAffineBodyPrismaticJointLimit(py::module& m)
+PyAffineBodyPrismaticJointLimit::PyAffineBodyPrismaticJointLimit(py::module_& m)
 {
     auto class_AffineBodyPrismaticJointLimit =
         py::class_<AffineBodyPrismaticJointLimit, InterAffineBodyExtraConstitution>(
@@ -21,10 +21,9 @@ PyAffineBodyPrismaticJointLimit::PyAffineBodyPrismaticJointLimit(py::module& m)
 Args:
     config: Configuration dictionary (optional).)");
 
-    class_AffineBodyPrismaticJointLimit.def_static(
-        "default_config",
-        &AffineBodyPrismaticJointLimit::default_config,
-        R"(Get default configuration.)");
+    class_AffineBodyPrismaticJointLimit.def_static("default_config",
+                                                   &AffineBodyPrismaticJointLimit::default_config,
+                                                   R"(Get default configuration.)");
 
     class_AffineBodyPrismaticJointLimit.def(
         "apply_to",
@@ -40,10 +39,15 @@ Args:
         "apply_to",
         [](AffineBodyPrismaticJointLimit& self,
            geometry::SimplicialComplex&   sc,
-           py::array_t<Float>             lowers,
-           py::array_t<Float>             uppers,
-           py::array_t<Float>             strengths)
-        { self.apply_to(sc, as_span<Float>(lowers), as_span<Float>(uppers), as_span<Float>(strengths)); },
+           PyArray<Float>                 lowers,
+           PyArray<Float>                 uppers,
+           PyArray<Float>                 strengths)
+        {
+            self.apply_to(sc,
+                          as_span<Float>(lowers),
+                          as_span<Float>(uppers),
+                          as_span<Float>(strengths));
+        },
         py::arg("sc"),
         py::arg("lowers"),
         py::arg("uppers"),

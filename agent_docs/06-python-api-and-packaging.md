@@ -1,14 +1,22 @@
 # 06 — Python API and Packaging
 
-## pybind structure (`src/pybind/pyuipc/`)
+## Nanobind structure (`src/pybind/pyuipc/`)
 
-`PYBIND11_MODULE(pyuipc, m)` in the entry `module.cpp`:
+`NB_MODULE(pyuipc, m)` in the entry `module.cpp`:
 
 - Submodules: `unit`, `geometry`, `constitution`, `diff_sim`, `core`, `backend`, `builtin`, `usd`. The `usd` module object is created unconditionally, but USD classes are registered only when `UIPC_WITH_USD_SUPPORT` is enabled.
 - C++ namespaces `pyuipc::xxx` map one-to-one to Python submodules `pyuipc.xxx`; each subdirectory has its own `module.cpp` that binds classes one by one via the `PyXxx{m}` constructor.
 - **Early exposure**: the main `module.cpp` first binds the core data structures (`PyFeature`, `PyBufferView`, `PyAttributeSlot`, `PyGeometry`, `PySimplicialComplex`, the various Slots, `PyParameterCollection`), then calls each submodule's `PyModule` (geometry utilities/IO depend on core types).
 - Top-level aliases: `Engine`, `World`, `Scene`, `SceneIO`, `Animation` are promoted to the `pyuipc` top level; also registers `init`, `default_config`, `config`, `build_info`, `uipc::Exception`, `__version__`. `build_info()` reports the compiled Python ABI, build type, CUDA-backend flag, CUDA architectures, and toolkit version for runtime diagnosis.
-- Build: `pybind11_add_module(pyuipc)` links `uipc::uipc` and depends on every backend. Backend target files are also `LINK_DEPENDS`, so changing only a backend still relinks pyuipc and runs POST_BUILD `scripts/after_build_pyuipc.py` (copies the package/runtime libraries, regenerates `.pyi`, and refreshes the development install).
+- Build: CMake uses `nanobind_add_module(pyuipc NB_STATIC NOMINSIZE)` and XMake
+  links the repository-local static nanobind 3.0.0 package. Both targets link
+  `uipc::uipc`/the equivalent component libraries and depend on every backend.
+  Backend target files are also `LINK_DEPENDS` in CMake, so changing only a
+  backend still relinks pyuipc and runs POST_BUILD
+  `scripts/after_build_pyuipc.py` (copies the package/runtime libraries,
+  regenerates `.pyi`, and refreshes the development install). The current
+  post-build stub helper still uses `pybind11-stubgen`; replacing it with the
+  nanobind CLI shared by both build systems remains release work.
 
 ## Python package layout (`python/src/uipc/`)
 
@@ -75,7 +83,7 @@ restore `sys.modules` before returning so collection order cannot hide the real
 package. Each cibuildwheel environment runs both the metadata/backend smoke test
 and the portable pytest suite against the installed wheel.
 
-Release verification must go beyond `import uipc`: importing loads the pybind
+Release verification must go beyond `import uipc`: importing loads the native
 extension and core DLLs, while the backend is loaded lazily. At minimum create
 `Engine("cuda", temporary_workspace)` from a clean environment; preferably
 advance one asset-free frame. Otherwise a missing CUDA-major runtime dependency
@@ -83,7 +91,7 @@ escapes the smoke test.
 
 ## Key points for extending bindings
 
-- When adding a new C++ public API, consider syncing the pybind side: add a `PyXxx` binding file in the corresponding submodule directory and register it in that directory's `module.cpp`; keep the namespace mapping consistent.
+- When adding a new C++ public API, consider syncing the nanobind side: add a `PyXxx` binding file in the corresponding submodule directory and register it in that directory's `module.cpp`; keep the namespace mapping consistent.
 - Do not break the import chain in `__init__.py` (`pyuipc` → `init()` → `config["module_dir"]`).
 - New binding surfaces need tests added in `python/tests/`.
 - Audit exports rather than assuming C++/Python parity. `RotatingMotor` and

@@ -14,7 +14,7 @@ This directory is a structured summary of the libuipc codebase, allowing newly o
 | `03-geometry-and-io.md` | SimplicialComplex, attribute system, geometry algorithms, IO classes |
 | `04-constitutions.md` | Full list of constitution models (UID, parameters, physical meaning), Constraints and joints |
 | `05-cuda-backend.md` | CUDA backend subsystems, advance pipeline, cuda_tool (raw-CUDA utilities) and kernel naming, performance analysis |
-| `06-python-api-and-packaging.md` | pybind structure, Python package layout, wheel packaging pipeline |
+| `06-python-api-and-packaging.md` | nanobind structure, Python package layout, wheel packaging pipeline |
 | `nanobind-migration-plan.md` | Source-grounded pybind11-to-nanobind migration plan, version/build-system gates, high-risk adapters, and regression matrix |
 | `07-build-test-workflow.md` | CMake/XMake builds, test system, CI drift incidents and the pin/overlay pattern, development conventions (summary of .cursor rules) |
 | `08-pitfalls-and-debugging.md` | **Collected hard-won pitfalls**: build/CI traps, suite pollution, perf-measurement pitfalls, Python/runtime API traps, contact/constraint semantics gotchas, cuda_tool contracts |
@@ -35,7 +35,8 @@ This directory is a structured summary of the libuipc codebase, allowing newly o
   stitching, and joint families. Some algebra is generated from the
   `scripts/symbol_calculation/` notebooks, while other models use handwritten or
   ported analytic derivatives; header count is not model count (doc 04).
-- Dual build systems: CMake (primary) + XMake (backup); dual APIs: C++ + Python (pybind11, PyPI package name `pyuipc`).
+- Dual build systems: CMake (primary) + XMake (backup); dual APIs: C++ + Python
+  (nanobind 3.0.0, PyPI package name `pyuipc`).
 - Tests: Catch2 (`apps/tests/`, currently 95 sim-case source files; IDs are not unique/contiguous) + pytest (`python/tests/`, 19 files / 75 top-level tests).
 
 ## Onboarding Checklist for New Agents
@@ -56,4 +57,5 @@ This directory is a structured summary of the libuipc codebase, allowing newly o
 - The deterministic execution mode currently only has a design document (`docs/development/deterministic_mode.md`) and is not yet implemented.
 - `libuipc-samples/` is a tracked submodule with 52 current example directories; numbering is historical and includes two `40_*` directories.
 - The incremental Scene commit path has verified topology/ID/subscene limitations; read doc 11 before treating it as a general replication protocol.
-- XMake explicitly disables ccache, mirrors the active optional USD/VDB modules, and synchronizes pybind package copies before packaging.
+- XMake explicitly disables ccache, mirrors the active optional USD/VDB modules,
+  and synchronizes native Python package copies before packaging.

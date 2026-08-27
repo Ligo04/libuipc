@@ -5,7 +5,7 @@
 
 namespace uipc::geometry
 {
-namespace py = pybind11;
+namespace py = nanobind;
 template <>
 class AttributeFriend<pyuipc::core::PyScene>
 {
@@ -25,7 +25,7 @@ class AttributeFriend<pyuipc::core::PyScene>
                                     py::object                     object)
     {
         auto pyobj = py::cast(a.m_attributes,
-                              py::return_value_policy::reference_internal,  // member object is a reference in the parent object
+                              py::rv_policy::reference_internal,  // member object is a reference in the parent object
                               py::cast(a)  // parent object
         );
 
@@ -42,7 +42,7 @@ using namespace uipc::core;
 
 using Accessor = uipc::geometry::AttributeFriend<PyScene>;
 
-void def_method(py::module& m, py::class_<Scene::ConfigAttributes>& class_Attribute)
+void def_method(py::module_& m, py::class_<Scene::ConfigAttributes>& class_Attribute)
 {
     using Attributes = Scene::ConfigAttributes;
 
@@ -111,11 +111,11 @@ namespace pyuipc::core
 {
 using namespace uipc::core;
 using namespace uipc::geometry;
-PyScene::PyScene(py::module& m)
+PyScene::PyScene(py::module_& m)
 {
     // def class
-    auto class_Scene = py::class_<Scene, S<Scene>>(
-        m, "Scene", R"(Scene class representing a simulation scene containing objects, geometries, and constitutions.)");
+    auto class_Scene =
+        py::class_<Scene>(m, "Scene", R"(Scene class representing a simulation scene containing objects, geometries, and constitutions.)");
     auto class_Objects = py::class_<Scene::Objects>(
         class_Scene, "Objects", R"(Collection of objects in the scene.)");
     auto class_Geometries = py::class_<Scene::Geometries>(
@@ -162,14 +162,14 @@ World.init(scene) calls this automatically before backend initialization.)");
     class_Scene.def(
         "objects",  //
         [](Scene& self) { return self.objects(); },
-        py::return_value_policy::move,
+        py::rv_policy::move,
         R"(Get the objects collection.
 Returns:
     Objects: Collection of objects in the scene.)");
     class_Scene.def(
         "geometries",  //
         [](Scene& self) { return self.geometries(); },
-        py::return_value_policy::move,
+        py::rv_policy::move,
         R"(Get the geometries collection.
 Returns:
     Geometries: Collection of geometries in the scene.)");
@@ -177,7 +177,7 @@ Returns:
     class_Scene.def(
         "contact_tabular",
         [](Scene& self) -> ContactTabular& { return self.contact_tabular(); },
-        py::return_value_policy::reference_internal,
+        py::rv_policy::reference_internal,
         R"(Get the contact tabular (contact system configuration).
 Returns:
     ContactTabular: Reference to the contact tabular.)");
@@ -185,7 +185,7 @@ Returns:
     class_Scene.def(
         "subscene_tabular",
         [](Scene& self) -> SubsceneTabular& { return self.subscene_tabular(); },
-        py::return_value_policy::reference_internal,
+        py::rv_policy::reference_internal,
         R"(Get the subscene tabular (subscene configuration).
 Returns:
     SubsceneTabular: Reference to the subscene tabular.)");
@@ -194,7 +194,7 @@ Returns:
         "constitution_tabular",
         [](Scene& self) -> ConstitutionTabular&
         { return self.constitution_tabular(); },
-        py::return_value_policy::reference_internal,
+        py::rv_policy::reference_internal,
         R"(Get the constitution tabular (constitution configuration).
 Returns:
     ConstitutionTabular: Reference to the constitution tabular.)");
@@ -202,7 +202,7 @@ Returns:
     class_Scene.def(
         "animator",
         [](Scene& self) -> Animator& { return self.animator(); },
-        py::return_value_policy::reference_internal,
+        py::rv_policy::reference_internal,
         R"(Get the animator for the scene.
 Returns:
     Animator: Reference to the scene animator.)");
@@ -290,7 +290,7 @@ Returns:
     class_Scene.def(
         "diff_sim",
         [](Scene& self) -> DiffSim& { return self.diff_sim(); },
-        py::return_value_policy::reference_internal,
+        py::rv_policy::reference_internal,
         R"(Get the differential simulator for the scene.
 Returns:
     DiffSim: Reference to the differential simulator.)");

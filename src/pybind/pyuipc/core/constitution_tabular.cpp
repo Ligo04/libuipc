@@ -1,11 +1,10 @@
 #include <pyuipc/core/constitution_tabular.h>
 #include <uipc/core/constitution_tabular.h>
 #include <uipc/constitution/affine_body_constitution.h>
-#include <pybind11/stl.h>
 namespace pyuipc::core
 {
 using namespace uipc::core;
-PyConstitutionTabular::PyConstitutionTabular(py::module& m)
+PyConstitutionTabular::PyConstitutionTabular(py::module_& m)
 {
     auto class_ConstitutionTabular = py::class_<ConstitutionTabular>(
         m, "ConstitutionTabular", R"(ConstitutionTabular class managing constitutions (material models) in a scene.)");
@@ -24,7 +23,7 @@ Args:
     class_ConstitutionTabular.def(
         "uids",
         [](ConstitutionTabular& self)
-        { return as_numpy(self.uids(), py::cast(self)); },
+        { return as_numpy(self.uids(), py::find(&self)); },
         R"(Get the UIDs of all constitutions.
 Returns:
     numpy.ndarray: Array of constitution UIDs.)");

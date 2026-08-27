@@ -5,7 +5,7 @@
 namespace pyuipc
 {
 using namespace uipc;
-PyTransform::PyTransform(py::module& m)
+PyTransform::PyTransform(py::module_& m)
 {
     using Quaternion = Eigen::Quaternion<Float>;
     using AngleAxis  = Eigen::AngleAxis<Float>;
@@ -22,14 +22,15 @@ PyTransform::PyTransform(py::module& m)
 Returns:
     Quaternion: Identity quaternion.)");
 
-    class_Quaternion.def(py::init<>(
-                             [](py::array_t<Float> wxyz) -> Quaternion
-                             {
-                                 Vector4 v4 = to_matrix<Vector4>(wxyz);
-                                 return Quaternion(v4[0], v4[1], v4[2], v4[3]);
-                             }),
-                         py::arg("wxyz"),
-                         R"(Create a quaternion from w, x, y, z components.
+    class_Quaternion.def(
+        "__init__",
+        [](Quaternion* self, PyArray<Float> wxyz)
+        {
+            Vector4 v4 = to_matrix<Vector4>(wxyz);
+            new(self) Quaternion(v4[0], v4[1], v4[2], v4[3]);
+        },
+        py::arg("wxyz"),
+        R"(Create a quaternion from w, x, y, z components.
 Args:
     wxyz: Array of 4 floats [w, x, y, z] representing the quaternion.)");
 
@@ -68,10 +69,11 @@ Returns:
 Returns:
     Quaternion: Normalized quaternion.)");
 
-    class_Quaternion.def(py::init<>([](const AngleAxis& ax) -> Quaternion
-                                    { return Quaternion(ax); }),
-                         py::arg("angle_axis"),
-                         R"(Create a quaternion from an AngleAxis.
+    class_Quaternion.def(
+        "__init__",
+        [](Quaternion* self, const AngleAxis& ax) { new(self) Quaternion(ax); },
+        py::arg("angle_axis"),
+        R"(Create a quaternion from an AngleAxis.
 Args:
     angle_axis: AngleAxis object to convert.)");
 
@@ -83,23 +85,25 @@ Args:
 Returns:
     AngleAxis: Identity angle-axis.)");
 
-    class_AngleAxis.def(py::init<>(
-                            [](Float angle, py::array_t<Float> axis) -> AngleAxis
-                            {
-                                Vector3 A = to_matrix<Vector3>(axis);
-                                return AngleAxis(angle, A.normalized());
-                            }),
-                        py::arg("angle"),
-                        py::arg("axis"),
-                        R"(Create an angle-axis from an angle and axis vector.
+    class_AngleAxis.def(
+        "__init__",
+        [](AngleAxis* self, Float angle, PyArray<Float> axis)
+        {
+            Vector3 A = to_matrix<Vector3>(axis);
+            new(self) AngleAxis(angle, A.normalized());
+        },
+        py::arg("angle"),
+        py::arg("axis"),
+        R"(Create an angle-axis from an angle and axis vector.
 Args:
     angle: Rotation angle in radians.
     axis: 3D axis vector (will be normalized).)");
 
-    class_AngleAxis.def(py::init<>([](const Quaternion& q) -> AngleAxis
-                                   { return AngleAxis(q); }),
-                        py::arg("quaternion"),
-                        R"(Create an angle-axis from a quaternion.
+    class_AngleAxis.def(
+        "__init__",
+        [](AngleAxis* self, const Quaternion& q) { new(self) AngleAxis(q); },
+        py::arg("quaternion"),
+        R"(Create an angle-axis from a quaternion.
 Args:
     quaternion: Quaternion to convert.)");
 
@@ -170,21 +174,21 @@ Returns:
     numpy.ndarray: 4x4 transformation matrix.)");
 
     // transform
-    class_Transform.def(py::init<>(
-                            [](py::array_t<Float> m) -> Transform
-                            {
-                                Transform t = Transform::Identity();
-                                t.matrix()  = to_matrix<Matrix4x4>(m);
-                                return t;
-                            }),
-                        py::arg("matrix"),
-                        R"(Create a transform from a 4x4 matrix.
+    class_Transform.def(
+        "__init__",
+        [](Transform* self, PyArray<Float> m)
+        {
+            new(self) Transform(Transform::Identity());
+            self->matrix() = to_matrix<Matrix4x4>(m);
+        },
+        py::arg("matrix"),
+        R"(Create a transform from a 4x4 matrix.
 Args:
     matrix: 4x4 transformation matrix.)");
 
     class_Transform.def(
         "translate",
-        [](Transform& self, py::array_t<Float> v) -> Transform&
+        [](Transform& self, PyArray<Float> v) -> Transform&
         {
             Vector3 v3 = to_matrix<Vector3>(v);
             return self.translate(v3);
@@ -220,11 +224,22 @@ Returns:
 
     class_Transform.def(
         "scale",
-        [](Transform& self, py::array_t<Float> v) -> Transform&
+        [](Transform& self, Float scale) -> Transform&
+        { return self.scale(scale); },
+        py::arg("scale"),
+        R"(Apply uniform scaling to the transform (post-multiply).
+Args:
+    scale: Uniform scale factor.
+Returns:
+    Transform: Reference to self for chaining.)");
+
+    class_Transform.def(
+        "scale",
+        [](Transform& self, PyArray<Float> v) -> Transform&
         {
             if(v.ndim() == 0)
             {
-                Float s = v.cast<Float>();
+                Float s = v.data()[0];
                 return self.scale(s);
             }
             else
@@ -251,7 +266,7 @@ Returns:
 
     class_Transform.def(
         "pretranslate",
-        [](Transform& self, py::array_t<Float> v) -> Transform&
+        [](Transform& self, PyArray<Float> v) -> Transform&
         {
             Vector3 v3 = to_matrix<Vector3>(v);
             return self.pretranslate(v3);
@@ -287,11 +302,22 @@ Returns:
 
     class_Transform.def(
         "prescale",
-        [](Transform& self, py::array_t<Float> v) -> Transform&
+        [](Transform& self, Float scale) -> Transform&
+        { return self.prescale(scale); },
+        py::arg("scale"),
+        R"(Apply uniform scaling to the transform (pre-multiply).
+Args:
+    scale: Uniform scale factor.
+Returns:
+    Transform: Reference to self for chaining.)");
+
+    class_Transform.def(
+        "prescale",
+        [](Transform& self, PyArray<Float> v) -> Transform&
         {
             if(v.ndim() == 0)
             {
-                Float s = v.cast<Float>();
+                Float s = v.data()[0];
                 return self.prescale(s);
             }
             else
@@ -320,7 +346,7 @@ Returns:
     Transform: Result of transform composition.)");
     class_Transform.def(
         "__mul__",
-        [](Transform& self, py::array_t<Float> v) -> py::array_t<Float>
+        [](Transform& self, PyArray<Float> v) -> PyArray<Float>
         {
             Vector3 v3 = to_matrix<Vector3>(v);
             return as_numpy(self * v3);
@@ -334,7 +360,7 @@ Returns:
 
     class_Transform.def(
         "apply_to",
-        [](Transform& self, py::array_t<Float> v) -> py::array_t<Float>
+        [](Transform& self, PyArray<Float> v) -> PyArray<Float>
         {
             if(v.ndim() >= 2)
             {
@@ -354,9 +380,10 @@ Args:
 Returns:
     numpy.ndarray: Transformed vector(s).)");
 
-    class_Transform.def("inverse",
-                        [](const Transform& self) -> Transform { return self.inverse(); },
-                        R"(Get the inverse transform.
+    class_Transform.def(
+        "inverse",
+        [](const Transform& self) -> Transform { return self.inverse(); },
+        R"(Get the inverse transform.
 Returns:
     Transform: Inverse transformation matrix.)");
 }

@@ -6,7 +6,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PyAffineBodyConstitution::PyAffineBodyConstitution(py::module& m)
+PyAffineBodyConstitution::PyAffineBodyConstitution(py::module_& m)
 {
     auto class_AffineBodyConstitution = py::class_<AffineBodyConstitution, IConstitution>(
         m, "AffineBodyConstitution", R"(AffineBodyConstitution for rigid body simulation with affine transformations.)");
@@ -42,7 +42,7 @@ Args:
         [](const AffineBodyConstitution& self,
            geometry::SimplicialComplex&  sc,
            Float                         kappa,
-           py::array_t<Float>            mass,
+           PyArray<Float>                mass,
            Float                         volume)
         { self.apply_to(sc, kappa, to_matrix<Matrix12x12>(mass), volume); },
         py::arg("sc"),
@@ -61,12 +61,15 @@ Args:
         [](const AffineBodyConstitution& self,
            Float                         kappa,
            Float                         mass,
-           py::array_t<Float>            mass_center,
-           py::array_t<Float>            inertia,
+           PyArray<Float>                mass_center,
+           PyArray<Float>                inertia,
            Float                         volume)
         {
-            return self.create_proxy(kappa, mass, to_matrix<Vector3>(mass_center),
-                                     to_matrix<Matrix3x3>(inertia), volume);
+            return self.create_proxy(kappa,
+                                     mass,
+                                     to_matrix<Vector3>(mass_center),
+                                     to_matrix<Matrix3x3>(inertia),
+                                     volume);
         },
         py::arg("kappa"),
         py::arg("mass"),
@@ -85,11 +88,7 @@ Returns:
 
     class_AffineBodyConstitution.def(
         "create_proxy",
-        [](const AffineBodyConstitution& self,
-           Float                         kappa,
-           py::array_t<Float>            abd_mass,
-           Float                         volume)
-        {
+        [](const AffineBodyConstitution& self, Float kappa, PyArray<Float> abd_mass, Float volume) {
             return self.create_proxy(kappa, to_matrix<Matrix12x12>(abd_mass), volume);
         },
         py::arg("kappa"),

@@ -1,7 +1,7 @@
-# Create an extension module
-pybind11_add_module(pyuipc)
+# Create an extension module. NOMINSIZE keeps the project's configured
+# optimization policy aligned with the XMake build.
+nanobind_add_module(pyuipc NB_STATIC NOMINSIZE)
 target_compile_features(pyuipc PUBLIC cxx_std_20)
-target_link_libraries(pyuipc PUBLIC pybind11::module)
 target_link_libraries(pyuipc PUBLIC uipc::uipc)
 # ensure all backends are built before pyuipc
 add_dependencies(pyuipc uipc::backends)
@@ -16,8 +16,6 @@ endforeach()
 unset(_uipc_backend_target)
 unset(_uipc_backend_targets)
 target_include_directories(pyuipc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../")
-target_compile_definitions(pyuipc PRIVATE "PYBIND11_DETAILED_ERROR_MESSAGES")
-
 set(_uipc_py_cuda_backend 0)
 set(_uipc_py_cuda_architectures "none")
 set(_uipc_py_cuda_toolkit_version "none")
@@ -98,4 +96,3 @@ uipc_install_target(pyuipc)
 # Install all vcpkg runtime dependencies (DLLs/shared libraries)
 # This installs DLLs from vcpkg_installed/bin which contain dependencies like spdlog, fmt, TBB, etc.
 uipc_install_vcpkg_runtime()
-

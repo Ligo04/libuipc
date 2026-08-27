@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyAffineBodyFixedJoint
 {
   public:
-    PyAffineBodyFixedJoint(py::module& m);
+    PyAffineBodyFixedJoint(py::module_& m);
 };
 }  // namespace pyuipc::constitution

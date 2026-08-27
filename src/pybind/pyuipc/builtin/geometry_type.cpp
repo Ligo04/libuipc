@@ -4,12 +4,12 @@
 
 namespace pyuipc::builtin
 {
-PyGeometryType::PyGeometryType(py::module& m)
+PyGeometryType::PyGeometryType(py::module_& m)
 {
     m.attr("Geometry") = std::string(uipc::builtin::Geometry);
-    m.attr("AbstractSimplicialComplex") = std::string(uipc::builtin::AbstractSimplicialComplex);
+    m.attr("AbstractSimplicialComplex") =
+        std::string(uipc::builtin::AbstractSimplicialComplex);
     m.attr("SimplicialComplex") = std::string(uipc::builtin::SimplicialComplex);
-    m.attr("ImplicitGeometry") = std::string(uipc::builtin::ImplicitGeometry);
+    m.attr("ImplicitGeometry")  = std::string(uipc::builtin::ImplicitGeometry);
 }
 }  // namespace pyuipc::builtin
-

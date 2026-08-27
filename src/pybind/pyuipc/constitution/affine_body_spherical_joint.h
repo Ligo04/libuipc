@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyAffineBodySphericalJoint
 {
   public:
-    PyAffineBodySphericalJoint(py::module& m);
+    PyAffineBodySphericalJoint(py::module_& m);
 };
 }  // namespace pyuipc::constitution

@@ -4,11 +4,10 @@
 namespace pyuipc::core
 {
 using namespace uipc::core;
-PyDistanceDiagnoserFeature::PyDistanceDiagnoserFeature(py::module& m)
+PyDistanceDiagnoserFeature::PyDistanceDiagnoserFeature(py::module_& m)
 {
     auto class_DistanceDiagnoserFeature =
-        py::class_<DistanceDiagnoserFeature, IFeature, S<DistanceDiagnoserFeature>>(
-            m, "DistanceDiagnoserFeature");
+        py::class_<DistanceDiagnoserFeature, IFeature>(m, "DistanceDiagnoserFeature");
 
     class_DistanceDiagnoserFeature.def(
         "compute_point_triangle_distance",
@@ -29,7 +28,9 @@ PyDistanceDiagnoserFeature::PyDistanceDiagnoserFeature(py::module& m)
            geometry::SimplicialComplex& edges_b,
            geometry::SimplicialComplex& rest_edges_a,
            geometry::SimplicialComplex& rest_edges_b)
-        { self.compute_edge_edge_distance(R, edges_a, edges_b, rest_edges_a, rest_edges_b); },
+        {
+            self.compute_edge_edge_distance(R, edges_a, edges_b, rest_edges_a, rest_edges_b);
+        },
         py::arg("R"),
         py::arg("edges_a"),
         py::arg("edges_b"),
@@ -58,7 +59,6 @@ PyDistanceDiagnoserFeature::PyDistanceDiagnoserFeature(py::module& m)
         py::arg("points_a"),
         py::arg("points_b"));
 
-    class_DistanceDiagnoserFeature.attr("FeatureName") =
-        DistanceDiagnoserFeature::FeatureName;
+    class_DistanceDiagnoserFeature.attr("FeatureName") = DistanceDiagnoserFeature::FeatureName;
 }
 }  // namespace pyuipc::core
