@@ -20,8 +20,15 @@
 > upstream floor, and the static nanobind package cache remains Python-ABI
 > specific. Earlier CPython 3.12.3 CUDA, SM 120 cubin/PTX, and
 > `wrecking_balls` validation remains applicable because this split changes no
-> CUDA backend or core source. Windows and the CPython 3.10-3.14 matrix remain
-> open.
+> CUDA backend or core source. The root PEP 517/scikit-build-core entry now also
+> produces installable Linux CPU wheels for CPython 3.10.20, 3.11.15, 3.12.3,
+> 3.13.12, and 3.14.3. Each wheel was installed into a clean environment and
+> passed ABI/metadata/stub checks, `Engine("none")`, and the portable suite
+> (84 passed, one optional Warp test skipped, 54 deselected). NumPy is now an
+> explicit isolated-build dependency, and CMake only bootstraps pip when a
+> required module is actually absent, allowing the project's pip-less and
+> ensurepip-less CPython 3.12.3 PEP 517 environment to build normally. Windows
+> remains open.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and

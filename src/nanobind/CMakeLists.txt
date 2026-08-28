@@ -1,6 +1,5 @@
 set(UIPC_NANOBIND_VERSION "3.0.0")
 
-uipc_require_pip_ensure(${UIPC_PYTHON_EXECUTABLE_PATH})
 execute_process(
     COMMAND ${UIPC_PYTHON_EXECUTABLE_PATH} "-c"
             "from importlib.metadata import version; raise SystemExit(version('nanobind') != '${UIPC_NANOBIND_VERSION}')"
@@ -9,6 +8,7 @@ execute_process(
 )
 if(NOT UIPC_NANOBIND_VERSION_RESULT EQUAL 0)
     uipc_info("Installing nanobind ${UIPC_NANOBIND_VERSION}...")
+    uipc_require_pip_ensure(${UIPC_PYTHON_EXECUTABLE_PATH})
     execute_process(
         COMMAND ${UIPC_PYTHON_EXECUTABLE_PATH} "-m" "pip" "install"
                 "nanobind==${UIPC_NANOBIND_VERSION}"

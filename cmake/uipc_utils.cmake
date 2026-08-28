@@ -282,8 +282,6 @@ endfunction()
 # Require a python module, if not found, try to install it with pip
 # -----------------------------------------------------------------------------------------
 function(uipc_require_python_module python_dir module_name)
-    uipc_require_pip_ensure(${python_dir})
-
     file(TO_CMAKE_PATH "${python_dir}" python_dir)
     uipc_info("Check python module [${module_name}] with [${python_dir}]")
 
@@ -296,6 +294,7 @@ function(uipc_require_python_module python_dir module_name)
     
     if (NOT CMD_RESULT EQUAL 0)
         uipc_info("${module_name} not found, try installing ${module_name}...")
+        uipc_require_pip_ensure(${python_dir})
         execute_process(COMMAND ${python_dir} "-m" "pip" "install" "${module_name}"
             RESULT_VARIABLE INSTALL_RESULT)
         if (NOT INSTALL_RESULT EQUAL 0)

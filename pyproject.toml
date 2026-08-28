@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "nanobind==3.0.0",
+    "numpy",
     "scikit-build-core>=0.10.0",
     "setuptools-scm>=8.0.0",
 ]
