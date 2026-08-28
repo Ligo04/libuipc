@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
@@ -13,11 +12,13 @@ from scripts.detect_0kb_files import detect_0kb_files
 
 class RepositoryContractTests(unittest.TestCase):
     def test_python_wheel_declares_numpy_as_isolated_build_dependency(self) -> None:
-        pyproject = tomllib.loads(
-            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        build_system = (
+            (ROOT / "pyproject.toml")
+            .read_text(encoding="utf-8")
+            .split("[project]", maxsplit=1)[0]
         )
 
-        self.assertIn("numpy", pyproject["build-system"]["requires"])
+        self.assertRegex(build_system, r'(?m)^\s*"numpy",\s*$')
 
     def test_current_repository_contracts(self) -> None:
         self.assertEqual(detect_0kb_files(ROOT), [])
