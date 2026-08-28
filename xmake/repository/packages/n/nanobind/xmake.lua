@@ -1,5 +1,6 @@
 -- Copied from xmake-repo dev@e063b2eb1633b9c5d37fbfe9a51b39b5115883fa.
--- The local recipe adds nanobind 3.0.0 until the official repository catches up.
+-- The local recipe adds nanobind 3.0.0 and corrects the Python version floors
+-- until the official repository catches up.
 package("nanobind")
     set_homepage("https://github.com/wjakob/nanobind")
     set_description("nanobind: tiny and efficient C++/Python bindings")
@@ -21,10 +22,13 @@ package("nanobind")
     add_deps("cmake", "robin-map")
 
     on_load(function (package)
-        -- Match the official xmake-repo behavior: let dependency resolution
-        -- select any Python version that satisfies nanobind's version floor.
-        if package:version() and package:version():ge("3.0.0") then
+        -- Keep the official recipe's automatic dependency resolution while
+        -- matching each nanobind release line's actual Python version floor.
+        local version = package:version()
+        if version and version:ge("3.0.0") then
             package:add("deps", "python >=3.10")
+        elseif version and version:ge("2.10.0") then
+            package:add("deps", "python >=3.9")
         else
             package:add("deps", "python >=3.8")
         end

@@ -97,8 +97,10 @@ XMake overlay 是一个**阶段 0 构建可行性门槛**。当前 Linux 探针�
 仓库声明的最低 XMake 3.0.5（`xmake.lua:1`）兼容性应由 CI 矩阵持续覆盖；
 本次本地开发与验收按工作区最新 XMake 执行。
 
-本地 overlay 按官方配方的行为，让 XMake 自动选择满足 nanobind 版本下限的
-Python（3.0.0 要求 `>=3.10`）。具体解释器仍可由产品层
+本地 overlay 保留官方配方的自动依赖解析行为，同时匹配 nanobind 各版本线的
+实际 Python 下限：2.10.0 之前为 `>=3.8`，2.10.0-2.12.x 为 `>=3.9`，
+3.x 为 `>=3.10`。官方当前 2.x 配方统一声明 `>=3.8`，本地 overlay 修正了
+其中 2.10.0 及以上版本过宽的下限。具体解释器仍可由产品层
 `add_requireconfs`、`python_system` 和外部构建环境约束，但不再作为
 nanobind 包自身的配置进入包哈希。`libnanobind` 静态核心依赖 CPython ABI；
 CPython 3.12 wheel 验证曾捕获旧的 Python 3.14.3 核心被错误复用并导致导入时
@@ -378,8 +380,9 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 - 使用 CPython 3.12.3 完成 pybind11/nanobind 的 XMake CUDA release 构建、
   CUDA Engine 冒烟，以及 `wrecking_balls` 各 5 次 300 帧对照；按 Newton
   工作量归一后的模拟耗时相同，nanobind 场景创建中位数减少约 8.6 ms。
-- 将 overlay 改为官方式 `python >=3.10` 自动依赖解析；移走旧 3.0.0 包缓存
-  后重新配置，manifest、编译头文件和 wheel ABI 均为 CPython 3.12，XMake
-  release 构建、解包导入及 `Engine("none")` 冒烟通过。
+- 将 overlay 改为官方式自动依赖解析，并按上游要求为 2.10.0 前、2.10.0
+  起和 3.x 分别声明 `python >=3.8`、`>=3.9`、`>=3.10`；移走旧 3.0.0 包
+  缓存后重新配置，manifest、编译头文件和 wheel ABI 均为 CPython 3.12，
+  XMake release 构建、解包导入及 `Engine("none")` 冒烟通过。
 - **未执行** CMake、Windows、完整 CUDA pytest 或 CPython 3.10-3.14 wheel
   矩阵验证。

@@ -12,9 +12,11 @@
   links the repository-local static nanobind 3.0.0 package. Both targets link
   `uipc::uipc`/the equivalent component libraries and depend on every backend.
   The XMake overlay follows the official recipe's automatic dependency
-  resolution and declares `python >=3.10`; project-level `add_requireconfs`
-  may constrain that dependency, but the concrete interpreter is selected by
-  the outer XMake configuration/environment. The static nanobind core is
+  resolution while matching nanobind's upstream Python floors: releases before
+  2.10 require `python >=3.8`, 2.10-2.12 require `python >=3.9`, and 3.x
+  requires `python >=3.10`. Project-level `add_requireconfs` may constrain that
+  dependency, but the concrete interpreter is selected by the outer XMake
+  configuration/environment. The static nanobind core is
   Python-ABI-specific, so builds that switch Python minors must isolate or
   clear the nanobind package cache.
   Backend target files are also `LINK_DEPENDS` in CMake, so changing only a

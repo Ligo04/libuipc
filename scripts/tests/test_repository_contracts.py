@@ -15,13 +15,25 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertEqual(check_constitution_api(ROOT), [])
         self.assertEqual(check_workflow_pins(ROOT), [])
 
-    def test_nanobind_uses_automatic_python_dependency_resolution(self) -> None:
+    def test_nanobind_uses_upstream_python_version_floors(self) -> None:
         recipe = (
             ROOT / "xmake/repository/packages/n/nanobind/xmake.lua"
         ).read_text(encoding="utf-8")
         target = (ROOT / "src/pybind/xmake.lua").read_text(encoding="utf-8")
 
-        self.assertIn('package:add("deps", "python >=3.10")', recipe)
+        python_floors = (
+            ('version:ge("3.0.0")', 'package:add("deps", "python >=3.10")'),
+            ('version:ge("2.10.0")', 'package:add("deps", "python >=3.9")'),
+            (None, 'package:add("deps", "python >=3.8")'),
+        )
+        for version_check, dependency in python_floors:
+            if version_check is not None:
+                self.assertIn(version_check, recipe)
+            self.assertIn(dependency, recipe)
+        self.assertLess(
+            recipe.index('version:ge("3.0.0")'),
+            recipe.index('version:ge("2.10.0")'),
+        )
         for config in ("python_version", "python_system"):
             self.assertNotIn(f'add_configs("{config}"', recipe)
             self.assertNotIn(f'package:config("{config}")', recipe)
