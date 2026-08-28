@@ -98,6 +98,48 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("find_package(pybind11", (ROOT / "src/pybind/CMakeLists.txt").read_text(encoding="utf-8"))
         self.assertIn("find_package(nanobind", (ROOT / "src/nanobind/CMakeLists.txt").read_text(encoding="utf-8"))
 
+    def test_nanobind_migration_branch_runs_binding_ci_without_publishing(self) -> None:
+        branch = "codex/migrate-pybind-to-nanobind"
+        workflow_paths = (
+            ROOT / ".github/workflows/cmake.yml",
+            ROOT / ".github/workflows/xmake.yml",
+            ROOT / ".github/workflows/python-wheels.yml",
+            ROOT / ".github/workflows/repository-contracts.yml",
+        )
+        workflows = {
+            path.name: path.read_text(encoding="utf-8") for path in workflow_paths
+        }
+
+        for name, workflow in workflows.items():
+            push_trigger = workflow.split("push:", maxsplit=1)[1].split(
+                "pull_request:", maxsplit=1
+            )[0]
+            self.assertRegex(
+                push_trigger,
+                rf'(?m)^\s+- ["\']?{re.escape(branch)}["\']?\s*$',
+                f"{name} does not run when the nanobind migration branch is pushed",
+            )
+
+        cmake = workflows["cmake.yml"]
+        self.assertIn("-DUIPC_BUILD_PYBIND=ON", cmake)
+        self.assertIn("-DUIPC_PYTHON_BINDING=nanobind", cmake)
+
+        xmake = workflows["xmake.yml"]
+        self.assertIn("--pybind=y", xmake)
+        self.assertIn("--python_binding=nanobind", xmake)
+        self.assertIn("astral-sh/setup-uv@", xmake)
+        self.assertIn("xmake pack", xmake)
+
+        wheels = workflows["python-wheels.yml"]
+        test_publish = wheels.split("publish-test-pypi:", maxsplit=1)[1].split(
+            "publish-pypi:", maxsplit=1
+        )[0]
+        production_publish = wheels.split("publish-pypi:", maxsplit=1)[1].split(
+            "verify-test-pypi:", maxsplit=1
+        )[0]
+        self.assertIn("startsWith(github.ref, 'refs/tags/v')", test_publish)
+        self.assertIn("if: github.event_name == 'release'", production_publish)
+
     def test_nanobind_stubgen_pipeline_is_shared(self) -> None:
         wrapper = (ROOT / "scripts/stubgen.py").read_text(encoding="utf-8")
         post_build = (ROOT / "scripts/after_build_pyuipc.py").read_text(

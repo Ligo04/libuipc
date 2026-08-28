@@ -5,6 +5,7 @@ on:
     branches:
       - "main"
       - "refactor-main"
+      - "codex/migrate-pybind-to-nanobind"
   pull_request:
     branches:
       - "main"

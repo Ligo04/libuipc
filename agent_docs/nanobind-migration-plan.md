@@ -308,11 +308,12 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
   现有 smoke test 覆盖了前四项中的大部分，但不检查 stub 和退出诊断
   （`scripts/smoke_test_wheel.py:13-73`）。
 
-当前通用 XMake 工作流从不启用 `--pybind=y`
-（`.github/workflows/xmake.yml:79-93`），而 wheel 工作流忽略所有
-`xmake.lua` 变更（`.github/workflows/python-wheels.yml:9-37`）。应增加
-专用的 XMake Python 绑定配置/构建/导入/stub 任务；否则 CMake wheel 成功
-无法验证所要求的构建系统对等性。
+迁移分支的 CMake 与 XMake 工作流现已显式选择 nanobind。XMake 在 Linux
+和 Windows 上使用 CPython 3.12 构建、打包、安装并检查 ABI、递归 stub、
+`py.typed` 和 `Engine("none")`；CMake 同样构建并导入 nanobind 产品扩展。
+wheel 工作流在该分支运行 Linux/Windows CPython 3.10-3.14 矩阵，但普通
+分支 push 只上传 Actions artifact，TestPyPI/PyPI 发布仍仅允许 tag/release。
+这些门槛只有在远端 Actions 完成后才能计为跨平台验证通过。
 
 ## 主要残余风险
 

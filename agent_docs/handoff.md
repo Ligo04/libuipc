@@ -28,7 +28,11 @@
 > explicit isolated-build dependency, and CMake only bootstraps pip when a
 > required module is actually absent, allowing the project's pip-less and
 > ensurepip-less CPython 3.12.3 PEP 517 environment to build normally. Windows
-> remains open.
+> remains open. Pushes to the migration branch now trigger explicit nanobind
+> CMake/XMake binding jobs plus the Linux/Windows CPython 3.10-3.14 wheel
+> matrix. Branch runs upload wheel artifacts but cannot publish to TestPyPI or
+> PyPI; those jobs remain restricted to tags/releases. Remote Actions results
+> must be checked before counting Windows as validated.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and

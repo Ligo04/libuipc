@@ -5,6 +5,7 @@ on:
     branches:
       - 'main'
       - 'refactor-main'
+      - 'codex/migrate-pybind-to-nanobind'
     paths-ignore:
       - '.clang-format'
       - '.clangd'
@@ -69,6 +70,16 @@ jobs:
         with:
           submodules: false
 
+      - name: Set up Python for nanobind
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv for XMake packaging
+        uses: astral-sh/setup-uv@162b8acf397cb069dec09a3f5a9847cf71cfa46a # v1
+        with:
+          version: '0.12.5'
+
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@3a1a5dddfc7fa625d9a698738334bf55655a861a # v1
         with:
@@ -79,12 +90,12 @@ jobs:
       - name: Xmake configure
         if: matrix.os == 'ubuntu-24.04'
         run: |
-          xmake config --yes --github_actions=y
+          xmake config --yes --github_actions=y --pybind=y --python_binding=nanobind --python_system=y --python_version=3.12.x
 
       - name: Xmake configure
         if: matrix.os == 'windows-2022'
         run: |
-          xrepo env -y -v -b cuda "xmake config --yes --github_actions=y"
+          xrepo env -y -v -b cuda "xmake config --yes --github_actions=y --pybind=y --python_binding=nanobind --python_system=y --python_version=3.12.x"
 
       - name: Build libuipc
         run: |
@@ -97,3 +108,36 @@ jobs:
           xmake run common
           xmake run core
           xmake run geometry
+
+      - name: Package and smoke-test nanobind wheel
+        shell: bash
+        run: |
+          xmake pack -y -o build/xpack pyuipc
+          wheel=$(find build/xpack -maxdepth 1 -name '*.whl' -print -quit)
+          test -n "$wheel"
+          python -m pip install --force-reinstall "$wheel"
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+
+          import uipc
+          from uipc import Engine
+
+          package_dir = Path(uipc.__file__).resolve().parent
+          build_info = dict(uipc.build_info())
+          assert build_info["python_abi"] == "cp312", build_info
+          assert build_info["cuda_backend"] is True, build_info
+          assert len(list((package_dir / "_native").rglob("*.pyi"))) == 10, package_dir
+          assert (package_dir / "py.typed").is_file(), package_dir
+          with tempfile.TemporaryDirectory(prefix="pyuipc-xmake-ci-") as workspace:
+              engine = Engine("none", workspace)
+              del engine
+          print(build_info)
+          PY
+
+      - name: Upload XMake nanobind wheel
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pyuipc-xmake-nanobind-${{ matrix.os }}
+          path: build/xpack/*.whl
+          if-no-files-found: error
