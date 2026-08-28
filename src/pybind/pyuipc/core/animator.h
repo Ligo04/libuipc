@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PyAnimator
 {
   public:
-    PyAnimator(py::module_& m);
+    PyAnimator(py::module& m);
 };
 }  // namespace pyuipc::core

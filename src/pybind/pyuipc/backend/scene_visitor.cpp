@@ -7,7 +7,7 @@ namespace pyuipc::backend
 {
 using namespace uipc::backend;
 using namespace uipc::core;
-PySceneVisitor::PySceneVisitor(py::module_& m)
+PySceneVisitor::PySceneVisitor(py::module& m)
 {
     auto class_SceneVisitor = py::class_<SceneVisitor>(
         m, "SceneVisitor", R"(SceneVisitor class for accessing scene data from backend.)");
@@ -62,7 +62,7 @@ Returns:
         "constitution_tabular",
         [](SceneVisitor& self) -> ConstitutionTabular&
         { return self.constitution_tabular(); },
-        py::rv_policy::reference_internal,
+        py::return_value_policy::reference_internal,
         R"(Get the constitution tabular.
 Returns:
     ConstitutionTabular: Reference to constitution tabular.)");
@@ -70,7 +70,7 @@ Returns:
         "contact_tabular",
         [](SceneVisitor& self) -> ContactTabular&
         { return self.contact_tabular(); },
-        py::rv_policy::reference_internal,
+        py::return_value_policy::reference_internal,
         R"(Get the contact tabular.
 Returns:
     ContactTabular: Reference to contact tabular.)");
@@ -84,7 +84,7 @@ Returns:
 
     class_SceneVisitor.def("get",
                            &SceneVisitor::get,
-                           py::rv_policy::move,
+                           py::return_value_policy::move,
                            R"(Get the scene.
 Returns:
     Scene: Scene object.)");

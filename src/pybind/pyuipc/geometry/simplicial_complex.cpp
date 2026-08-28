@@ -6,7 +6,7 @@
 #include <pyuipc/geometry/attribute_creator.h>
 namespace uipc::geometry
 {
-namespace py = nanobind;
+namespace py = pybind11;
 template <>
 class AttributeFriend<pyuipc::geometry::PySimplicialComplex>
 {
@@ -42,7 +42,7 @@ using namespace uipc::geometry;
 using Accessor = AttributeFriend<PySimplicialComplex>;
 
 template <IndexT N>
-void def_method(py::module_& m, py::class_<SimplicialComplexAttributes<false, N>>& class_Attribute)
+void def_method(py::module& m, py::class_<SimplicialComplexAttributes<false, N>>& class_Attribute)
 {
     using Attributes = SimplicialComplexAttributes<false, N>;
     using TopoValueT = typename Attributes::TopoValueT;
@@ -64,7 +64,7 @@ Returns:
             "topo",
             [](Attributes& self) -> AttributeSlot<TopoValueT>&
             { return self.topo(); },
-            py::rv_policy::reference_internal,
+            py::return_value_policy::reference_internal,
             R"(Get the topology attribute slot.
 Returns:
     AttributeSlot: Reference to topology attribute slot.)");
@@ -125,12 +125,13 @@ Returns:
     dict: JSON representation of the attributes.)");
 }
 
-PySimplicialComplex::PySimplicialComplex(py::module_& m)
+PySimplicialComplex::PySimplicialComplex(py::module& m)
 {
     // Class Def
 
-    auto class_SimplicialComplex = py::class_<SimplicialComplex, Geometry>(
-        m, "SimplicialComplex", R"(SimplicialComplex class representing a simplicial complex (mesh) with vertices, edges, triangles, and tetrahedra.)");
+    auto class_SimplicialComplex =
+        py::class_<SimplicialComplex, Geometry, S<SimplicialComplex>>(
+            m, "SimplicialComplex", R"(SimplicialComplex class representing a simplicial complex (mesh) with vertices, edges, triangles, and tetrahedra.)");
 
 
     auto class_VertexAttributes = py::class_<SimplicialComplex::VertexAttributes>(
@@ -156,7 +157,7 @@ PySimplicialComplex::PySimplicialComplex(py::module_& m)
         "transforms",
         [](SimplicialComplex& self) -> AttributeSlot<Matrix4x4>&
         { return self.transforms(); },
-        py::rv_policy::reference_internal,
+        py::return_value_policy::reference_internal,
         R"(Get the transform attribute slot (4x4 transformation matrices).
 Returns:
     AttributeSlot: Reference to transform attribute slot.)");
@@ -164,7 +165,7 @@ Returns:
     class_SimplicialComplex.def(
         "vertices",
         [](SimplicialComplex& self) { return self.vertices(); },
-        py::rv_policy::move,
+        py::return_value_policy::move,
         R"(Get the vertex attributes.
 Returns:
     VertexAttributes: Vertex attributes collection.)");
@@ -173,7 +174,7 @@ Returns:
         "positions",
         [&](SimplicialComplex& self) -> AttributeSlot<Vector3>&
         { return self.positions(); },
-        py::rv_policy::reference_internal,
+        py::return_value_policy::reference_internal,
         R"(Get the position attribute slot (3D vertex positions).
 Returns:
     AttributeSlot: Reference to position attribute slot.)");
@@ -181,7 +182,7 @@ Returns:
     class_SimplicialComplex.def(
         "edges",
         [](SimplicialComplex& self) { return self.edges(); },
-        py::rv_policy::move,
+        py::return_value_policy::move,
         R"(Get the edge attributes.
 Returns:
     EdgeAttributes: Edge attributes collection.)");
@@ -189,7 +190,7 @@ Returns:
     class_SimplicialComplex.def(
         "triangles",
         [](SimplicialComplex& self) { return self.triangles(); },
-        py::rv_policy::move,
+        py::return_value_policy::move,
         R"(Get the triangle attributes.
 Returns:
     TriangleAttributes: Triangle attributes collection.)");
@@ -197,7 +198,7 @@ Returns:
     class_SimplicialComplex.def(
         "tetrahedra",
         [](SimplicialComplex& self) { return self.tetrahedra(); },
-        py::rv_policy::move,
+        py::return_value_policy::move,
         R"(Get the tetrahedron attributes.
 Returns:
     TetrahedronAttributes: Tetrahedron attributes collection.)");

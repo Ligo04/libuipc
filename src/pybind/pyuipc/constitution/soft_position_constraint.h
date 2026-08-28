@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PySoftPositionConstraint
 {
   public:
-    PySoftPositionConstraint(py::module_& m);
+    PySoftPositionConstraint(py::module& m);
 };
 }  // namespace pyuipc::constitution

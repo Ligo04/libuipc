@@ -7,10 +7,10 @@ namespace pyuipc::core
 {
 using namespace uipc::core;
 using namespace uipc::geometry;
-PyObject::PyObject(py::module_& m)
+PyObject::PyObject(py::module& m)
 {
-    auto class_Object =
-        py::class_<Object>(m, "Object", R"(Object class representing a simulation object containing geometries.)");
+    auto class_Object = py::class_<Object, S<Object>>(
+        m, "Object", R"(Object class representing a simulation object containing geometries.)");
 
     class_Object.def(
         "__repr__",
@@ -39,7 +39,7 @@ Returns:
     class_Object.def(
         "geometries",
         [](Object& self) { return self.geometries(); },
-        py::rv_policy::move,
+        py::return_value_policy::move,
         R"(Get the geometries collection.
 Returns:
     Geometries: Collection of geometries.)");
@@ -143,7 +143,7 @@ Returns:
     class_Geometries.def(
         "ids",
         [](Object::Geometries& self)
-        { return as_numpy(std::move(self).ids(), py::find(&self)); },
+        { return as_numpy(std::move(self).ids(), py::cast(self)); },
         R"(Get the IDs of all geometries in the collection.
 Returns:
     numpy.ndarray: Array of geometry IDs.)");

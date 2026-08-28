@@ -5,7 +5,7 @@ namespace pyuipc::diff_sim
 {
 using namespace uipc::diff_sim;
 
-PyParameterCollection::PyParameterCollection(py::module_& m)
+PyParameterCollection::PyParameterCollection(py::module& m)
 {
     auto class_ParameterCollection = py::class_<ParameterCollection>(
         m, "ParameterCollection", R"(ParameterCollection class for managing simulation parameters.)");
@@ -26,19 +26,19 @@ Args:
     class_ParameterCollection.def(
         "view",
         [](ParameterCollection& self)
-        { return as_numpy(self.view(), py::find(&self)); },
+        { return as_numpy(self.view(), py::cast(self)); },
         R"(Get a view of the parameters as a numpy array.
 Returns:
     numpy.ndarray: Array view of parameters.)");
 
     //m.def(
     //    "view",
-    //    [](ParameterCollection& pc) { return as_numpy(view(pc), py::find(&pc)); },
+    //    [](ParameterCollection& pc) { return as_numpy(view(pc), py::cast(pc)); },
     //    py::arg("pc"));
 
     top_module().def(
         "view",
-        [](ParameterCollection& pc) { return as_numpy(view(pc), py::find(&pc)); },
+        [](ParameterCollection& pc) { return as_numpy(view(pc), py::cast(pc)); },
         py::arg("pc").noconvert(),
         R"(Get a view of parameter collection as a numpy array.
 Args:

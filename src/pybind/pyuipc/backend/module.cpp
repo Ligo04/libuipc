@@ -7,7 +7,7 @@
 
 namespace pyuipc::backend
 {
-PyModule::PyModule(py::module_& m)
+PyModule::PyModule(py::module& m)
 {
     PyDiffSimVisitor{m};
     PySceneVisitor{m};

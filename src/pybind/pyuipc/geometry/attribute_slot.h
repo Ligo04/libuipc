@@ -6,6 +6,6 @@ namespace pyuipc::geometry
 class PyAttributeSlot
 {
   public:
-    PyAttributeSlot(py::module_& m);
+    PyAttributeSlot(py::module& m);
 };
 }  // namespace pyuipc::geometry

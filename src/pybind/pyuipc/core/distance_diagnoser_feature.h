@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PyDistanceDiagnoserFeature
 {
   public:
-    PyDistanceDiagnoserFeature(py::module_& m);
+    PyDistanceDiagnoserFeature(py::module& m);
 };
 }  // namespace pyuipc::core

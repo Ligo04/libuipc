@@ -5,6 +5,6 @@ namespace pyuipc::constitution
 class PyParticle
 {
   public:
-    PyParticle(py::module_& m);
+    PyParticle(py::module& m);
 };
 }  // namespace pyuipc::constitution

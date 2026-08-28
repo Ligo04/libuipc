@@ -6,6 +6,6 @@ namespace pyuipc::backend
 class PyDiffSimVisitor
 {
   public:
-    PyDiffSimVisitor(py::module_& m);
+    PyDiffSimVisitor(py::module& m);
 };
 }  // namespace pyuipc::backend

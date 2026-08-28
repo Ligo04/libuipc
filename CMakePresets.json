@@ -32,13 +32,14 @@
         },
         {
             "name": "ci-build-wheel",
-            "displayName": "Config Pybind Release",
+            "displayName": "Configure Python Wheel Release",
             "description": "Release build with Python bindings enabled",
             "inherits": "ci-base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "UIPC_BUILD_PYTHON_WHEEL": "ON",
-                "UIPC_BUILD_PYBIND": "ON"
+                "UIPC_BUILD_PYBIND": "ON",
+                "UIPC_PYTHON_BINDING": "nanobind"
             }
         }
     ],

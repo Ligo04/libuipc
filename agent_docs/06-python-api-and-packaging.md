@@ -1,6 +1,19 @@
 # 06 — Python API and Packaging
 
-## Nanobind structure (`src/pybind/pyuipc/`)
+## Binding adapter structure
+
+The two native binding implementations are intentionally separate:
+
+- `src/nanobind/pyuipc/` is the default nanobind 3.0.0 implementation.
+- `src/pybind/pyuipc/` preserves the legacy pybind11 implementation.
+
+Both adapters export the same `pyuipc` extension name, so a build must select
+exactly one. CMake uses `UIPC_PYTHON_BINDING=nanobind|pybind11`; XMake uses
+`--python_binding=nanobind|pybind11`. The compatibility switches
+`UIPC_BUILD_PYBIND` and `--pybind` continue to mean "build Python bindings".
+Wheel builds explicitly select nanobind.
+
+### Nanobind implementation (`src/nanobind/pyuipc/`)
 
 `NB_MODULE(pyuipc, m)` in the entry `module.cpp`:
 
@@ -22,9 +35,9 @@
   Backend target files are also `LINK_DEPENDS` in CMake, so changing only a
   backend still relinks pyuipc and runs POST_BUILD
   `scripts/after_build_pyuipc.py` (copies the package/runtime libraries,
-  regenerates `.pyi`, and refreshes the development install). The current
-  post-build stub helper still uses `pybind11-stubgen`; replacing it with the
-  nanobind CLI shared by both build systems remains release work.
+  regenerates `.pyi`, and refreshes the development install). CMake and XMake
+  both call `scripts/stubgen.py`; it dispatches to nanobind stubgen or
+  pybind11-stubgen according to the selected adapter.
 
 ## Python package layout (`python/src/uipc/`)
 
@@ -99,7 +112,10 @@ escapes the smoke test.
 
 ## Key points for extending bindings
 
-- When adding a new C++ public API, consider syncing the nanobind side: add a `PyXxx` binding file in the corresponding submodule directory and register it in that directory's `module.cpp`; keep the namespace mapping consistent.
+- When adding a new C++ public API, update the default nanobind adapter under
+  `src/nanobind/pyuipc/`. If pybind11 remains a supported fallback, mirror the
+  surface under `src/pybind/pyuipc/`; the constitution contract check audits
+  both trees.
 - Do not break the import chain in `__init__.py` (`pyuipc` → `init()` → `config["module_dir"]`).
 - New binding surfaces need tests added in `python/tests/`.
 - Audit exports rather than assuming C++/Python parity. `RotatingMotor` and

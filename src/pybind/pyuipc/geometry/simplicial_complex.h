@@ -6,6 +6,6 @@ namespace pyuipc::geometry
 class PySimplicialComplex
 {
   public:
-    PySimplicialComplex(py::module_& m);
+    PySimplicialComplex(py::module& m);
 };
 }  // namespace pyuipc::geometry

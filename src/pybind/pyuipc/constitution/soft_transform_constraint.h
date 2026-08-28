@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PySoftTransformConstraint
 {
   public:
-    PySoftTransformConstraint(py::module_& m);
+    PySoftTransformConstraint(py::module& m);
 };
 }  // namespace pyuipc::constitution

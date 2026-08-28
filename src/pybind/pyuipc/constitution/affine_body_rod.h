@@ -6,6 +6,8 @@ namespace pyuipc::constitution
 class PyAffineBodyRod
 {
   public:
-    PyAffineBodyRod(py::module_& m);
+    PyAffineBodyRod(py::module& m);
 };
 }  // namespace pyuipc::constitution
+
+

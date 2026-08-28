@@ -278,9 +278,12 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
    nanobind 默认的体积优化和 `NOMINSIZE` 版本。门槛：没有无法解释的语义
    或显著性能退化；记录所有接受的差异。
 
-迁移期间保留现有选项和源目录名称（`UIPC_BUILD_PYBIND`、`--pybind`、
-`src/pybind`）作为兼容名称。重命名属于独立清理任务；在尚未证明绑定行为
-对等时一起修改，只会给下游和 CI 增加额外变动。
+迁移期间保留现有启用选项（`UIPC_BUILD_PYBIND`、`--pybind`）作为兼容名称，
+但将实现拆成两个独立适配器：`src/nanobind` 是默认实现，`src/pybind` 保留
+迁移前的 pybind11 实现。CMake 通过
+`UIPC_PYTHON_BINDING=nanobind|pybind11`，XMake 通过
+`--python_binding=nanobind|pybind11` 在唯一入口选择一个目录；两边仍输出同名
+`pyuipc` 扩展，不能同时加入同一个构建图。
 
 ## 必需的回归测试
 

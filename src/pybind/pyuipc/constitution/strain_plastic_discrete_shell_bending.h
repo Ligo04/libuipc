@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyStrainPlasticDiscreteShellBending
 {
   public:
-    PyStrainPlasticDiscreteShellBending(py::module_& m);
+    PyStrainPlasticDiscreteShellBending(py::module& m);
 };
 }  // namespace pyuipc::constitution

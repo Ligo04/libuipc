@@ -4,7 +4,7 @@
 namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
-PyElasticModuli::PyElasticModuli(py::module_& m)
+PyElasticModuli::PyElasticModuli(py::module& m)
 {
     py::class_<ElasticModuli>(m, "ElasticModuli", R"(ElasticModuli class for elastic material parameters (Lame parameters).)")
         .def_static("lame",
@@ -47,15 +47,12 @@ Returns:
              R"(Get the second Lame parameter (mu, shear modulus).
 Returns:
     float: Second Lame parameter.)")
-        .def(
-            "__repr__",
-            [](const ElasticModuli& self)
-            {
-                return fmt::format("ElasticModuli(lambda_={}, mu={})",
-                                   self.lambda(),
-                                   self.mu());
-            },
-            R"(String representation of elastic moduli.)");
+        .def("__repr__",
+             [](const ElasticModuli& self)
+             {
+                 return fmt::format("ElasticModuli(lambda_={}, mu={})", self.lambda(), self.mu());
+             },
+             R"(String representation of elastic moduli.)");
 
 
     py::class_<ElasticModuli2D>(m, "ElasticModuli2D", R"(ElasticModuli2D class for codim 2D elastic material parameters (Lame parameters).)")
@@ -99,14 +96,11 @@ Returns:
              R"(Get the second Lame parameter (mu, shear modulus).
 Returns:
     float: Second Lame parameter.)")
-        .def(
-            "__repr__",
-            [](const ElasticModuli2D& self)
-            {
-                return fmt::format("ElasticModuli2D(lambda_={}, mu={})",
-                                   self.lambda(),
-                                   self.mu());
-            },
-            R"(String representation of 2D elastic moduli.)");
+        .def("__repr__",
+             [](const ElasticModuli2D& self)
+             {
+                 return fmt::format("ElasticModuli2D(lambda_={}, mu={})", self.lambda(), self.mu());
+             },
+             R"(String representation of 2D elastic moduli.)");
 }
 }  // namespace pyuipc::constitution

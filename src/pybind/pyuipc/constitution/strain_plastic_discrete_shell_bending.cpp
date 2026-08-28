@@ -6,7 +6,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PyStrainPlasticDiscreteShellBending::PyStrainPlasticDiscreteShellBending(py::module_& m)
+PyStrainPlasticDiscreteShellBending::PyStrainPlasticDiscreteShellBending(py::module& m)
 {
     auto class_StrainPlasticDiscreteShellBending =
         py::class_<StrainPlasticDiscreteShellBending, FiniteElementExtraConstitution>(
@@ -28,13 +28,14 @@ Args:
 Returns:
     dict: Default configuration dictionary.)");
 
-    class_StrainPlasticDiscreteShellBending.def("apply_to",
-                                                &StrainPlasticDiscreteShellBending::apply_to,
-                                                py::arg("sc"),
-                                                py::arg("bending_stiffness"),
-                                                py::arg("yield_threshold"),
-                                                py::arg("hardening_modulus") = 0.0,
-                                                R"(Apply StrainPlasticDiscreteShellBending constitution to a simplicial complex.
+    class_StrainPlasticDiscreteShellBending.def(
+        "apply_to",
+        &StrainPlasticDiscreteShellBending::apply_to,
+        py::arg("sc"),
+        py::arg("bending_stiffness"),
+        py::arg("yield_threshold"),
+        py::arg("hardening_modulus") = 0.0,
+        R"(Apply StrainPlasticDiscreteShellBending constitution to a simplicial complex.
 Args:
     sc: SimplicialComplex to apply to.
     bending_stiffness: Bending stiffness in kPa.

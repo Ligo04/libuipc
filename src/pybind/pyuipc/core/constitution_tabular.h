@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PyConstitutionTabular
 {
   public:
-    PyConstitutionTabular(py::module_& m);
+    PyConstitutionTabular(py::module& m);
 };
 }  // namespace pyuipc::core

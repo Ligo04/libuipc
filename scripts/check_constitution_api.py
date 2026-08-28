@@ -11,8 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_HEADERS = Path("include/uipc/constitution")
-BINDING_SOURCES = Path("src/pybind/pyuipc/constitution")
-ALL_PYBIND_SOURCES = Path("src/pybind/pyuipc")
+DEFAULT_BINDING_ROOT = Path("src/pybind/pyuipc")
 
 PUBLIC_CLASS_RE = re.compile(
     r"\bclass\s+UIPC_(?:CONSTITUTION|CORE)_API\s+([A-Za-z_]\w*)"
@@ -23,7 +22,7 @@ PY_CLASS_RE = re.compile(
     re.DOTALL,
 )
 INITIALIZER_DEFINITION_RE = re.compile(
-    r"\b(Py[A-Za-z_]\w*)::\1\s*\(\s*py::module\s*&"
+    r"\b(Py[A-Za-z_]\w*)::\1\s*\(\s*py::module_?\s*&"
 )
 INITIALIZER_CALL_RE = re.compile(r"\b(Py[A-Za-z_]\w*)\s*\{[^{};]*\}\s*;")
 
@@ -43,9 +42,10 @@ def collect_public_classes(project_root: Path = ROOT) -> dict[str, list[Path]]:
 
 def collect_python_bindings(
     project_root: Path = ROOT,
+    binding_root: Path = DEFAULT_BINDING_ROOT,
 ) -> dict[str, list[tuple[str, Path]]]:
     bindings: dict[str, list[tuple[str, Path]]] = defaultdict(list)
-    source_root = project_root / BINDING_SOURCES
+    source_root = project_root / binding_root / "constitution"
     for path in _source_files(source_root, ".cpp"):
         text = path.read_text(encoding="utf-8")
         for match in PY_CLASS_RE.finditer(text):
@@ -57,9 +57,12 @@ def collect_python_bindings(
     return dict(bindings)
 
 
-def collect_initializer_definitions(project_root: Path = ROOT) -> dict[str, list[Path]]:
+def collect_initializer_definitions(
+    project_root: Path = ROOT,
+    binding_root: Path = DEFAULT_BINDING_ROOT,
+) -> dict[str, list[Path]]:
     definitions: dict[str, list[Path]] = defaultdict(list)
-    source_root = project_root / BINDING_SOURCES
+    source_root = project_root / binding_root / "constitution"
     for path in _source_files(source_root, ".cpp"):
         text = path.read_text(encoding="utf-8")
         for name in INITIALIZER_DEFINITION_RE.findall(text):
@@ -68,21 +71,27 @@ def collect_initializer_definitions(project_root: Path = ROOT) -> dict[str, list
     return dict(definitions)
 
 
-def collect_initializer_calls(project_root: Path = ROOT) -> set[str]:
+def collect_initializer_calls(
+    project_root: Path = ROOT,
+    binding_root: Path = DEFAULT_BINDING_ROOT,
+) -> set[str]:
     calls: set[str] = set()
-    source_root = project_root / ALL_PYBIND_SOURCES
+    source_root = project_root / binding_root
     for path in _source_files(source_root, ".cpp"):
         calls.update(INITIALIZER_CALL_RE.findall(path.read_text(encoding="utf-8")))
     return calls
 
 
-def check_constitution_api(project_root: Path = ROOT) -> list[str]:
+def check_constitution_api(
+    project_root: Path = ROOT,
+    binding_root: Path = DEFAULT_BINDING_ROOT,
+) -> list[str]:
     """Return deterministic source-level API parity errors."""
 
     exported = collect_public_classes(project_root)
-    bindings = collect_python_bindings(project_root)
-    definitions = collect_initializer_definitions(project_root)
-    calls = collect_initializer_calls(project_root)
+    bindings = collect_python_bindings(project_root, binding_root)
+    definitions = collect_initializer_definitions(project_root, binding_root)
+    calls = collect_initializer_calls(project_root, binding_root)
     errors: list[str] = []
 
     for name, paths in sorted(exported.items()):
@@ -120,7 +129,7 @@ def check_constitution_api(project_root: Path = ROOT) -> list[str]:
             )
         if name not in calls:
             errors.append(
-                f"binding initializer {name} is never registered in a pybind module"
+                f"binding initializer {name} is never registered in a binding module"
             )
 
     return errors
@@ -128,19 +137,21 @@ def check_constitution_api(project_root: Path = ROOT) -> list[str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     del argv
-    errors = check_constitution_api()
-    if errors:
-        print("Constitution API parity check failed:")
-        for error in errors:
-            print(f"- {error}")
-        return 1
-
+    binding_roots = [DEFAULT_BINDING_ROOT, Path("src/nanobind/pyuipc")]
     exported = collect_public_classes()
-    initializers = collect_initializer_definitions()
-    print(
-        "Constitution API parity check passed: "
-        f"{len(exported)} public classes, {len(initializers)} binding initializers."
-    )
+    for binding_root in binding_roots:
+        errors = check_constitution_api(ROOT, binding_root)
+        if errors:
+            print(f"Constitution API parity check failed for {binding_root}:")
+            for error in errors:
+                print(f"- {error}")
+            return 1
+
+        initializers = collect_initializer_definitions(ROOT, binding_root)
+        print(
+            f"Constitution API parity check passed for {binding_root}: "
+            f"{len(exported)} public classes, {len(initializers)} binding initializers."
+        )
     return 0
 
 

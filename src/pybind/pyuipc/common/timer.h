@@ -5,6 +5,6 @@ namespace pyuipc
 class PyTimer
 {
   public:
-    PyTimer(py::module_& m);
+    PyTimer(py::module& m);
 };
 }  // namespace pyuipc

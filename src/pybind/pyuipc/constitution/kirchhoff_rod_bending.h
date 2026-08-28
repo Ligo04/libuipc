@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyKirchhoffRodBending
 {
   public:
-    PyKirchhoffRodBending(py::module_& m);
+    PyKirchhoffRodBending(py::module& m);
 };
 }  // namespace pyuipc::constitution

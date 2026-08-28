@@ -5,11 +5,11 @@ namespace pyuipc::geometry
 {
 using namespace uipc::geometry;
 
-PyFactory::PyFactory(py::module_& m)
+PyFactory::PyFactory(py::module& m)
 {
     m.def(
         "tetmesh",
-        [](PyArray<Float> Vs, PyArray<IndexT> Ts)
+        [](py::array_t<Float> Vs, py::array_t<IndexT> Ts)
         { return tetmesh(as_span_of<Vector3>(Vs), as_span_of<Vector4i>(Ts)); },
         py::arg("Vs"),
         py::arg("Ts"),
@@ -22,7 +22,7 @@ Returns:
 
     m.def(
         "trimesh",
-        [](PyArray<Float> Vs, PyArray<IndexT> Fs) -> SimplicialComplex
+        [](py::array_t<Float> Vs, py::array_t<IndexT> Fs) -> SimplicialComplex
         {
             if(is_span_of<Vector3i>(Fs))
                 return trimesh(as_span_of<Vector3>(Vs), as_span_of<Vector3i>(Fs));
@@ -43,7 +43,7 @@ Returns:
 
     m.def(
         "linemesh",
-        [](PyArray<Float> Vs, PyArray<IndexT> Es)
+        [](py::array_t<Float> Vs, py::array_t<IndexT> Es)
         { return linemesh(as_span_of<Vector3>(Vs), as_span_of<Vector2i>(Es)); },
         py::arg("Vs"),
         py::arg("Es"),
@@ -55,7 +55,7 @@ Returns:
     SimplicialComplex: Line mesh.)");
     m.def(
         "pointcloud",
-        [](PyArray<Float> Vs) { return pointcloud(as_span_of<Vector3>(Vs)); },
+        [](py::array_t<Float> Vs) { return pointcloud(as_span_of<Vector3>(Vs)); },
         py::arg("Vs"),
         R"(Create a point cloud from vertices.
 Args:
@@ -67,7 +67,7 @@ Returns:
 
     m.def(
         "ground",
-        [](Float height, PyArray<Float> N)
+        [](Float height, py::array_t<Float> N)
         { return ground(height, to_matrix<Vector3>(N)); },
         py::arg("height") = Float{0.0},
         py::arg("N")      = as_numpy(UnitY),
@@ -80,7 +80,7 @@ Returns:
 
     m.def(
         "halfplane",
-        [](PyArray<Float> P, PyArray<Float> N)
+        [](py::array_t<Float> P, py::array_t<Float> N)
         { return halfplane(to_matrix<Vector3>(P), to_matrix<Vector3>(N)); },
         py::arg("P") = as_numpy(Vector3::Zero().eval()),
         py::arg("N") = as_numpy(UnitY),

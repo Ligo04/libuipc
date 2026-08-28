@@ -28,6 +28,7 @@ cmake --build . --config Release -j8
 
 ### Key CMake Options
 - `UIPC_BUILD_PYBIND` - Build Python bindings (OFF by default)
+- `UIPC_PYTHON_BINDING` - Select `nanobind` (default) or legacy `pybind11`
 - `UIPC_BUILD_TESTS` - Build test suite (ON by default)
 - `UIPC_BUILD_EXAMPLES` - Build examples (ON by default)
 - `UIPC_WITH_CUDA_BACKEND` - Enable CUDA backend (auto, disabled on macOS)
@@ -62,7 +63,8 @@ The codebase uses Data-Oriented Programming with an ECS-inspired RMR pattern for
 - `src/backends/` - Backend implementations loaded as dynamic modules
   - `cuda/` - GPU backend with CUDA kernels
   - `none/` - CPU reference implementation
-- `src/pybind/` - Python bindings via nanobind
+- `src/nanobind/` - Default Python bindings via nanobind
+- `src/pybind/` - Preserved legacy Python bindings via pybind11
 - `src/io/` - File I/O (obj, gltf, serialization)
 
 ### Key Classes

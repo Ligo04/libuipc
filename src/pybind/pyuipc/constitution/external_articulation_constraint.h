@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyExternalArticulationConstraint
 {
   public:
-    PyExternalArticulationConstraint(py::module_& m);
+    PyExternalArticulationConstraint(py::module& m);
 };
 }  // namespace pyuipc::constitution

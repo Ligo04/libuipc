@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyAffineBodyPrismaticJointLimit
 {
   public:
-    PyAffineBodyPrismaticJointLimit(py::module_& m);
+    PyAffineBodyPrismaticJointLimit(py::module& m);
 };
 }  // namespace pyuipc::constitution

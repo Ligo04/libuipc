@@ -5,7 +5,7 @@
 namespace pyuipc::geometry
 {
 using namespace uipc::geometry;
-PyAttributeIO::PyAttributeIO(py::module_& m)
+PyAttributeIO::PyAttributeIO(py::module& m)
 {
     auto class_AttributeIO = py::class_<AttributeIO>(
         m, "AttributeIO", R"(AttributeIO class for reading attributes from files.)");

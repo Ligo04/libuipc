@@ -75,9 +75,10 @@ scene_io.write_surface("out.obj", scene);  // export the surface
 
 Python follows the same overall lifecycle (`from uipc.core import Engine, World, Scene`;
 the native extension also promotes these names to `uipc`). Public constitution
-coverage is checked against `src/pybind/pyuipc/constitution/` in CI; for other
-modules, check their pybind sources before promising exact parity. The rotating and
-linear motor classes are currently bound.
+coverage is checked against both `src/nanobind/pyuipc/constitution/` and
+`src/pybind/pyuipc/constitution/` in CI; for other modules, check the selected
+adapter before promising exact parity. The rotating and linear motor classes are
+currently bound.
 
 ## Key Design Trade-offs
 

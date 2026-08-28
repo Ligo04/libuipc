@@ -6,6 +6,7 @@ namespace pyuipc::builtin
 class PyUIDInfo
 {
   public:
-    PyUIDInfo(py::module_& m);
+    PyUIDInfo(py::module& m);
 };
 }  // namespace pyuipc::builtin
+

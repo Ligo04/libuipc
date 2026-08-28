@@ -44,14 +44,30 @@ xpack("pyuipc")
         end
         python = python or "python"
 
+        local binding_backend = config.get("python_binding") or "nanobind"
         local ok = try { function()
-            os.vrunv(python, { "-c", "import mypy" })
+            if binding_backend == "nanobind" then
+                os.vrunv(python, {
+                    "-c",
+                    "from importlib.metadata import version; " ..
+                    "assert version('nanobind') == '3.0.0'; import numpy"
+                })
+            else
+                os.vrunv(python, {"-c", "import pybind11_stubgen, numpy"})
+            end
             return true
         end }
 
         local uv = assert(find_tool("uv"), "uv not found!")
         if not ok then
-            os.vrunv(uv.program, {"pip", "install", "mypy", "numpy"})
+            local requirements = {"numpy"}
+            if binding_backend == "nanobind" then
+                table.insert(requirements, 1, "nanobind==3.0.0")
+            else
+                table.insert(requirements, 1, "pybind11-stubgen")
+            end
+            os.vrunv(uv.program,
+                table.join({"pip", "install", "--python", python}, requirements))
         end
 
         local LD_LIBRARY_PATH = path.splitenv(os.getenv("LD_LIBRARY_PATH") or "")
@@ -65,9 +81,10 @@ xpack("pyuipc")
         end
         os.vrunv(python, {
             path.join(os.projectdir(), "scripts/stubgen.py"),
-            "--source_dir=" .. path.join(build_dir, "src"),
-            "--output_dir=" .. path.join(build_dir, "src/uipc/_native"),
-            "--build_type=" .. config.get("mode"),
+            "--binding-backend=" .. binding_backend,
+            "--source-dir=" .. path.join(build_dir, "src"),
+            "--output-dir=" .. path.join(build_dir, "src/uipc/_native"),
+            "--marker-file=" .. path.join(build_dir, "src/uipc/py.typed"),
         }, {setenvs = {["LD_LIBRARY_PATH"] = path.joinenv(LD_LIBRARY_PATH)}})
 
         -- Build .whl file

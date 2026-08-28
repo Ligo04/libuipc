@@ -4,7 +4,7 @@
 namespace pyuipc::backend
 {
 using namespace uipc::backend;
-PyBufferView::PyBufferView(py::module_& m)
+PyBufferView::PyBufferView(py::module& m)
 {
     auto class_BufferView =
         py::class_<BufferView>(m, "BufferView", R"(BufferView class representing a view into a backend buffer.)")

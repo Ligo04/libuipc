@@ -6,6 +6,6 @@ namespace pyuipc::geometry
 class PySimplicialComplexSlot
 {
   public:
-    PySimplicialComplexSlot(py::module_& m);
+    PySimplicialComplexSlot(py::module& m);
 };
 }  // namespace pyuipc::geometry

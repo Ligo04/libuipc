@@ -6,10 +6,10 @@ namespace pyuipc::core
 {
 using namespace uipc::core;
 
-PyStateAccessorFeature::PyStateAccessorFeature(py::module_& m)
+PyStateAccessorFeature::PyStateAccessorFeature(py::module& m)
 {
     auto class_FiniteElementStateAccessorFeature =
-        py::class_<FiniteElementStateAccessorFeature, IFeature>(
+        py::class_<FiniteElementStateAccessorFeature, IFeature, S<FiniteElementStateAccessorFeature>>(
             m,
             "FiniteElementStateAccessorFeature",
             R"(Feature for accessing finite element simulation state (vertex positions, velocities, etc.).)");
@@ -49,7 +49,7 @@ Args:
                                                 &FiniteElementStateAccessorFeature::copy_position_to,
                                                 py::arg("buffer_view"),
                                                 py::arg("vertex_offset") = 0,
-                                                py::arg("vertex_count") = ~0ull,
+                                                py::arg("vertex_count")  = ~0ull,
                                                 R"(Copy position data (Vector3) for the specified vertex range into an externally-owned buffer.
 Args:
     buffer_view: Destination buffer view to copy position data into.
@@ -60,7 +60,7 @@ Args:
                                                 &FiniteElementStateAccessorFeature::copy_velocity_to,
                                                 py::arg("buffer_view"),
                                                 py::arg("vertex_offset") = 0,
-                                                py::arg("vertex_count") = ~0ull,
+                                                py::arg("vertex_count")  = ~0ull,
                                                 R"(Copy velocity data (Vector3) for the specified vertex range into an externally-owned buffer.
 Args:
     buffer_view: Destination buffer view to copy velocity data into.
@@ -73,7 +73,7 @@ Args:
 
 
     auto class_AffineBodyStateAccessorFeature =
-        py::class_<AffineBodyStateAccessorFeature, IFeature>(
+        py::class_<AffineBodyStateAccessorFeature, IFeature, S<AffineBodyStateAccessorFeature>>(
             m,
             "AffineBodyStateAccessorFeature",
             R"(Feature for accessing affine body simulation state (body transforms, velocities, etc.).)");

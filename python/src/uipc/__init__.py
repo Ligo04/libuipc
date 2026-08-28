@@ -1,3 +1,4 @@
+import os
 import pathlib
 
 from ._native import pyuipc
@@ -18,9 +19,24 @@ def init():
     pyuipc.init(config)
 
 
-init()
+if os.environ.get("NB_STUBGEN") != "1":
+    init()
+
+
+def _install_keyword_aliases():
+    """Expose Python-safe spellings for native names that are keywords."""
+    engine_status = pyuipc.core.EngineStatus
+    engine_status_type = engine_status.Type
+    legacy_none = getattr(engine_status_type, "None")
+    if not hasattr(engine_status_type, "None_"):
+        setattr(engine_status_type, "None_", legacy_none)
+    if not hasattr(engine_status, "None_"):
+        setattr(engine_status, "None_", legacy_none)
+
+
+_install_keyword_aliases()
 
 # import all pyuipc modules
-from ._native.pyuipc import *
+from ._native.pyuipc import *  # noqa: E402,F403
 
 __version__ = pyuipc.__version__

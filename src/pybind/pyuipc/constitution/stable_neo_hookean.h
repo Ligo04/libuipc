@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyStableNeoHookean
 {
   public:
-    PyStableNeoHookean(py::module_& m);
+    PyStableNeoHookean(py::module& m);
 };
 }  // namespace pyuipc::constitution

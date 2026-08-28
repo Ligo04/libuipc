@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyInterPrimitiveConstitution
 {
   public:
-    PyInterPrimitiveConstitution(py::module_& m);
+    PyInterPrimitiveConstitution(py::module& m);
 };
 }  // namespace pyuipc::constitution

@@ -41,7 +41,7 @@ DEF_VALUE_TYPE(Float, uipc::Float);
 DEF_VALUE_TYPE(IndexT, uipc::IndexT);
 
 template <typename T>
-void def_scalar(py::module_& m, const char* name)
+void def_scalar(py::module& m, const char* name)
 {
     using Ty = Type<T>;
     using VT = typename ValueType<T>::type;
@@ -78,7 +78,7 @@ Returns:
 }
 
 template <typename T, int M, int N>
-void def_matrix(py::module_& m, Eigen::Matrix<T, M, N>, const char* name)
+void def_matrix(py::module& m, Eigen::Matrix<T, M, N>, const char* name)
 {
     using Ty = Type<Eigen::Matrix<T, M, N>>;
 
@@ -140,11 +140,8 @@ Returns:
 
     class_Matrix.def_static(
         "Values",
-        [](py::handle value)
-        {
-            py::object array = py::module_::import_("numpy").attr("asarray")(value);
-            return as_numpy(to_matrix<Eigen::Matrix<T, M, N>>(py::cast<PyArray<T>>(array)));
-        },
+        [](py::array_t<T> value)
+        { return as_numpy(to_matrix<Eigen::Matrix<T, M, N>>(value)); },
         py::arg("value"),
         R"(Create a matrix from a numpy array.
 Args:
@@ -290,7 +287,7 @@ Returns:
 #define DEF_SCALAR(Type) def_scalar<Type>(m, #Type)
 #define DEF_MATRIX(Type) def_matrix(m, Type{}, #Type)
 
-PyUIPCType::PyUIPCType(py::module_& m)
+PyUIPCType::PyUIPCType(py::module& m)
 {
     DEF_SCALAR(Float);
     DEF_SCALAR(IndexT);

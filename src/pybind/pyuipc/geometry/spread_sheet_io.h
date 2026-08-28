@@ -6,6 +6,6 @@ namespace pyuipc::geometry
 class PySpreadSheetIO
 {
   public:
-    PySpreadSheetIO(py::module_& m);
+    PySpreadSheetIO(py::module& m);
 };
 }  // namespace pyuipc::geometry

@@ -6,6 +6,6 @@ namespace pyuipc::geometry
 class PySimplicialComplexIO
 {
   public:
-    PySimplicialComplexIO(py::module_& m);
+    PySimplicialComplexIO(py::module& m);
 };
 }  // namespace pyuipc::geometry

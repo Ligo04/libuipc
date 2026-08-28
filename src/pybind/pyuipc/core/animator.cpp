@@ -1,10 +1,11 @@
 #include <pyuipc/core/animator.h>
 #include <uipc/core/animator.h>
+#include <pybind11/stl.h>
 
 namespace pyuipc::core
 {
 using namespace uipc::core;
-PyAnimator::PyAnimator(py::module_& m)
+PyAnimator::PyAnimator(py::module& m)
 {
     auto class_Animation =
         py::class_<Animation>(m, "Animation", R"(Animation class for managing object animations.)");
@@ -17,7 +18,7 @@ PyAnimator::PyAnimator(py::module_& m)
     class_UpdateInfo
         .def("object",
              &Animation::UpdateInfo::object,
-             py::rv_policy::reference_internal,
+             py::return_value_policy::reference_internal,
              R"(Get the object being animated.
 Returns:
     Object: Reference to the object.)")
@@ -69,9 +70,9 @@ Returns:
         m, "Animator", R"(Animator class for managing object animations in a scene.)");
     class_Animator.def(
         "insert",
-        [](Animator& self, Object& obj, py::callable callable)
+        [](Animator& self, Object& obj, py::function callable)
         {
-            if(!py::isinstance<py::callable>(callable))
+            if(!py::isinstance<py::function>(callable))
             {
                 throw py::type_error("The second argument must be a callable");
             }
@@ -121,24 +122,27 @@ Args:
 Returns:
     int: Number of substeps per frame.)");
 
-    class_Animator.def("animation_count",
-                       &Animator::animation_count,
-                       R"(Get the number of animated objects.
+    class_Animator.def(
+        "animation_count",
+        &Animator::animation_count,
+        R"(Get the number of animated objects.
 Returns:
     int: Number of objects that currently have animation callbacks.)");
 
-    class_Animator.def("has_animation",
-                       &Animator::has_animation,
-                       py::arg("object_id"),
-                       R"(Check whether an object has a registered animation callback.
+    class_Animator.def(
+        "has_animation",
+        &Animator::has_animation,
+        py::arg("object_id"),
+        R"(Check whether an object has a registered animation callback.
 Args:
     object_id: Object id to query.
 Returns:
     bool: True if the object is animated, False otherwise.)");
 
-    class_Animator.def("animation_ids",
-                       &Animator::animation_ids,
-                       R"(Get sorted object ids that have registered animation callbacks.
+    class_Animator.def(
+        "animation_ids",
+        &Animator::animation_ids,
+        R"(Get sorted object ids that have registered animation callbacks.
 Returns:
     list[int]: Animated object ids.)");
 

@@ -13,7 +13,14 @@ if has_config("usd") then
 end
 
 if has_config("pybind") then
-    includes("pybind")
+    local python_binding = get_config("python_binding") or "nanobind"
+    if python_binding == "nanobind" then
+        includes("nanobind")
+    elseif python_binding == "pybind11" then
+        includes("pybind")
+    else
+        raise("unknown python_binding: " .. python_binding)
+    end
 end
 
 add_requires("urdfdom")

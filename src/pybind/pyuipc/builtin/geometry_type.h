@@ -6,6 +6,7 @@ namespace pyuipc::builtin
 class PyGeometryType
 {
   public:
-    PyGeometryType(py::module_& m);
+    PyGeometryType(py::module& m);
 };
 }  // namespace pyuipc::builtin
+

@@ -8,7 +8,7 @@
 
 ## CMake
 
-**Options** (root `CMakeLists.txt`): `UIPC_USING_LOCAL_VCPKG`(ON), `UIPC_BUILD_PYBIND`(OFF), `UIPC_BUILD_PYTHON_WHEEL`(OFF), `UIPC_BUILD_EXAMPLES/TESTS/BENCHMARKS`(ON), `UIPC_DEV_MODE`(OFF), `UIPC_WITH_USD_SUPPORT`(OFF), `UIPC_WITH_VDB_SUPPORT`(OFF), `UIPC_WITH_CUDA_BACKEND`(ON, forced OFF on Apple), `UIPC_CUDA_ARCHITECTURES`("native"). WHEEL=ON ⇒ PYBIND=ON. (The C++ GUI has been removed; the `UIPC_BUILD_GUI` option no longer exists.)
+**Options** (root `CMakeLists.txt`): `UIPC_USING_LOCAL_VCPKG`(ON), `UIPC_BUILD_PYBIND`(OFF), `UIPC_PYTHON_BINDING`(`nanobind`, or legacy `pybind11`), `UIPC_BUILD_PYTHON_WHEEL`(OFF), `UIPC_BUILD_EXAMPLES/TESTS/BENCHMARKS`(ON), `UIPC_DEV_MODE`(OFF), `UIPC_WITH_USD_SUPPORT`(OFF), `UIPC_WITH_VDB_SUPPORT`(OFF), `UIPC_WITH_CUDA_BACKEND`(ON, forced OFF on Apple), `UIPC_CUDA_ARCHITECTURES`("native"). WHEEL=ON ⇒ PYBIND=ON. (The C++ GUI has been removed; the `UIPC_BUILD_GUI` option no longer exists.)
 
 **Source glob**: project source globs use `CONFIGURE_DEPENDS`, so normal additions/removals are detected by the generated build. Still inspect the owning CMake/XMake file for explicitly listed sources, optional modules, generated code, or a new subdirectory.
 

@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyAffineBodyRevoluteJointExternalForce
 {
   public:
-    PyAffineBodyRevoluteJointExternalForce(py::module_& m);
+    PyAffineBodyRevoluteJointExternalForce(py::module& m);
 };
 }  // namespace pyuipc::constitution

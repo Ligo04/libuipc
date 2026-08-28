@@ -6,6 +6,6 @@ namespace pyuipc
 class PyResidentThread
 {
   public:
-    PyResidentThread(py::module_& m);
+    PyResidentThread(py::module& m);
 };
 }  // namespace pyuipc

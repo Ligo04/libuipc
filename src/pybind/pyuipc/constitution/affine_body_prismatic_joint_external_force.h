@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PyAffineBodyPrismaticJointExternalForce
 {
   public:
-    PyAffineBodyPrismaticJointExternalForce(py::module_& m);
+    PyAffineBodyPrismaticJointExternalForce(py::module& m);
 };
 }  // namespace pyuipc::constitution

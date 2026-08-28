@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PySceneFactory
 {
   public:
-    PySceneFactory(py::module_& m);
+    PySceneFactory(py::module& m);
 };
 }  // namespace pyuipc::core

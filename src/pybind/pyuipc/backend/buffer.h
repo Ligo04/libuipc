@@ -6,6 +6,6 @@ namespace pyuipc::backend
 class PyBuffer
 {
   public:
-    PyBuffer(py::module_& m);
+    PyBuffer(py::module& m);
 };
 }  // namespace pyuipc::backend

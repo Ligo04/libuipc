@@ -6,6 +6,6 @@ namespace pyuipc::builtin
 class PyConstitutionUIDCollection
 {
   public:
-    PyConstitutionUIDCollection(py::module_& m);
+    PyConstitutionUIDCollection(py::module& m);
 };
 }  // namespace pyuipc::builtin

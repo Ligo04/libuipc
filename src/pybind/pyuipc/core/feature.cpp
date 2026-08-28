@@ -5,9 +5,9 @@
 namespace pyuipc::core
 {
 using namespace uipc::core;
-PyFeature::PyFeature(py::module_& m)
+PyFeature::PyFeature(py::module& m)
 {
-    auto class_IFeature = py::class_<IFeature>(
+    auto class_IFeature = py::class_<IFeature, S<IFeature>>(
         m, "Feature", R"(Feature interface for extensible engine functionality.)");
     class_IFeature.def(
         "name",

@@ -5,7 +5,7 @@ namespace pyuipc
 using namespace uipc;
 #define def_unit(name) m.attr(#name) = 1.0_##name;
 
-PyUnit::PyUnit(py::module_& m)
+PyUnit::PyUnit(py::module& m)
 {
     def_unit(s);
 

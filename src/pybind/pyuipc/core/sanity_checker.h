@@ -6,7 +6,7 @@ namespace pyuipc::core
 class PySanityChecker
 {
   public:
-    PySanityChecker(py::module_& m);
+    PySanityChecker(py::module& m);
 };
 
 }  // namespace pyuipc::core

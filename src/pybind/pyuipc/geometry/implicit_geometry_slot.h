@@ -6,6 +6,6 @@ namespace pyuipc::geometry
 class PyImplicitGeometrySlot
 {
   public:
-    PyImplicitGeometrySlot(py::module_& m);
+    PyImplicitGeometrySlot(py::module& m);
 };
 }  // namespace pyuipc::geometry

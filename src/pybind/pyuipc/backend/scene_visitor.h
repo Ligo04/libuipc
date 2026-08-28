@@ -6,6 +6,6 @@ namespace pyuipc::backend
 class PySceneVisitor
 {
   public:
-    PySceneVisitor(py::module_& m);
+    PySceneVisitor(py::module& m);
 };
 }  // namespace pyuipc::backend

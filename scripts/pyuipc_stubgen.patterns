@@ -1,0 +1,16 @@
+# The nlohmann::json caster uses "json" in nanobind signatures. Define a
+# recursive JSON value alias in every generated native module so those
+# annotations remain valid without weakening all of them to object or Any.
+^uipc\._native\.pyuipc(?:\.(?:backend|builtin|constitution|core|diff_sim|unit|usd)|\.geometry(?:\.affine_body)?)?\.__prefix__$:
+    \from typing import TypeAlias
+    json: TypeAlias = dict[str, "json"] | list["json"] | str | int | float | bool | None
+
+# "None" remains the runtime compatibility name, but it is a Python keyword
+# and therefore cannot be represented as an enum or class attribute in a stub.
+# Map it to the Python-safe runtime alias. nanobind's stubgen otherwise hides
+# names ending in a single underscore because it treats them as private.
+^uipc\._native\.pyuipc\.core\.EngineStatus\.Type\.None$:
+    None_ = 0
+
+^uipc\._native\.pyuipc\.core\.EngineStatus\.None$:
+    None_: Type = Type.None_

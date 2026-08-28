@@ -6,6 +6,8 @@ namespace pyuipc::constitution
 class PyAffineBodyShell
 {
   public:
-    PyAffineBodyShell(py::module_& m);
+    PyAffineBodyShell(py::module& m);
 };
 }  // namespace pyuipc::constitution
+
+

@@ -1,35 +1,27 @@
 # Handoff — Current State of the Repo
 
-> **Nanobind 3.0.0 XMake product migration (updated 2026-08-28,
-> `codex/migrate-pybind-to-nanobind`)**: the complete `pyuipc` binding tree now
-> uses nanobind, including ndarray ownership/strides, JSON conversion,
-> shared-pointer exchange, trampolines, custom constructors, and iterators.
-> The repository-local XMake package overlay provides the exact 3.0.0 source
-> and statically links its core. On Linux x86_64, workspace XMake
-> `3.1.1+HEAD.3ba37a0` completed clean debug and release builds against CPython
-> 3.13. The staged release package passed the default portable Python suite
-> (80 passed, 54 deselected) plus focused ndarray, NumPy scalar, Buffer callback,
-> and Python-engine trampoline/shared-pointer probes. ELF inspection shows no
-> dynamic dependency on libpython or nanobind. A second XMake release build used
-> the project `.venv` (CPython 3.12.3) and produced an importable CPU wheel with
-> ten recursive stub files; the unpacked wheel passed the same 80-test portable
-> suite. The local recipe follows the official xmake-repo behavior and lets
-> XMake resolve any Python satisfying nanobind 3's `>=3.10` floor; the outer
-> project configuration/environment selects the concrete interpreter. Because
-> the static core is Python-ABI-specific, switching Python minors requires an
-> isolated or cleared nanobind package cache. This run previously caught a stale
-> Python 3.14 core being reused by CPython 3.12. After moving all installed 3.0.0
-> variants aside, a clean CPython 3.12.3 configure rebuilt the automatic-resolution
-> package hash with a 3.12.3 dependency manifest; the XMake release build, unpacked
-> wheel import, and `Engine("none")` smoke test pass. Under identical inputs, the CPU
-> wheel shrank from 6,199,419 to 5,217,296 bytes (-15.84%), while the extension
-> shrank from 6,204,864 to 2,746,880 bytes (-55.73%). CPython 3.12.3 XMake CUDA
-> release builds and CUDA-engine smoke tests also pass. Five 300-frame
-> `wrecking_balls` runs per binding show no meaningful work-normalized simulation
-> difference; nanobind reduced median scene setup from 30.22 ms to 21.62 ms.
-> CMake and `pyproject.toml` are statically synchronized to nanobind 3.0.0, but
-> CMake was intentionally not run. Windows, CMake wheels, the full CUDA-marked
-> Python suite, and the CPython 3.10-3.14 matrix remain open.
+> **Dual Python binding adapters (updated 2026-08-28,
+> `codex/migrate-pybind-to-nanobind`)**: nanobind 3.0.0 is now isolated under
+> `src/nanobind`; the migration-parent pybind11 tree is preserved under
+> `src/pybind`. Both trees contain 228 files, and `src/pybind` matches commit
+> `509d1698` exactly. `UIPC_PYTHON_BINDING=nanobind|pybind11` (CMake) and
+> `--python_binding=nanobind|pybind11` (XMake) select exactly one adapter while
+> retaining `UIPC_BUILD_PYBIND`/`--pybind` as compatibility enable switches.
+> The default wheel path explicitly selects nanobind. On Linux x86_64 with the
+> project `.venv` (CPython 3.12.3), both CMake release builds compile, link,
+> stage their package, and generate valid recursive stubs. Their portable suites
+> report 85 passed for nanobind and 84 passed plus one nanobind-only shutdown
+> probe skipped for pybind11. Workspace XMake `3.1.1+HEAD.3ba37a0` also builds
+> both adapters from their respective directories. XMake packaging produces
+> importable CPU wheels with ten stubs each: nanobind is 5,265,368 bytes with a
+> 2,755,104-byte extension; pybind11 is 6,246,826 bytes with a 6,204,864-byte
+> extension. Both wheels pass `Engine("none")` smoke tests. The repository-local
+> XMake recipe still resolves Python according to each nanobind release's
+> upstream floor, and the static nanobind package cache remains Python-ABI
+> specific. Earlier CPython 3.12.3 CUDA, SM 120 cubin/PTX, and
+> `wrecking_balls` validation remains applicable because this split changes no
+> CUDA backend or core source. Windows and the CPython 3.10-3.14 matrix remain
+> open.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and

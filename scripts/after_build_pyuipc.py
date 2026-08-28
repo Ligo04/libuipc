@@ -3,9 +3,8 @@ import sys
 import shutil
 import argparse as ap
 import pathlib
-import pybind11_stubgen as stubgen
+import re
 import subprocess as sp
-import optional_import # help stubgen to detect optional modules' api
 
 def is_option_on(option: str):
     # convert the option to uppercase
@@ -96,37 +95,39 @@ def copy_shared_libs(config:str, binary_dir:pathlib.Path, pyuipc_lib:pathlib.Pat
 
     return target_dir
 
-def generate_uipc_stubs(binary_dir):
-    optional_import.EnabledModules.report()
-    PACKAGE_NAME = 'uipc'
+def cmake_binding_backend(binary_dir):
+    cache_file = binary_dir / 'CMakeCache.txt'
+    if cache_file.is_file():
+        match = re.search(
+            r'^UIPC_PYTHON_BINDING:STRING=(nanobind|pybind11)$',
+            cache_file.read_text(encoding='utf-8'),
+            re.MULTILINE,
+        )
+        if match:
+            return match.group(1)
+    return 'nanobind'
 
-    typings_dir = binary_dir / 'python' / 'src'
-    
-    # clear the .pyi files in the typings directory
-    typings_folder = typings_dir / PACKAGE_NAME
-    for file in typings_folder.rglob('*.pyi'):
-        print(f'Clear {file}')
-        os.remove(file)
+def generate_uipc_stubs(project_dir, binary_dir, binding_backend):
+    source_dir = binary_dir / 'python' / 'src'
+    native_dir = source_dir / 'uipc' / '_native'
+    marker_file = source_dir / 'uipc' / 'py.typed'
+    stubgen_script = project_dir / 'scripts' / 'stubgen.py'
 
-    # generate the stubs
-    print(f'Try generating stubs to {typings_dir}')
-    sys.path.append(str(typings_dir))
-    
-    flush_info()
-    
-    args = ['-o', str(typings_dir), PACKAGE_NAME, "--ignore-unresolved-names","json"]
-
-    try:
-        stubgen.main(args)
-    except Exception as e:
-        print(f'Error generating stubs: {e}')
-        sys.exit(1)
+    print(f'Generating recursive {binding_backend} stubs in {native_dir}')
+    sp.check_call([
+        sys.executable,
+        str(stubgen_script),
+        '--binding-backend', binding_backend,
+        '--source-dir', str(source_dir),
+        '--output-dir', str(native_dir),
+        '--marker-file', str(marker_file),
+    ])
 
 def uninstall_package():
     # check if the package is installed
     ret = sp.run([sys.executable, '-m', 'pip', 'show', 'pyuipc'], capture_output=True, text=True)
     if ret.returncode == 0:
-        print(f'Uninstalling the old package:')
+        print('Uninstalling the old package:')
         ret = sp.check_call([sys.executable, '-m', 'pip', 'uninstall', '-y', 'pyuipc'])
         if ret != 0:
             print(f'Error uninstalling package: {ret}')
@@ -148,6 +149,11 @@ if __name__ == '__main__':
     args.add_argument('--config', help='$<CONFIG>', required=True)
     args.add_argument('--build_type', help='CMAKE_BUILD_TYPE', required=True)
     args.add_argument('--build_wheel', help='UIPC_BUILD_PYTHON_WHEEL', required=True)
+    args.add_argument(
+        '--binding_backend',
+        choices=('nanobind', 'pybind11'),
+        help='Python binding implementation (defaults to CMakeCache.txt)',
+    )
     args = args.parse_args()
 
     print(f'config($<CONFIG>): {args.config} | build_type(CMAKE_BUILD_TYPE): {args.build_type}')
@@ -155,34 +161,39 @@ if __name__ == '__main__':
     pyuipc_lib = pathlib.Path(args.target)
     binary_dir = pathlib.Path(args.binary_dir)
     proj_dir = pathlib.Path(args.project_dir)
+    binding_backend = args.binding_backend or cmake_binding_backend(binary_dir)
 
-    # clean up the old package, avoid polluting the stub generation
-    print(f'Cleaning up the old package:')
-    uninstall_package()
+    build_wheel = is_option_on(args.build_wheel)
+    if build_wheel:
+        print('Wheel build mode: preserving the active Python environment.')
+    else:
+        # Avoid importing stale package files during an in-place build.
+        print('Cleaning up the old package:')
+        uninstall_package()
 
     print(f'Clearing binary python directory: {binary_dir}')
     clear_binary_python_dir(binary_dir)
     flush_info()
 
-    print(f'Copying package code to the target directory:')
+    print('Copying package code to the target directory:')
     copy_python_source_code(proj_dir, binary_dir)
     flush_info()
 
-    print(f'Copying shared libraries to the target directory:')
+    print('Copying shared libraries to the target directory:')
     config = get_config(args.config, args.build_type)
     target_dir = copy_shared_libs(config, binary_dir, pyuipc_lib)
     flush_info()
 
-    print(f'Generating stubs:')
-    generate_uipc_stubs(binary_dir)
+    print('Generating stubs:')
+    generate_uipc_stubs(proj_dir, binary_dir, binding_backend)
     flush_info()
     
-    if not is_option_on(args.build_wheel):
+    if not build_wheel:
         print(f'Installing the package to Python Environment: {sys.executable}')
         install_package(binary_dir)
         flush_info()
     else:
-        print(f'UIPC_BUILD_PYTHON_WHEEL is ON, skipping automatic pip install.')
-        print(f'To install manually, run:')
+        print('UIPC_BUILD_PYTHON_WHEEL is ON, skipping automatic pip install.')
+        print('To install manually, run:')
         print(f'  {sys.executable} -m pip install {binary_dir}/python')
         flush_info()

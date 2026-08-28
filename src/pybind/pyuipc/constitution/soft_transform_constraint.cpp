@@ -4,7 +4,7 @@
 namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
-PySoftTransformConstraint::PySoftTransformConstraint(py::module_& m)
+PySoftTransformConstraint::PySoftTransformConstraint(py::module& m)
 {
     auto class_SoftTransformConstraint = py::class_<SoftTransformConstraint, Constraint>(
         m, "SoftTransformConstraint", R"(SoftTransformConstraint for constraining affine transforms with soft (penalty-based) constraints.)");
@@ -17,7 +17,7 @@ Args:
     config: Configuration dictionary (optional, uses default if not provided).)")
         .def(
             "apply_to",
-            [](SoftTransformConstraint& self, geometry::SimplicialComplex& sc, PyArray<Float> strength_ratio)
+            [](SoftTransformConstraint& self, geometry::SimplicialComplex& sc, py::array_t<Float> strength_ratio)
             { self.apply_to(sc, to_matrix<Vector2>(strength_ratio)); },
             py::arg("sc"),
             py::arg("strength_ratio") = as_numpy(Vector2{100.0, 100}),
@@ -47,8 +47,9 @@ Args:
             [](RotatingMotor&               self,
                geometry::SimplicialComplex& sc,
                Float                        strength,
-               PyArray<Float>               motor_axis,
-               Float                        motor_rot_vel) {
+               py::array_t<Float>           motor_axis,
+               Float                        motor_rot_vel)
+            {
                 self.apply_to(sc, strength, to_matrix<Vector3>(motor_axis), motor_rot_vel);
             },
             py::arg("sc"),
@@ -89,8 +90,9 @@ Args:
             [](LinearMotor&                 self,
                geometry::SimplicialComplex& sc,
                Float                        strength,
-               PyArray<Float>               motor_axis,
-               Float                        motor_vel) {
+               py::array_t<Float>           motor_axis,
+               Float                        motor_vel)
+            {
                 self.apply_to(sc, strength, to_matrix<Vector3>(motor_axis), motor_vel);
             },
             py::arg("sc"),

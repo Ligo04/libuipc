@@ -5,7 +5,7 @@
 
 namespace uipc::geometry
 {
-namespace py = nanobind;
+namespace py = pybind11;
 template <>
 class AttributeFriend<pyuipc::core::PySubsceneTabular>
 {
@@ -23,7 +23,7 @@ class AttributeFriend<pyuipc::core::PySubsceneTabular>
 namespace pyuipc::core
 {
 using namespace uipc::core;
-PySubsceneTabular::PySubsceneTabular(py::module_& m)
+PySubsceneTabular::PySubsceneTabular(py::module& m)
 {
     {
         auto class_SubsceneElement = py::class_<SubsceneElement>(
@@ -131,7 +131,7 @@ Returns:
 
         class_SubsceneTabular.def("default_element",
                                   &SubsceneTabular::default_element,
-                                  py::rv_policy::reference_internal,
+                                  py::return_value_policy::reference_internal,
                                   R"(Get the default subscene element.
 Returns:
     SubsceneElement: Reference to default element.)");
@@ -160,7 +160,7 @@ Args:
             "at",
             [](SubsceneTabular& self, IndexT i, IndexT j) -> SubsceneModel
             { return self.at(i, j); },
-            py::rv_policy::move,
+            py::return_value_policy::move,
             py::arg("i"),
             py::arg("j"),
             R"(Get the subscene model between two elements.
@@ -174,7 +174,7 @@ Returns:
             "subscene_models",
             [](SubsceneTabular& self) -> SubsceneModelCollection
             { return self.subscene_models(); },
-            py::rv_policy::move,
+            py::return_value_policy::move,
             R"(Get the subscene model collection.
 Returns:
     SubsceneModelCollection: Collection of subscene models.)");

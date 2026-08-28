@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PySceneIO
 {
   public:
-    PySceneIO(py::module_& m);
+    PySceneIO(py::module& m);
 };
 }  // namespace pyuipc::core

@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PySoftVertexEdgeStitch
 {
   public:
-    PySoftVertexEdgeStitch(py::module_& m);
+    PySoftVertexEdgeStitch(py::module& m);
 };
 }  // namespace pyuipc::constitution

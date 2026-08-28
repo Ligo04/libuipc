@@ -6,7 +6,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PySoftVertexTriangleStitch::PySoftVertexTriangleStitch(py::module_& m)
+PySoftVertexTriangleStitch::PySoftVertexTriangleStitch(py::module& m)
 {
     auto class_SoftVertexTriangleStitch =
         py::class_<SoftVertexTriangleStitch, InterPrimitiveConstitution>(
@@ -26,7 +26,7 @@ PySoftVertexTriangleStitch::PySoftVertexTriangleStitch(py::module_& m)
         [](SoftVertexTriangleStitch&                  self,
            const SoftVertexTriangleStitch::SlotTuple& aim_geo_slots,
            const SoftVertexTriangleStitch::SlotTuple& rest_geo_slots,
-           const PyArray<IndexT>&                     stitched_vert_tri_ids,
+           const py::array_t<IndexT>&                 stitched_vert_tri_ids,
            const ElasticModuli&                       moduli,
            Float                                      min_separate_distance)
         {

@@ -6,10 +6,10 @@ namespace pyuipc::core
 {
 using namespace uipc::core;
 
-PyWorld::PyWorld(py::module_& m)
+PyWorld::PyWorld(py::module& m)
 {
-    auto class_World =
-        py::class_<World>(m, "World", R"(World class representing the simulation world that manages scenes and simulation state.)");
+    auto class_World = py::class_<World, S<World>>(
+        m, "World", R"(World class representing the simulation world that manages scenes and simulation state.)");
 
     class_World.def(py::init<Engine&>(),
                     py::arg("engine"),
@@ -49,7 +49,7 @@ Returns:
     int: Current frame number.)");
     class_World.def("features",
                     &World::features,
-                    py::rv_policy::reference_internal,
+                    py::return_value_policy::reference_internal,
                     py::call_guard<py::gil_scoped_release>(),
                     R"(Get the feature collection.
 Returns:
@@ -64,7 +64,7 @@ Returns:
     class_World.def(
         "sanity_checker",
         [](World& self) -> SanityChecker& { return self.sanity_checker(); },
-        py::rv_policy::reference_internal,
+        py::return_value_policy::reference_internal,
         py::call_guard<py::gil_scoped_release>(),
         R"(Get the sanity checker.
 Returns:

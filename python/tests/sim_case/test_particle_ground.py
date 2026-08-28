@@ -27,6 +27,7 @@ run = False
 
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
 @pytest.mark.cuda
+@pytest.mark.gui
 @pytest.mark.example
 def test_particle_ground():
     Logger.set_level(Logger.Level.Info)

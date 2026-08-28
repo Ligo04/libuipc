@@ -6,6 +6,6 @@ namespace pyuipc::constitution
 class PySoftVertexTriangleStitch
 {
   public:
-    PySoftVertexTriangleStitch(py::module_& m);
+    PySoftVertexTriangleStitch(py::module& m);
 };
 }  // namespace pyuipc::constitution

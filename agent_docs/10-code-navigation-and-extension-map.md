@@ -38,19 +38,19 @@ The geometry factory functions are declared in
 | User-facing capability | Public/API layer | Core or CPU implementation | Runtime/backend consumer | Python binding | Good evidence |
 |---|---|---|---|---|---|
 | Process initialization | `include/uipc/common/uipc.h` | `src/core/common/uipc.cpp` | Backend loader reads `config()["module_dir"]` | `python/src/uipc/__init__.py` supplies `_native` automatically | `apps/tests/core/engine.cpp` |
-| Engine and backend loading | `include/uipc/core/engine.h` | `src/core/core/engine.cpp`, `src/core/core/internal/engine.cpp` | `src/backends/{cuda,none}/entrance.cpp` implements the three-symbol ABI | `src/pybind/pyuipc/core/engine.cpp` | `apps/tests/core/engine.cpp` |
-| World lifecycle | `include/uipc/core/world.h` | `src/core/core/world.cpp`, `src/core/core/internal/world.cpp` | `IEngine::do_init/do_advance/do_sync/do_retrieve` | `src/pybind/pyuipc/core/world.cpp` | nearly every `apps/tests/sim_case/*.cpp` |
-| Scene and default config | `include/uipc/core/scene.h` | `src/core/core/scene*.cpp`, `src/core/core/internal/scene.cpp` | Managers read attributes during `on_init_scene` and rebuild events | `src/pybind/pyuipc/core/scene.cpp` | `apps/tests/core/scene.cpp`; `docs/specification/scene_config.md` |
-| Objects and geometry slots | `include/uipc/core/object.h`, `include/uipc/geometry/geometry_slot.h` | `src/core/core/object*.cpp`, `src/core/geometry/geometry_collection.cpp` | Global geometry managers consume current/rest slots | `src/pybind/pyuipc/core/object.cpp`, `src/pybind/pyuipc/geometry/geometry_slot.cpp` | `apps/tests/core/object.cpp` |
-| Attribute storage/views | `include/uipc/geometry/attribute*.h` | `src/core/geometry/attribute*.cpp` | Backend reporters copy attributes into device buffers | early bindings in `src/pybind/pyuipc/module.cpp` | `apps/tests/core/attribute_collection.cpp` |
-| SimplicialComplex and algorithms | `include/uipc/geometry/simplicial_complex.h`, `utils/*.h` | `src/geometry/*.cpp` plus focused `affine_body/`, `bvh/`, `graph_coloring/`, and `implicit_geometries/` directories | Constitution/contact systems claim labeled attributes | `src/pybind/pyuipc/geometry/` | `apps/tests/geometry/`; samples `16_geometry_operation`, `27_compute_mesh_d_hat` |
-| Constitutions/constraints | `include/uipc/constitution/*.h` | `src/constitution/*.cpp` writes UID and parameter attributes | `src/backends/cuda/{finite_element,affine_body,inter_primitive_effect_system}/` | `src/pybind/pyuipc/constitution/` | focused sim cases and `docs/specification/constitutions/` |
-| Contact table | `include/uipc/core/contact_tabular.h` | `src/core/core/contact_tabular.cpp` | `src/backends/cuda/contact_system/`, collision/dytopo systems | `src/pybind/pyuipc/core/contact_tabular.cpp` | `apps/tests/core/contact_model.cpp`; samples `10_ramp_sliding`, `14_load_scene` |
-| Subscene table | `include/uipc/core/subscene_tabular.h` | `src/core/core/subscene_tabular.cpp` | Collision filtering reads `subscene_element_id` | `src/pybind/pyuipc/core/subscene_tabular.cpp` | sample `29_subscene` |
-| Animator | `include/uipc/core/animator.h` | `src/core/core/animator.cpp` | `src/backends/cuda/animator/` invokes callbacks per substep | `src/pybind/pyuipc/core/animator.cpp` | sample `3_periodically_pressed_tetrahedron` |
-| Full/incremental scene IO | `include/uipc/io/scene_io.h`, `include/uipc/core/scene_snapshot.h` | `src/io/scene_io.cpp`, `src/core/core/scene_snapshot.cpp`, serializers in `src/core/` | No physics system owns the wire format | `src/pybind/pyuipc/core/{scene_io,scene_snapshot}.cpp` | `apps/tests/core/scene_io.cpp`; samples `14_load_scene`, `15_scene_commit` |
-| Sanity checks | `include/uipc/core/sanity_checker.h` | `src/sanity_check/` is a dynamically loaded checker module | CUDA checkers may replace CPU checkers by ID | `src/pybind/pyuipc/core/sanity_checker.cpp` | `apps/tests/sanity_check/`, sample `35_mesh_check` |
-| Backend features | `include/uipc/core/feature.h` and focused core/DiffSim feature headers | Feature handles live in the core collection | Implementations/overriders live beside the relevant CUDA subsystem | `src/pybind/pyuipc/backend/` | samples `20_contact_system_feature`, `31_state_accessor_feature`, `40_distance_diagnoser` |
+| Engine and backend loading | `include/uipc/core/engine.h` | `src/core/core/engine.cpp`, `src/core/core/internal/engine.cpp` | `src/backends/{cuda,none}/entrance.cpp` implements the three-symbol ABI | `src/{nanobind,pybind}/pyuipc/core/engine.cpp` | `apps/tests/core/engine.cpp` |
+| World lifecycle | `include/uipc/core/world.h` | `src/core/core/world.cpp`, `src/core/core/internal/world.cpp` | `IEngine::do_init/do_advance/do_sync/do_retrieve` | `src/{nanobind,pybind}/pyuipc/core/world.cpp` | nearly every `apps/tests/sim_case/*.cpp` |
+| Scene and default config | `include/uipc/core/scene.h` | `src/core/core/scene*.cpp`, `src/core/core/internal/scene.cpp` | Managers read attributes during `on_init_scene` and rebuild events | `src/{nanobind,pybind}/pyuipc/core/scene.cpp` | `apps/tests/core/scene.cpp`; `docs/specification/scene_config.md` |
+| Objects and geometry slots | `include/uipc/core/object.h`, `include/uipc/geometry/geometry_slot.h` | `src/core/core/object*.cpp`, `src/core/geometry/geometry_collection.cpp` | Global geometry managers consume current/rest slots | `src/{nanobind,pybind}/pyuipc/core/object.cpp`, `src/{nanobind,pybind}/pyuipc/geometry/geometry_slot.cpp` | `apps/tests/core/object.cpp` |
+| Attribute storage/views | `include/uipc/geometry/attribute*.h` | `src/core/geometry/attribute*.cpp` | Backend reporters copy attributes into device buffers | early bindings in `src/{nanobind,pybind}/pyuipc/module.cpp` | `apps/tests/core/attribute_collection.cpp` |
+| SimplicialComplex and algorithms | `include/uipc/geometry/simplicial_complex.h`, `utils/*.h` | `src/geometry/*.cpp` plus focused `affine_body/`, `bvh/`, `graph_coloring/`, and `implicit_geometries/` directories | Constitution/contact systems claim labeled attributes | `src/{nanobind,pybind}/pyuipc/geometry/` | `apps/tests/geometry/`; samples `16_geometry_operation`, `27_compute_mesh_d_hat` |
+| Constitutions/constraints | `include/uipc/constitution/*.h` | `src/constitution/*.cpp` writes UID and parameter attributes | `src/backends/cuda/{finite_element,affine_body,inter_primitive_effect_system}/` | `src/{nanobind,pybind}/pyuipc/constitution/` | focused sim cases and `docs/specification/constitutions/` |
+| Contact table | `include/uipc/core/contact_tabular.h` | `src/core/core/contact_tabular.cpp` | `src/backends/cuda/contact_system/`, collision/dytopo systems | `src/{nanobind,pybind}/pyuipc/core/contact_tabular.cpp` | `apps/tests/core/contact_model.cpp`; samples `10_ramp_sliding`, `14_load_scene` |
+| Subscene table | `include/uipc/core/subscene_tabular.h` | `src/core/core/subscene_tabular.cpp` | Collision filtering reads `subscene_element_id` | `src/{nanobind,pybind}/pyuipc/core/subscene_tabular.cpp` | sample `29_subscene` |
+| Animator | `include/uipc/core/animator.h` | `src/core/core/animator.cpp` | `src/backends/cuda/animator/` invokes callbacks per substep | `src/{nanobind,pybind}/pyuipc/core/animator.cpp` | sample `3_periodically_pressed_tetrahedron` |
+| Full/incremental scene IO | `include/uipc/io/scene_io.h`, `include/uipc/core/scene_snapshot.h` | `src/io/scene_io.cpp`, `src/core/core/scene_snapshot.cpp`, serializers in `src/core/` | No physics system owns the wire format | `src/{nanobind,pybind}/pyuipc/core/{scene_io,scene_snapshot}.cpp` | `apps/tests/core/scene_io.cpp`; samples `14_load_scene`, `15_scene_commit` |
+| Sanity checks | `include/uipc/core/sanity_checker.h` | `src/sanity_check/` is a dynamically loaded checker module | CUDA checkers may replace CPU checkers by ID | `src/{nanobind,pybind}/pyuipc/core/sanity_checker.cpp` | `apps/tests/sanity_check/`, sample `35_mesh_check` |
+| Backend features | `include/uipc/core/feature.h` and focused core/DiffSim feature headers | Feature handles live in the core collection | Implementations/overriders live beside the relevant CUDA subsystem | `src/{nanobind,pybind}/pyuipc/backend/` | samples `20_contact_system_feature`, `31_state_accessor_feature`, `40_distance_diagnoser` |
 | Python package helpers | `python/src/uipc/` | pure Python | Native backend remains lazily loaded | n/a | `python/tests/`, `libuipc-samples/` |
 
 ## Runtime Trace of One Frame
@@ -109,7 +109,8 @@ and behavior test are added; `newton/use_adaptive_tol` demonstrates this rule.
    (`meta`, `instances`, vertices, edges, triangles, or tetrahedra), type, size,
    and default.
 3. Read it through the named built-in on the backend; avoid a second literal.
-4. Bind/export the name in `src/pybind/pyuipc/builtin/` if it is user-facing.
+4. Bind/export the name in both adapter trees under
+   `src/{nanobind,pybind}/pyuipc/builtin/` if it is user-facing.
 5. Test creation, serialization, cloning, and backend consumption.
 
 The surface flag is named `builtin::is_surf` / `uipc.builtin.is_surf`; there is
@@ -122,8 +123,9 @@ no `is_surface` built-in.
 2. Add the CPU implementation under `src/geometry/` and its build entries to both
    CMake and XMake where the existing glob/rule does not already cover it.
 3. Add focused Catch2 coverage under `apps/tests/geometry/`.
-4. Add a binding file and register it from `src/pybind/pyuipc/geometry/module.cpp`
-   if Python users need it.
+4. Add a binding file and register it from both
+   `src/{nanobind,pybind}/pyuipc/geometry/module.cpp` files if Python users need
+   it.
 5. Decide explicitly whether `include/uipc/geometry/utils.h` should export it.
 
 ### Add a constitution or constraint
@@ -136,8 +138,9 @@ no `is_surface` built-in.
    UID and every required parameter/state attribute, and define rest-state rules.
 3. Implement and `REGISTER_SIM_SYSTEM` the CUDA reporter/receiver/energy system;
    make its dependencies explicit.
-4. Add the pybind class and register it in the constitution module. Check the
-   actual module export—public C++ does not imply Python parity.
+4. Add the binding class to both adapter trees and register it in each
+   constitution module. Check the actual module export—public C++ does not
+   imply Python parity.
 5. Add a mathematical specification plus a small unit test and an end-to-end
    sim case. Update UID documentation manually until the generator limitation
    described in doc 04 is fixed.
@@ -155,11 +158,13 @@ no `is_surface` built-in.
 
 ### Extend a public C++ API into Python
 
-1. Find the owning binding module under `src/pybind/pyuipc/<module>/`.
-2. Add `PyXxx{module}` and invoke it from that directory's `module.cpp`.
+1. Find the owning binding module under
+   `src/{nanobind,pybind}/pyuipc/<module>/`.
+2. Add `PyXxx{module}` to both adapters and invoke it from each directory's
+   `module.cpp`.
 3. Update the forwarding layer only when pure-Python behavior is needed; native
    submodules are already re-exported by `python/src/uipc/*.py`.
-4. Regenerate/check stubs through the normal pybind build and add pytest coverage.
+4. Regenerate/check stubs through both selected builds and add pytest coverage.
 5. Test from the built/installed package, not only from the repository checkout.
 
 ### Change serialization

@@ -6,6 +6,6 @@ namespace pyuipc
 class PyTransform
 {
   public:
-    PyTransform(py::module_& m);
+    PyTransform(py::module& m);
 };
 }  // namespace pyuipc

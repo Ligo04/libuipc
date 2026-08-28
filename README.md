@@ -126,15 +126,15 @@ git clone https://github.com/spiriMirror/libuipc.git --recurse-submodules
 cd libuipc && mkdir build && cd build
 
 # 3) configure + build (NVCC is slow — use all cores)
-cmake -S .. -DUIPC_BUILD_PYBIND=1
+cmake -S .. -DUIPC_BUILD_PYBIND=1 -DUIPC_PYTHON_BINDING=nanobind
 cmake --build . --config Release -j8   # Linux: add -DCMAKE_BUILD_TYPE=Release
 ```
 
-With `UIPC_BUILD_PYBIND=ON`, the Python binding is built **and installed** into the active Python environment. If the install step fails, finish it manually with `cd build/python && pip install .`; to target a specific venv, pass `-DUIPC_PYTHON_EXECUTABLE_PATH=<python.exe>`.
+With `UIPC_BUILD_PYBIND=ON`, the selected Python binding is built **and installed** into the active Python environment. `UIPC_PYTHON_BINDING` accepts `nanobind` (default) or the preserved `pybind11` implementation. If the install step fails, finish it manually with `cd build/python && pip install .`; to target a specific venv, pass `-DUIPC_PYTHON_EXECUTABLE_PATH=<python.exe>`.
 
 On Linux, a conda environment is recommended: `conda env create -f conda/env.yaml && conda activate uipc_env`, then `conda env config vars set CMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake` before the build commands above.
 
-**XMake alternative**: `xmake f -c && xmake build -j8` (Python binding: `xmake f --pybind=true --python_system=true --python_version=3.11.x -c`).
+**XMake alternative**: `xmake f -c && xmake build -j8` (default nanobind Python binding: `xmake f --pybind=true --python_binding=nanobind --python_system=true --python_version=3.11.x -c`; use `--python_binding=pybind11` for the legacy adapter).
 
 **Check the install**: `cd python && python uipc_info.py`.
 

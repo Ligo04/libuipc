@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PyStateAccessorFeature
 {
   public:
-    PyStateAccessorFeature(py::module_& m);
+    PyStateAccessorFeature(py::module& m);
 };
 }  // namespace pyuipc::core

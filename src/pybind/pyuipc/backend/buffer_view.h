@@ -5,6 +5,6 @@ namespace pyuipc::backend
 class PyBufferView
 {
   public:
-    PyBufferView(py::module_& m);
+    PyBufferView(py::module& m);
 };
 }  // namespace pyuipc::backend

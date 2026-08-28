@@ -6,6 +6,6 @@ namespace pyuipc
 class PyUIPCType
 {
   public:
-    PyUIPCType(py::module_& m);
+    PyUIPCType(py::module& m);
 };
 }  // namespace pyuipc

@@ -4,7 +4,7 @@
 namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
-PyExternalArticulationConstraint::PyExternalArticulationConstraint(py::module_& m)
+PyExternalArticulationConstraint::PyExternalArticulationConstraint(py::module& m)
 {
     auto class_ExternalArticulationConstraint =
         py::class_<ExternalArticulationConstraint, Constraint>(m,
@@ -49,7 +49,7 @@ Returns:
     Geometry: Created geometry with joint constraint data.)")
         .def(
             "create_geometry",
-            [](ExternalArticulationConstraint& self, py::list joint_geos, PyArray<IndexT> indices)
+            [](ExternalArticulationConstraint& self, py::list joint_geos, py::array_t<IndexT> indices)
             {
                 vector<S<const geometry::GeometrySlot>> slots;
                 slots.reserve(joint_geos.size());

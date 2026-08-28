@@ -6,6 +6,6 @@ namespace pyuipc::core
 class PySubsceneTabular
 {
   public:
-    PySubsceneTabular(py::module_& m);
+    PySubsceneTabular(py::module& m);
 };
 }  // namespace pyuipc::core

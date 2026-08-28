@@ -5,6 +5,6 @@ namespace pyuipc::constitution
 class PyHookeanSpring
 {
   public:
-    PyHookeanSpring(py::module_& m);
+    PyHookeanSpring(py::module& m);
 };
 }  // namespace pyuipc::constitution

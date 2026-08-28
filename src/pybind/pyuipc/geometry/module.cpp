@@ -21,7 +21,7 @@
 
 namespace pyuipc::geometry
 {
-PyModule::PyModule(py::module_& m)
+PyModule::PyModule(py::module& m)
 {
     // Data structures are exported early in main module
     // Only utils/IO functions are exported here (after core module)

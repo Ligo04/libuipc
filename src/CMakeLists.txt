@@ -34,7 +34,9 @@ if(UIPC_WITH_USD_SUPPORT)
 endif()
 
 if(UIPC_BUILD_PYBIND)
-    add_subdirectory(pybind)
+    if(UIPC_PYTHON_BINDING STREQUAL "nanobind")
+        add_subdirectory(nanobind)
+    elseif(UIPC_PYTHON_BINDING STREQUAL "pybind11")
+        add_subdirectory(pybind)
+    endif()
 endif()
-
-

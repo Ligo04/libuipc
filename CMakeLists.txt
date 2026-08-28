@@ -17,7 +17,7 @@ uipc_parse_version(${UIPC_VERSION} UIPC_VERSION_MAJOR UIPC_VERSION_MINOR UIPC_VE
 # Project Options
 # =========================================================================
 option(UIPC_USING_LOCAL_VCPKG "Using local vcpkg" ON)
-option(UIPC_BUILD_PYBIND "Build pyuipc" OFF)
+option(UIPC_BUILD_PYBIND "Build Python bindings" OFF)
 option(UIPC_BUILD_PYTHON_WHEEL "Wheel build mode for Python post-build helper" OFF)
 option(UIPC_BUILD_EXAMPLES "Build examples" ON)
 option(UIPC_BUILD_TESTS "Build tests" ON)
@@ -27,6 +27,13 @@ option(UIPC_WITH_USD_SUPPORT "Build with Universal Scene Description (USD) suppo
 option(UIPC_WITH_VDB_SUPPORT "Build with Volumetric DataBase (VDB) support" OFF)
 
 set(UIPC_PYTHON_EXECUTABLE_PATH "" CACHE PATH "Python executable path")
+set(UIPC_PYTHON_BINDING "nanobind" CACHE STRING
+    "Python binding implementation (nanobind or pybind11)")
+set_property(CACHE UIPC_PYTHON_BINDING PROPERTY STRINGS nanobind pybind11)
+if(NOT UIPC_PYTHON_BINDING STREQUAL "nanobind"
+   AND NOT UIPC_PYTHON_BINDING STREQUAL "pybind11")
+    uipc_error("UIPC_PYTHON_BINDING must be 'nanobind' or 'pybind11', got '${UIPC_PYTHON_BINDING}'.")
+endif()
 set(UIPC_USD_INSTALL_DIR "" CACHE PATH
         "USD installation directory: the folder that contains pxrConfig.cmake, e.g. ~/Software/Usd")
 

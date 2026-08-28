@@ -6,7 +6,7 @@ namespace pyuipc::constitution
 {
 using namespace uipc::constitution;
 
-PyAffineBodyDrivingRevoluteJoint::PyAffineBodyDrivingRevoluteJoint(py::module_& m)
+PyAffineBodyDrivingRevoluteJoint::PyAffineBodyDrivingRevoluteJoint(py::module& m)
 {
     auto class_AffineBodyDrivingRevoluteJoint =
         py::class_<AffineBodyDrivingRevoluteJoint, IConstitution>(
@@ -34,22 +34,20 @@ Returns:
         { self.apply_to(edges, strength_ratio); },
         py::arg("sc"),
         py::arg("strength_ratio") = Float{100.0},
-        R"(Create joint between two affine bodies (single-instance mode).
+        py::doc(R"(Create joint between two affine bodies (single-instance mode).
 edges: Every edge in the simplicial complex is treated as a joint axis.
-strength_ratio: The strength ratio of the joint constraint applied to all joints (default: 100).)");
+strength_ratio: The strength ratio of the joint constraint applied to all joints (default: 100).)"));
 
 
     // New API - Multi-instance mode
     class_AffineBodyDrivingRevoluteJoint.def(
         "apply_to",
-        [](AffineBodyDrivingRevoluteJoint& self,
-           geometry::SimplicialComplex&    edges,
-           PyArray<Float>                  strength_ratios)
+        [](AffineBodyDrivingRevoluteJoint& self, geometry::SimplicialComplex& edges, py::array_t<Float> strength_ratios)
         { self.apply_to(edges, as_span<Float>(strength_ratios)); },
         py::arg("sc"),
         py::arg("strength_ratios"),
-        R"(Create joint between two affine bodies (multi-instance mode).
+        py::doc(R"(Create joint between two affine bodies (multi-instance mode).
 edges: Every edge in the simplicial complex is treated as a joint axis.
-strength_ratios: List of strength ratios for each joint (one per edge).)");
+strength_ratios: List of strength ratios for each joint (one per edge).)"));
 }
 }  // namespace pyuipc::constitution
