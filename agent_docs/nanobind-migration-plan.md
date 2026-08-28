@@ -8,8 +8,10 @@ XMake `3.1.1+HEAD.3ba37a0`、CPython 3.13 环境中完成 debug/release 编译�
 Buffer 回调和 Python trampoline/shared_ptr 聚焦探针。CMake 描述与
 `pyproject.toml` 已静态同步到同一精确版本，但本轮按要求没有执行 CMake；
 此外，XMake 已使用项目 `.venv` 的 CPython 3.12.3 生成带 10 个递归 stub 的
-CPU release wheel；解包后的 wheel 可直接导入并通过同一测试集。Windows、
-CUDA、CMake wheel 和完整 CPython 3.10-3.14 矩阵仍未验证。
+CPU release wheel；解包后的 wheel 可直接导入并通过同一测试集。CPython
+3.12.3 CUDA release 产品构建、CUDA Engine 冒烟和 `wrecking_balls` 样例
+性能对照也已通过。Windows、CMake wheel、完整 CUDA pytest 和 CPython
+3.10-3.14 矩阵仍未验证。
 
 调研与实施基线：分支 `codex/migrate-pybind-to-nanobind`，提交
 `428f844caed3013919ebb9ea7d4f4268a3cab7ff`，日期 2026-08-27。
@@ -95,13 +97,15 @@ XMake overlay 是一个**阶段 0 构建可行性门槛**。当前 Linux 探针�
 仓库声明的最低 XMake 3.0.5（`xmake.lua:1`）兼容性应由 CI 矩阵持续覆盖；
 本次本地开发与验收按工作区最新 XMake 执行。
 
-`libnanobind` 的静态核心依赖 CPython ABI，因此 overlay 将
-`python_version` 和 `python_system` 声明为包配置，并由产品目标显式传入。
-这些配置进入 XMake 包哈希，防止为一个 Python 次版本编译的静态库被另一个
-次版本复用。CPython 3.12 wheel 验证曾准确捕获这种错误复用：旧缓存的
-manifest 指向 Python 3.14.3，导致 CPython 3.12 导入时报缺少
-`PyThreadState_GetUnchecked`；修复后生成独立包哈希，manifest 与目标均指向
-3.12.3，wheel 导入和测试恢复正常。
+本地 overlay 按官方配方的行为，让 XMake 自动选择满足 nanobind 版本下限的
+Python（3.0.0 要求 `>=3.10`）。具体解释器仍可由产品层
+`add_requireconfs`、`python_system` 和外部构建环境约束，但不再作为
+nanobind 包自身的配置进入包哈希。`libnanobind` 静态核心依赖 CPython ABI；
+CPython 3.12 wheel 验证曾捕获旧的 Python 3.14.3 核心被错误复用并导致导入时
+缺少 `PyThreadState_GetUnchecked`。因此切换 Python 次版本时必须隔离或清理
+nanobind 包缓存，CI 矩阵也不能跨 ABI 复用同一个已编译核心。清空既有 3.0.0
+安装后，CPython 3.12.3 配置自动解析并重建了无 ABI 配置的包哈希；manifest
+记录 Python 3.12.3，随后产品构建、wheel 导入和 `Engine("none")` 冒烟通过。
 
 ## 当前仓库范围
 
@@ -259,7 +263,8 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
    以及对应的 pybind 专用 fixture
    （`scripts/tests/test_repository_contracts.py:36-76`）。
    当前活动绑定源码中不再残留 pybind11 API/include，XMake release 的默认
-   可移植测试集通过；CMake、Windows 和 CUDA 验证仍是阶段门槛的一部分。
+   可移植测试集、CUDA 产品构建和代表性样例通过；CMake、Windows 和完整
+   CUDA pytest 验证仍是阶段门槛的一部分。
 5. **阶段 4——包与 wheel 对等。** 通过 CMake 和 XMake 生成一致的 stub，
    构建全新 wheel，安装到干净环境，与阶段 0 的 API/stub 清单对比，并在
    Linux 和 Windows 上针对 CPython 3.10-3.14 运行 wheel smoke/pytest。
@@ -309,7 +314,8 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 ## 主要残余风险
 
 1. **XMake 的 3.0.0 打包仅完成 Linux 验证。** 官方配方滞后已经由仓库内
-   精确版本 overlay 处理，产品依赖也已切换并按 Python ABI 区分缓存；
+   精确版本 overlay 处理，产品依赖也已切换；overlay 与官方行为一致地自动
+   解析 Python 依赖，因此切换 Python 次版本时必须隔离或清理 ABI 相关缓存。
    Windows 仍是迁移门槛，不能静默回退到 2.12.0。
 2. **数组语义可能无声改变。** 字节 stride 与元素 stride、转换默认值、
    只读标志和 owner 对象都需要运行时断言及负向测试。
@@ -321,8 +327,9 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 5. **CMake 与 XMake 的 stub 布局可能独立退化。** 应将生成文件清单和
    类型检查器输出视为发布产物，而不是偶然生成的构建副产品。
 6. **产品验证仍未覆盖完整发布矩阵。** Linux XMake 产品构建、递归 stub、
-   CPython 3.12 wheel 导入和默认可移植测试已通过；CMake、Windows、GPU、
-   其他 Python 次版本和所有产品运行时语义仍须通过上述分阶段门槛验证。
+   CPython 3.12 wheel 导入、默认可移植测试、CUDA Engine 和代表性模拟样例已
+   通过；CMake、Windows、完整 CUDA pytest、其他 Python 次版本和所有产品
+   运行时语义仍须通过上述分阶段门槛验证。
 
 ## 一手资料
 
@@ -368,5 +375,11 @@ wheel 门槛必须检查已安装归档中是否包含原生扩展、递归原�
 - 使用项目 `.venv` 的 CPython 3.12.3 构建并解包 XMake wheel；wheel 可在
   不设置 `LD_LIBRARY_PATH` 的情况下导入，包含 10 个递归 stub，并通过默认
   可移植测试集。
-- **未执行** CMake、Windows、CUDA/GPU、模拟器或完整 CPython 3.10-3.14
-  wheel 矩阵验证。
+- 使用 CPython 3.12.3 完成 pybind11/nanobind 的 XMake CUDA release 构建、
+  CUDA Engine 冒烟，以及 `wrecking_balls` 各 5 次 300 帧对照；按 Newton
+  工作量归一后的模拟耗时相同，nanobind 场景创建中位数减少约 8.6 ms。
+- 将 overlay 改为官方式 `python >=3.10` 自动依赖解析；移走旧 3.0.0 包缓存
+  后重新配置，manifest、编译头文件和 wheel ABI 均为 CPython 3.12，XMake
+  release 构建、解包导入及 `Engine("none")` 冒烟通过。
+- **未执行** CMake、Windows、完整 CUDA pytest 或 CPython 3.10-3.14 wheel
+  矩阵验证。

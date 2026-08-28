@@ -18,27 +18,16 @@ package("nanobind")
     add_versions("v2.6.1", "519c6dd56581ad6db9aab814105c2666a0491096487cb384dd20216f80d1a291")
     add_versions("v2.2.0", "bfbfc7e5759f1669e4ddb48752b1ddc5647d1430e94614d6f8626df1d508e65a")
 
-    -- libnanobind is Python-ABI-specific. Keep the interpreter selector in
-    -- the package hash so one cached static library cannot cross ABI minors.
-    add_configs("python_version", {
-        description = "Required Python ABI version or version range.",
-        type = "string"
-    })
-    add_configs("python_system", {
-        description = "Use the system Python installation.",
-        default = false,
-        type = "boolean"
-    })
-
     add_deps("cmake", "robin-map")
 
     on_load(function (package)
-        local python_version = assert(package:config("python_version"),
-                                      "nanobind requires configs.python_version")
-        package:add("deps", "python " .. python_version, {
-            system = package:config("python_system"),
-            configs = {headeronly = package:is_plat("linux")}
-        })
+        -- Match the official xmake-repo behavior: let dependency resolution
+        -- select any Python version that satisfies nanobind's version floor.
+        if package:version() and package:version():ge("3.0.0") then
+            package:add("deps", "python >=3.10")
+        else
+            package:add("deps", "python >=3.8")
+        end
     end)
 
     on_install("windows|x64", "linux", "macosx", "bsd", function (package)

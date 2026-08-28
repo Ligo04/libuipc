@@ -1,6 +1,6 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
-Status as of 2026-08-27. Completed performance work is
+Status as of 2026-08-28. Completed performance work is
 recorded in `handoff.md`; this file tracks what is **open** — analyze here first
 before planning new work.
 
@@ -147,10 +147,14 @@ assertions).
 
 - **Nanobind migration is only validated through XMake on Linux/CPython
   3.12-3.13**: the product extension, CPython 3.12 CPU wheel, recursive stubs,
-  and portable tests pass with the local 3.0.0 overlay. CMake metadata is
-  statically synchronized, but no CMake command was run. Still required before
-  release: CMake build/import/stub parity, Windows and CUDA runs, and the full
-  CPython 3.10-3.14 matrix.
+  portable tests, a CPython 3.12 CUDA release build, CUDA-engine smoke test,
+  and the `wrecking_balls` sample pass with the local 3.0.0 overlay. CMake
+  metadata is statically synchronized, but no CMake command was run. Still
+  required before release: CMake build/import/stub parity, Windows, the full
+  CUDA-marked Python suite, and the CPython 3.10-3.14 matrix. The overlay now
+  follows the official recipe's automatic Python dependency resolution. Since
+  the static nanobind core is ABI-specific, shared XMake package caches must be
+  isolated or cleared when switching Python minors.
 - **PyPI 0.0.26 Windows wheel needs the CUDA 12 cuBLAS runtime**: package
   installation and `import uipc` succeed, but `Engine("cuda", ...)` fails on
   a CUDA 13.2-only machine because `uipc_backend_cuda.dll` directly imports

@@ -1,6 +1,6 @@
 # Handoff — Current State of the Repo
 
-> **Nanobind 3.0.0 XMake product migration (2026-08-27,
+> **Nanobind 3.0.0 XMake product migration (updated 2026-08-28,
 > `codex/migrate-pybind-to-nanobind`)**: the complete `pyuipc` binding tree now
 > uses nanobind, including ndarray ownership/strides, JSON conversion,
 > shared-pointer exchange, trampolines, custom constructors, and iterators.
@@ -13,14 +13,23 @@
 > dynamic dependency on libpython or nanobind. A second XMake release build used
 > the project `.venv` (CPython 3.12.3) and produced an importable CPU wheel with
 > ten recursive stub files; the unpacked wheel passed the same 80-test portable
-> suite. The nanobind package now keys its cache by Python version and system
-> selection after this run caught a Python 3.14 static core being reused in a
-> CPython 3.12 wheel. Under identical inputs, the wheel shrank from 6,199,419 to
-> 5,217,296 bytes (-15.84%), while the extension shrank from 6,204,864 to
-> 2,746,880 bytes (-55.73%). CMake and `pyproject.toml` were statically
-> synchronized to nanobind 3.0.0, but CMake was intentionally not run in this
-> validation round. Windows, CUDA, CMake wheels, and the full CPython 3.10-3.14
-> matrix remain open.
+> suite. The local recipe follows the official xmake-repo behavior and lets
+> XMake resolve any Python satisfying nanobind 3's `>=3.10` floor; the outer
+> project configuration/environment selects the concrete interpreter. Because
+> the static core is Python-ABI-specific, switching Python minors requires an
+> isolated or cleared nanobind package cache. This run previously caught a stale
+> Python 3.14 core being reused by CPython 3.12. After moving all installed 3.0.0
+> variants aside, a clean CPython 3.12.3 configure rebuilt the automatic-resolution
+> package hash with a 3.12.3 dependency manifest; the XMake release build, unpacked
+> wheel import, and `Engine("none")` smoke test pass. Under identical inputs, the CPU
+> wheel shrank from 6,199,419 to 5,217,296 bytes (-15.84%), while the extension
+> shrank from 6,204,864 to 2,746,880 bytes (-55.73%). CPython 3.12.3 XMake CUDA
+> release builds and CUDA-engine smoke tests also pass. Five 300-frame
+> `wrecking_balls` runs per binding show no meaningful work-normalized simulation
+> difference; nanobind reduced median scene setup from 30.22 ms to 21.62 ms.
+> CMake and `pyproject.toml` are statically synchronized to nanobind 3.0.0, but
+> CMake was intentionally not run. Windows, CMake wheels, the full CUDA-marked
+> Python suite, and the CPython 3.10-3.14 matrix remain open.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and
