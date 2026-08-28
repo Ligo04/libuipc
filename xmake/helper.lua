@@ -25,11 +25,19 @@ function get_cuda_version()
     return cuda_version
 end
 
-function get_python_version(target)
+function get_python_program(target)
     import("lib.detect.find_tool")
-    import("lib.detect.find_programver")
 
     local envs = target:pkgenvs()
-    local python = assert(find_tool("python3", {envs = envs}), "python not found!")
-    return find_programver(python.program)
+    local python = find_tool("python3", {envs = envs})
+    if not python then
+        python = find_tool("python", {envs = envs})
+    end
+    return assert(python, "python not found!").program
+end
+
+function get_python_version(target)
+    import("lib.detect.find_programver")
+
+    return find_programver(get_python_program(target))
 end

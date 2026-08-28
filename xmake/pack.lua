@@ -34,15 +34,7 @@ xpack("pyuipc")
         os.rm(path.join(modules_dir, "*.lib"))
 
         -- Build stub file
-        local python
-        local python_pkg = pyuipc_target:pkg("python")
-        if python_pkg then
-            local installdir = python_pkg:installdir()
-            if installdir then
-                python = path.join(installdir, "bin/python")
-            end
-        end
-        python = python or "python"
+        local python = helper.get_python_program(pyuipc_target)
 
         local binding_backend = config.get("python_binding") or "nanobind"
         local ok = try { function()
