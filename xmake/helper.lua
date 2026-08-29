@@ -33,7 +33,15 @@ function get_python_program(target)
     if not python then
         python = find_tool("python", {envs = envs})
     end
-    return assert(python, "python not found!").program
+    python = assert(python, "python not found!")
+
+    -- find_tool may return an executable command without its platform suffix
+    -- (for example, python3 on Windows). External tools such as uv require the
+    -- canonical interpreter path, so ask the selected Python for it directly.
+    local program = os.iorunv(python.program, {
+        "-c", "import sys; print(sys.executable)",
+    }, {envs = envs}):trim()
+    return assert(program ~= "" and program, "python executable path not found!")
 end
 
 function get_python_version(target)
