@@ -39,6 +39,12 @@ set_version("0.9.0")
 -- provenance and CUDA diagnostics harder to reproduce.
 set_policy("build.ccache", false)
 
+if has_config("pybind") then
+    -- Python wheels must carry package runtimes even when matching libraries
+    -- are installed on the build host.
+    set_policy("install.strip_packagelibs", false)
+end
+
 if has_config("dev") then
     set_policy("compatibility.version", "3.0")
 

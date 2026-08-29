@@ -10,7 +10,6 @@ xpack("pyuipc")
         import("target.action.install", {alias = "_do_install_target"})
         import("lib.detect.find_tool")
         import("core.project.config")
-        import("core.project.project")
         import("core.base.semver")
         import("helper")
         -- Copy project file
@@ -26,8 +25,6 @@ xpack("pyuipc")
         -- A wheel must carry package runtimes even when matching libraries are
         -- installed on the build host. XMake's default strip policy resolves
         -- against host libraries and can otherwise omit runtimes such as TBB.
-        local strip_packagelibs = project.policy("install.strip_packagelibs")
-        project.policy_set("install.strip_packagelibs", false)
         _do_install_target(pyuipc_target, {
             headers = false,
             binaries = false,
@@ -37,7 +34,6 @@ xpack("pyuipc")
             libdir = "",
             bindir = "",
         })
-        project.policy_set("install.strip_packagelibs", strip_packagelibs)
         os.rm(path.join(modules_dir, "*.lib"))
 
         -- Build stub file
@@ -58,6 +54,23 @@ xpack("pyuipc")
         end }
 
         local uv = assert(find_tool("uv"), "uv not found!")
+        if is_plat("linux") then
+            -- Every ELF copied into the wheel must resolve transitive package
+            -- dependencies from its own directory. In particular,
+            -- libtbbmalloc_proxy depends on the sibling libtbbmalloc library.
+            for _, shared_library in ipairs(os.files(path.join(modules_dir, "*.so*"))) do
+                if not os.islink(shared_library) then
+                    os.vrunv(uv.program, {
+                        "tool", "run",
+                        "--from", "patchelf==0.17.2.4",
+                        "patchelf",
+                        "--set-rpath", "$ORIGIN",
+                        shared_library,
+                    })
+                end
+            end
+        end
+
         if not ok then
             local requirements = {"numpy"}
             if binding_backend == "nanobind" then

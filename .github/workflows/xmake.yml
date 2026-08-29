@@ -118,6 +118,7 @@ jobs:
           python -m pip install --force-reinstall "$wheel"
           python - <<'PY'
           import tempfile
+          import sys
           from pathlib import Path
 
           import uipc
@@ -129,6 +130,15 @@ jobs:
           assert build_info["cuda_backend"] is True, build_info
           assert len(list((package_dir / "_native").rglob("*.pyi"))) == 10, package_dir
           assert (package_dir / "py.typed").is_file(), package_dir
+          if sys.platform == "linux":
+              native_dir = (package_dir / "_native").resolve()
+              tbb_paths = {
+                  Path(line.rsplit(maxsplit=1)[-1]).resolve()
+                  for line in Path("/proc/self/maps").read_text().splitlines()
+                  if "/libtbb" in line
+              }
+              assert tbb_paths, "TBB was not loaded"
+              assert all(native_dir in path.parents for path in tbb_paths), tbb_paths
           with tempfile.TemporaryDirectory(prefix="pyuipc-xmake-ci-") as workspace:
               engine = Engine("none", workspace)
               del engine
