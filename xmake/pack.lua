@@ -10,6 +10,7 @@ xpack("pyuipc")
         import("target.action.install", {alias = "_do_install_target"})
         import("lib.detect.find_tool")
         import("core.project.config")
+        import("core.project.project")
         import("core.base.semver")
         import("helper")
         -- Copy project file
@@ -22,6 +23,11 @@ xpack("pyuipc")
         local modules_dir = path.join(build_dir, "src/uipc/_native")
         os.mkdir(modules_dir)
         -- Copy project shared libraries
+        -- A wheel must carry package runtimes even when matching libraries are
+        -- installed on the build host. XMake's default strip policy resolves
+        -- against host libraries and can otherwise omit runtimes such as TBB.
+        local strip_packagelibs = project.policy("install.strip_packagelibs")
+        project.policy_set("install.strip_packagelibs", false)
         _do_install_target(pyuipc_target, {
             headers = false,
             binaries = false,
@@ -31,6 +37,7 @@ xpack("pyuipc")
             libdir = "",
             bindir = "",
         })
+        project.policy_set("install.strip_packagelibs", strip_packagelibs)
         os.rm(path.join(modules_dir, "*.lib"))
 
         -- Build stub file

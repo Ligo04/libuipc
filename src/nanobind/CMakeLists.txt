@@ -33,6 +33,23 @@ uipc_info("nanobind CMake package directory: ${nanobind_ROOT}")
 
 set(Python_EXECUTABLE ${UIPC_PYTHON_EXECUTABLE_PATH})
 find_package(Python 3.10 COMPONENTS Interpreter Development.Module REQUIRED QUIET)
+
+# Some CMake/Python combinations report Python_SOABI with the platform module
+# extension already appended. nanobind appends that extension itself, which
+# would otherwise produce names such as `pyuipc.cpython-312-...so.so`.
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" "-c"
+            "import sysconfig; print(sysconfig.get_config_var('SOABI') or '')"
+    OUTPUT_VARIABLE UIPC_PYTHON_SOABI
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE UIPC_PYTHON_SOABI_RESULT
+)
+if(NOT UIPC_PYTHON_SOABI_RESULT EQUAL 0)
+    uipc_error("Failed to query SOABI from Python [${Python_EXECUTABLE}].")
+endif()
+set(Python_SOABI "${UIPC_PYTHON_SOABI}")
+uipc_info("Python SOABI: ${Python_SOABI}")
+
 find_package(nanobind ${UIPC_NANOBIND_VERSION} EXACT CONFIG REQUIRED QUIET)
 
 add_subdirectory(pyuipc)
