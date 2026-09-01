@@ -3,7 +3,6 @@ import sys
 import shutil
 import argparse as ap
 import pathlib
-import re
 import subprocess as sp
 
 def is_option_on(option: str):
@@ -95,29 +94,16 @@ def copy_shared_libs(config:str, binary_dir:pathlib.Path, pyuipc_lib:pathlib.Pat
 
     return target_dir
 
-def cmake_binding_backend(binary_dir):
-    cache_file = binary_dir / 'CMakeCache.txt'
-    if cache_file.is_file():
-        match = re.search(
-            r'^UIPC_PYTHON_BINDING:STRING=(nanobind|pybind11)$',
-            cache_file.read_text(encoding='utf-8'),
-            re.MULTILINE,
-        )
-        if match:
-            return match.group(1)
-    return 'nanobind'
-
-def generate_uipc_stubs(project_dir, binary_dir, binding_backend):
+def generate_uipc_stubs(project_dir, binary_dir):
     source_dir = binary_dir / 'python' / 'src'
     native_dir = source_dir / 'uipc' / '_native'
     marker_file = source_dir / 'uipc' / 'py.typed'
     stubgen_script = project_dir / 'scripts' / 'stubgen.py'
 
-    print(f'Generating recursive {binding_backend} stubs in {native_dir}')
+    print(f'Generating recursive nanobind stubs in {native_dir}')
     sp.check_call([
         sys.executable,
         str(stubgen_script),
-        '--binding-backend', binding_backend,
         '--source-dir', str(source_dir),
         '--output-dir', str(native_dir),
         '--marker-file', str(marker_file),
@@ -149,11 +135,6 @@ if __name__ == '__main__':
     args.add_argument('--config', help='$<CONFIG>', required=True)
     args.add_argument('--build_type', help='CMAKE_BUILD_TYPE', required=True)
     args.add_argument('--build_wheel', help='UIPC_BUILD_PYTHON_WHEEL', required=True)
-    args.add_argument(
-        '--binding_backend',
-        choices=('nanobind', 'pybind11'),
-        help='Python binding implementation (defaults to CMakeCache.txt)',
-    )
     args = args.parse_args()
 
     print(f'config($<CONFIG>): {args.config} | build_type(CMAKE_BUILD_TYPE): {args.build_type}')
@@ -161,7 +142,6 @@ if __name__ == '__main__':
     pyuipc_lib = pathlib.Path(args.target)
     binary_dir = pathlib.Path(args.binary_dir)
     proj_dir = pathlib.Path(args.project_dir)
-    binding_backend = args.binding_backend or cmake_binding_backend(binary_dir)
 
     build_wheel = is_option_on(args.build_wheel)
     if build_wheel:
@@ -185,7 +165,7 @@ if __name__ == '__main__':
     flush_info()
 
     print('Generating stubs:')
-    generate_uipc_stubs(proj_dir, binary_dir, binding_backend)
+    generate_uipc_stubs(proj_dir, binary_dir)
     flush_info()
     
     if not build_wheel:

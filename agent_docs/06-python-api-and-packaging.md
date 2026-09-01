@@ -1,17 +1,14 @@
 # 06 — Python API and Packaging
 
-## Binding adapter structure
+## Binding implementation
 
-The two native binding implementations are intentionally separate:
+The native Python extension has one implementation:
 
-- `src/nanobind/pyuipc/` is the default nanobind 3.0.0 implementation.
-- `src/pybind/pyuipc/` preserves the legacy pybind11 implementation.
+- `src/nanobind/pyuipc/` contains the nanobind 3.0.0 implementation.
 
-Both adapters export the same `pyuipc` extension name, so a build must select
-exactly one. CMake uses `UIPC_PYTHON_BINDING=nanobind|pybind11`; XMake uses
-`--python_binding=nanobind|pybind11`. The compatibility switches
-`UIPC_BUILD_PYBIND` and `--pybind` continue to mean "build Python bindings".
-Wheel builds explicitly select nanobind.
+CMake enables it with `UIPC_BUILD_PYTHON_BINDINGS`; XMake uses
+`--python_bindings`. The former `UIPC_BUILD_PYBIND` and `--pybind` switches
+remain deprecated compatibility aliases. Nanobind is always the implementation.
 
 ### Nanobind implementation (`src/nanobind/pyuipc/`)
 
@@ -36,8 +33,7 @@ Wheel builds explicitly select nanobind.
   backend still relinks pyuipc and runs POST_BUILD
   `scripts/after_build_pyuipc.py` (copies the package/runtime libraries,
   regenerates `.pyi`, and refreshes the development install). CMake and XMake
-  both call `scripts/stubgen.py`; it dispatches to nanobind stubgen or
-  pybind11-stubgen according to the selected adapter.
+  both call `scripts/stubgen.py`, which invokes nanobind stubgen.
 
 ## Python package layout (`python/src/uipc/`)
 
@@ -71,7 +67,7 @@ torch/warp adapters still require their own optional frameworks.
 - `python/src/uipc/compatibility.json` is the canonical release support policy.
   `scripts/check_release_policy.py` verifies both pyprojects, classifiers, the
   workflow ABI/toolkit matrix, and the CMake wheel architecture list against it.
-- `wheel.packages = ["python/src/uipc"]`; CMake defines `UIPC_BUILD_PYBIND/WHEEL=ON`, targets `75-real;80-real;86-real;89-real;89-virtual`, and disables tests/examples/benchmarks. This gives Turing/Ampere/Ada native code plus a forward-compatible PTX path instead of the 0.0.26 wheel's Ada-only target.
+- `wheel.packages = ["python/src/uipc"]`; CMake defines `UIPC_BUILD_PYTHON_BINDINGS/WHEEL=ON`, targets `75-real;80-real;86-real;89-real;89-virtual`, and disables tests/examples/benchmarks. This gives Turing/Ampere/Ada native code plus a forward-compatible PTX path instead of the 0.0.26 wheel's Ada-only target.
 - When `if(DEFINED SKBUILD)`, `UIPC_INSTALL_DIR = uipc/_native`: the pyuipc extension + vcpkg runtime DLLs are all installed into `_native/` inside the package; `.pyi` stubs are installed to the package root.
 - cibuildwheel: on linux, auditwheel excludes all CUDA libraries (relies on system CUDA 12.8).
 - The Windows wheel also relies on the system CUDA 12 runtime. In 0.0.26,
@@ -112,10 +108,8 @@ escapes the smoke test.
 
 ## Key points for extending bindings
 
-- When adding a new C++ public API, update the default nanobind adapter under
-  `src/nanobind/pyuipc/`. If pybind11 remains a supported fallback, mirror the
-  surface under `src/pybind/pyuipc/`; the constitution contract check audits
-  both trees.
+- When adding a new C++ public API, update the nanobind implementation under
+  `src/nanobind/pyuipc/`; the constitution contract check audits this tree.
 - Do not break the import chain in `__init__.py` (`pyuipc` → `init()` → `config["module_dir"]`).
 - New binding surfaces need tests added in `python/tests/`.
 - Audit exports rather than assuming C++/Python parity. `RotatingMotor` and

@@ -12,15 +12,8 @@ if has_config("usd") then
     includes("usd")
 end
 
-if has_config("pybind") then
-    local python_binding = get_config("python_binding") or "nanobind"
-    if python_binding == "nanobind" then
-        includes("nanobind")
-    elseif python_binding == "pybind11" then
-        includes("pybind")
-    else
-        raise("unknown python_binding: " .. python_binding)
-    end
+if has_config("python_bindings") or has_config("pybind") then
+    includes("nanobind")
 end
 
 add_requires("urdfdom")

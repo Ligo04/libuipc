@@ -17,7 +17,14 @@ uipc_parse_version(${UIPC_VERSION} UIPC_VERSION_MAJOR UIPC_VERSION_MINOR UIPC_VE
 # Project Options
 # =========================================================================
 option(UIPC_USING_LOCAL_VCPKG "Using local vcpkg" ON)
-option(UIPC_BUILD_PYBIND "Build Python bindings" OFF)
+set(_UIPC_BUILD_PYTHON_BINDINGS_DEFAULT OFF)
+if(DEFINED UIPC_BUILD_PYBIND)
+    message(DEPRECATION
+        "UIPC_BUILD_PYBIND is deprecated; use UIPC_BUILD_PYTHON_BINDINGS instead.")
+    set(_UIPC_BUILD_PYTHON_BINDINGS_DEFAULT "${UIPC_BUILD_PYBIND}")
+endif()
+option(UIPC_BUILD_PYTHON_BINDINGS "Build Python bindings" ${_UIPC_BUILD_PYTHON_BINDINGS_DEFAULT})
+unset(_UIPC_BUILD_PYTHON_BINDINGS_DEFAULT)
 option(UIPC_BUILD_PYTHON_WHEEL "Wheel build mode for Python post-build helper" OFF)
 option(UIPC_BUILD_EXAMPLES "Build examples" ON)
 option(UIPC_BUILD_TESTS "Build tests" ON)
@@ -27,12 +34,13 @@ option(UIPC_WITH_USD_SUPPORT "Build with Universal Scene Description (USD) suppo
 option(UIPC_WITH_VDB_SUPPORT "Build with Volumetric DataBase (VDB) support" OFF)
 
 set(UIPC_PYTHON_EXECUTABLE_PATH "" CACHE PATH "Python executable path")
-set(UIPC_PYTHON_BINDING "nanobind" CACHE STRING
-    "Python binding implementation (nanobind or pybind11)")
-set_property(CACHE UIPC_PYTHON_BINDING PROPERTY STRINGS nanobind pybind11)
-if(NOT UIPC_PYTHON_BINDING STREQUAL "nanobind"
-   AND NOT UIPC_PYTHON_BINDING STREQUAL "pybind11")
-    uipc_error("UIPC_PYTHON_BINDING must be 'nanobind' or 'pybind11', got '${UIPC_PYTHON_BINDING}'.")
+if(DEFINED UIPC_PYTHON_BINDING)
+    if(NOT UIPC_PYTHON_BINDING STREQUAL "nanobind")
+        uipc_error(
+            "UIPC_PYTHON_BINDING no longer selects an implementation; only nanobind is supported.")
+    endif()
+    message(DEPRECATION
+        "UIPC_PYTHON_BINDING is deprecated because nanobind is the only implementation.")
 endif()
 set(UIPC_USD_INSTALL_DIR "" CACHE PATH
         "USD installation directory: the folder that contains pxrConfig.cmake, e.g. ~/Software/Usd")
@@ -70,7 +78,7 @@ if(DEFINED SKBUILD)
 endif()
 
 if(UIPC_BUILD_PYTHON_WHEEL)
-    set(UIPC_BUILD_PYBIND ON)
+    set(UIPC_BUILD_PYTHON_BINDINGS ON)
 endif()
 
 # =========================================================================

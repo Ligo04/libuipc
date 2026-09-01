@@ -66,7 +66,7 @@ Vertex positions are the DOFs; Empty/Particle/ARAP/SNH/HookeanSpring etc. all in
 `soft_transform_constraint.h` also declares the C++ `RotatingMotor` and
 `LinearMotor`. All three classes return UID 16 and drive `aim_transform` in
 material coordinates. Only `SoftTransformConstraint` is currently exposed by the
-Python constitution module; the two motor helpers have no pybind registration.
+Python constitution module; the two motor helpers have no separate binding registration.
 
 ### Soft Stitching (stitch, Inter-primitive)
 | Header | Description |

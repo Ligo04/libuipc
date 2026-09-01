@@ -25,15 +25,15 @@ uv sync
 Build the C++ bindings for local development:
 
 ```bash
-cmake --preset pybind-dev
-cmake --build --preset pybind-dev
+cmake --preset ci-build-wheel
+cmake --build --preset ci-build-wheel
 ```
 
 Set the Python interpreter explicitly if needed:
 
 ```bash
-PYTHON=/path/to/python cmake --preset pybind-dev
-cmake --build --preset pybind-dev
+cmake --preset ci-build-wheel -DUIPC_PYTHON_EXECUTABLE_PATH=/path/to/python
+cmake --build --preset ci-build-wheel
 ```
 
 ### xmake pack (recommended)

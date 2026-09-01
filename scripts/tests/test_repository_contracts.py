@@ -23,9 +23,6 @@ class RepositoryContractTests(unittest.TestCase):
     def test_current_repository_contracts(self) -> None:
         self.assertEqual(detect_0kb_files(ROOT), [])
         self.assertEqual(
-            check_constitution_api(ROOT, Path("src/pybind/pyuipc")), []
-        )
-        self.assertEqual(
             check_constitution_api(ROOT, Path("src/nanobind/pyuipc")), []
         )
         self.assertEqual(check_workflow_pins(ROOT), [])
@@ -80,22 +77,26 @@ class RepositoryContractTests(unittest.TestCase):
 
         self.assertEqual(set(versions), {"3.0.0"})
 
-    def test_binding_implementation_selection_is_explicit(self) -> None:
+    def test_nanobind_is_the_only_binding_implementation(self) -> None:
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         source_cmake = (ROOT / "src/CMakeLists.txt").read_text(encoding="utf-8")
         root_xmake = (ROOT / "xmake.lua").read_text(encoding="utf-8")
         source_xmake = (ROOT / "src/xmake.lua").read_text(encoding="utf-8")
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-        self.assertIn('set(UIPC_PYTHON_BINDING "nanobind"', root_cmake)
+        self.assertIn("option(UIPC_BUILD_PYTHON_BINDINGS", root_cmake)
+        self.assertIn("UIPC_BUILD_PYBIND is deprecated", root_cmake)
         self.assertIn('add_subdirectory(nanobind)', source_cmake)
-        self.assertIn('add_subdirectory(pybind)', source_cmake)
-        self.assertIn('option("python_binding")', root_xmake)
+        self.assertNotIn('add_subdirectory(pybind)', source_cmake)
+        self.assertIn('option("python_bindings"', root_xmake)
+        self.assertIn("Deprecated alias for python_bindings", root_xmake)
+        self.assertIn("python_binding no longer selects an implementation", root_xmake)
         self.assertIn('includes("nanobind")', source_xmake)
-        self.assertIn('includes("pybind")', source_xmake)
-        self.assertIn('UIPC_PYTHON_BINDING = "nanobind"', pyproject)
+        self.assertNotIn('includes("pybind")', source_xmake)
+        self.assertIn('UIPC_BUILD_PYTHON_BINDINGS = "ON"', pyproject)
+        self.assertNotIn('UIPC_PYTHON_BINDING =', pyproject)
 
-        self.assertIn("find_package(pybind11", (ROOT / "src/pybind/CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertFalse((ROOT / "src/pybind").exists())
         self.assertIn("find_package(nanobind", (ROOT / "src/nanobind/CMakeLists.txt").read_text(encoding="utf-8"))
 
     def test_nanobind_migration_branch_runs_binding_ci_without_publishing(self) -> None:
@@ -121,12 +122,12 @@ class RepositoryContractTests(unittest.TestCase):
             )
 
         cmake = workflows["cmake.yml"]
-        self.assertIn("-DUIPC_BUILD_PYBIND=ON", cmake)
-        self.assertIn("-DUIPC_PYTHON_BINDING=nanobind", cmake)
+        self.assertIn("-DUIPC_BUILD_PYTHON_BINDINGS=ON", cmake)
+        self.assertNotIn("-DUIPC_PYTHON_BINDING=", cmake)
 
         xmake = workflows["xmake.yml"]
-        self.assertIn("--pybind=y", xmake)
-        self.assertIn("--python_binding=nanobind", xmake)
+        self.assertIn("--python_bindings=y", xmake)
+        self.assertNotIn("--python_binding=", xmake)
         self.assertIn("astral-sh/setup-uv@", xmake)
         self.assertIn("xmake pack", xmake)
 
@@ -153,7 +154,9 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn('"nanobind.stubgen"', wrapper)
         self.assertIn("scripts/stubgen.py", xmake_pack)
         self.assertIn("stubgen.py", post_build)
+        self.assertNotIn("pybind11_stubgen", wrapper)
         self.assertNotIn("pybind11_stubgen", post_build)
+        self.assertNotIn("pybind11-stubgen", xmake_pack)
         self.assertNotIn("import mypy", xmake_pack)
         self.assertIn('os.environ.get("NB_STUBGEN")', package_init)
 
@@ -224,7 +227,7 @@ class RepositoryContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             headers = root / "include/uipc/constitution"
-            bindings = root / "src/pybind/pyuipc/constitution"
+            bindings = root / "src/nanobind/pyuipc/constitution"
             headers.mkdir(parents=True)
             bindings.mkdir(parents=True)
             (headers / "material.h").write_text(
@@ -240,7 +243,7 @@ class RepositoryContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             headers = root / "include/uipc/constitution"
-            bindings = root / "src/pybind/pyuipc/constitution"
+            bindings = root / "src/nanobind/pyuipc/constitution"
             headers.mkdir(parents=True)
             bindings.mkdir(parents=True)
             (headers / "material.h").write_text(

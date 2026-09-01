@@ -3,11 +3,19 @@ set_xmakever("3.0.5")
 -- Project-local package recipes that have not reached xmake-repo yet.
 add_repositories("libuipc-packages xmake/repository", {rootdir = os.scriptdir()})
 
-option("pybind", {default = false, description = "Build Python bindings"})
+option("python_bindings", {default = false, description = "Build Python bindings"})
+option("pybind", {
+    default = false,
+    description = "Deprecated alias for python_bindings"
+})
 option("python_binding")
     set_default("nanobind")
-    set_values("nanobind", "pybind11")
-    set_description("Select the Python binding implementation")
+    set_values("nanobind")
+    set_description("Deprecated compatibility option; nanobind is the only implementation")
+    after_check(function (option)
+        assert(option:value() == "nanobind",
+            "python_binding no longer selects an implementation; only nanobind is supported")
+    end)
 option_end()
 option("examples", {default = true})
 option("tests", {default = true})
@@ -39,7 +47,7 @@ set_version("0.9.0")
 -- provenance and CUDA diagnostics harder to reproduce.
 set_policy("build.ccache", false)
 
-if has_config("pybind") then
+if has_config("python_bindings") or has_config("pybind") then
     -- Python wheels must carry package runtimes even when matching libraries
     -- are installed on the build host.
     set_policy("install.strip_packagelibs", false)

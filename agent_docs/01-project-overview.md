@@ -17,7 +17,7 @@ Recent important changes (README News):
 
 | Directory | Contents |
 |---|---|
-| `src/` | Core implementation: `core/` (engine, compiled as `libuipc_core`), `geometry/` (geometry algorithms), `constitution/` (constitutions), `backends/` (`common/`+`cuda/`+`none/`), `io/`, `pybind/`, `sanity_check/`, `usd/`, `vdb/` |
+| `src/` | Core implementation: `core/` (engine, compiled as `libuipc_core`), `geometry/` (geometry algorithms), `constitution/` (constitutions), `backends/` (`common/`+`cuda/`+`none/`), `io/`, `nanobind/`, `sanity_check/`, `usd/`, `vdb/` |
 | `include/uipc/` | Public headers, organized by module: `core/ geometry/ constitution/ io/ backend/ builtin/ common/ diff_sim/ usd/ vdb/`; umbrella headers `uipc.h / core.h / geometry.h / io.h` |
 | `apps/` | `tests/` (Catch2 tests), `examples/` (3 C++ examples), `benchmarks/`, `app/` (test utility library) |
 | `python/` | Python package source `python/src/uipc/`, tests, examples, and a standalone development `pyproject.toml` |
@@ -76,7 +76,7 @@ scene_io.write_surface("out.obj", scene);  // export the surface
 Python follows the same overall lifecycle (`from uipc.core import Engine, World, Scene`;
 the native extension also promotes these names to `uipc`). Public constitution
 coverage is checked against both `src/nanobind/pyuipc/constitution/` and
-`src/pybind/pyuipc/constitution/` in CI; for other modules, check the selected
+`src/nanobind/pyuipc/constitution/` in CI; for other modules, check the active
 adapter before promising exact parity. The rotating and linear motor classes are
 currently bound.
 

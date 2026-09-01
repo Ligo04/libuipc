@@ -15,42 +15,41 @@ namespace
 PyBuffer::PyBuffer(py::module_& m)
 {
     // allow add attributes to this class
-    auto class_Buffer = py::class_<Buffer>(
-        m, "Buffer", py::dynamic_attr(), py::is_weak_referenceable());
+    auto class_Buffer =
+        py::class_<Buffer>(m, "Buffer", py::dynamic_attr(), py::is_weak_referenceable());
 
     class_Buffer.def(
         "__init__",
-        [](py::pointer_and_handle<Buffer> self,
-           py::callable                   resize_func,
-           py::callable                   get_buffer_view_func)
+        [](py::pointer_and_handle<Buffer> self, py::callable resize_func, py::callable get_buffer_view_func)
         {
             self.h.attr(BufferCallbacks) =
                 py::make_tuple(std::move(resize_func), std::move(get_buffer_view_func));
             py::weakref owner{self.h};
 
-            new(self.p) Buffer{
-                [owner](SizeT size)
-                {
-                    py::gil_scoped_acquire acquire;
-                    py::object             instance = owner();
-                    if(instance.is_none())
-                        return;
+            new(self.p)
+                Buffer{[owner](SizeT size)
+                       {
+                           py::gil_scoped_acquire acquire;
+                           py::object             instance = owner();
+                           if(instance.is_none())
+                               return;
 
-                    py::tuple callbacks =
-                        py::cast<py::tuple>(instance.attr(BufferCallbacks));
-                    py::cast<py::callable>(callbacks[0])(size);
-                },
-                [owner]() -> BufferView
-                {
-                    py::gil_scoped_acquire acquire;
-                    py::object             instance = owner();
-                    if(instance.is_none())
-                        return {};
+                           py::tuple callbacks =
+                               py::cast<py::tuple>(instance.attr(BufferCallbacks));
+                           py::cast<py::callable>(callbacks[0])(size);
+                       },
+                       [owner]() -> BufferView
+                       {
+                           py::gil_scoped_acquire acquire;
+                           py::object             instance = owner();
+                           if(instance.is_none())
+                               return {};
 
-                    py::tuple callbacks =
-                        py::cast<py::tuple>(instance.attr(BufferCallbacks));
-                    return py::cast<BufferView>(py::cast<py::callable>(callbacks[1])());
-                }};
+                           py::tuple callbacks =
+                               py::cast<py::tuple>(instance.attr(BufferCallbacks));
+                           return py::cast<BufferView>(
+                               py::cast<py::callable>(callbacks[1])());
+                       }};
         },
         py::arg("resize_func"),
         py::arg("get_buffer_view_func"),

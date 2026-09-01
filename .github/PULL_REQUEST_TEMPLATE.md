@@ -27,7 +27,7 @@
 
 ### Build / bindings (if touched)
 - [ ] New CMake options added to the root `CMakeLists.txt` option block; new source subdirs added to `file(GLOB ...)` and `xmake.lua`
-- [ ] New public C++ API mirrored in the Python bindings (`src/pybind/`), without breaking the `__init__.py` import chain
+- [ ] New public C++ API mirrored in the Python bindings (`src/nanobind/`), without breaking the `__init__.py` import chain
 
 ### Tests
 - [ ] C++ tests added via `uipc_add_test` under `apps/tests/<subsystem>/` and pass locally

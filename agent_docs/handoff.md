@@ -1,38 +1,24 @@
 # Handoff — Current State of the Repo
 
-> **Dual Python binding adapters (updated 2026-08-28,
-> `codex/migrate-pybind-to-nanobind`)**: nanobind 3.0.0 is now isolated under
-> `src/nanobind`; the migration-parent pybind11 tree is preserved under
-> `src/pybind`. Both trees contain 228 files, and `src/pybind` matches commit
-> `509d1698` exactly. `UIPC_PYTHON_BINDING=nanobind|pybind11` (CMake) and
-> `--python_binding=nanobind|pybind11` (XMake) select exactly one adapter while
-> retaining `UIPC_BUILD_PYBIND`/`--pybind` as compatibility enable switches.
-> The default wheel path explicitly selects nanobind. On Linux x86_64 with the
-> project `.venv` (CPython 3.12.3), both CMake release builds compile, link,
-> stage their package, and generate valid recursive stubs. Their portable suites
-> report 85 passed for nanobind and 84 passed plus one nanobind-only shutdown
-> probe skipped for pybind11. Workspace XMake `3.1.1+HEAD.3ba37a0` also builds
-> both adapters from their respective directories. XMake packaging produces
-> importable CPU wheels with ten stubs each: nanobind is 5,265,368 bytes with a
-> 2,755,104-byte extension; pybind11 is 6,246,826 bytes with a 6,204,864-byte
-> extension. Both wheels pass `Engine("none")` smoke tests. The repository-local
-> XMake recipe still resolves Python according to each nanobind release's
-> upstream floor, and the static nanobind package cache remains Python-ABI
-> specific. Earlier CPython 3.12.3 CUDA, SM 120 cubin/PTX, and
-> `wrecking_balls` validation remains applicable because this split changes no
-> CUDA backend or core source. The root PEP 517/scikit-build-core entry now also
-> produces installable Linux CPU wheels for CPython 3.10.20, 3.11.15, 3.12.3,
-> 3.13.12, and 3.14.3. Each wheel was installed into a clean environment and
-> passed ABI/metadata/stub checks, `Engine("none")`, and the portable suite
-> (84 passed, one optional Warp test skipped, 54 deselected). NumPy is now an
-> explicit isolated-build dependency, and CMake only bootstraps pip when a
-> required module is actually absent, allowing the project's pip-less and
-> ensurepip-less CPython 3.12.3 PEP 517 environment to build normally. Windows
-> remains open. Pushes to the migration branch now trigger explicit nanobind
-> CMake/XMake binding jobs plus the Linux/Windows CPython 3.10-3.14 wheel
-> matrix. Branch runs upload wheel artifacts but cannot publish to TestPyPI or
-> PyPI; those jobs remain restricted to tags/releases. Remote Actions results
-> must be checked before counting Windows as validated.
+> **Nanobind-only Python bindings (updated 2026-08-30,
+> `codex/migrate-pybind-to-nanobind`)**: `src/nanobind` is the only native
+> Python binding implementation. The former `src/pybind` tree, pybind11 build
+> selector, and pybind11 stub-generation path have been removed. CMake enables
+> bindings with `UIPC_BUILD_PYTHON_BINDINGS`; XMake uses `--python_bindings`.
+> `UIPC_BUILD_PYBIND` and `--pybind` remain deprecated compatibility aliases
+> for one transition period. The legacy implementation selectors are also
+> accepted temporarily, but only the value `nanobind` is valid. The package and
+> extension keep the public name `pyuipc`. The last pre-cleanup CI baseline at
+> commit `b1baeacc8c2e7e57cc845d67e1ef0dc49582e14a` passed both CMake jobs, both
+> XMake jobs, all ten Linux/Windows CPython 3.10-3.14 wheel jobs, and repository
+> contracts. Fresh Linux validation uses the project `.venv` (CPython 3.12.3):
+> all repository script tests pass (29 tests and 6 subtests); a clean CMake CPU
+> Release build compiles `pyuipc`, generates ten recursive stubs, installs, and
+> runs `Engine("none")`; local XMake `3.1.1+HEAD.3ba37a0` builds and packages an
+> installable 6,068,323-byte wheel whose TBB libraries load from
+> `uipc/_native`. Both deprecated enable aliases resolve to nanobind, while an
+> attempted `pybind11` selector is rejected by CMake and XMake. Fresh remote CI
+> is still required before this cleanup becomes the new cross-platform baseline.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and
@@ -111,12 +97,12 @@
 > SHAs, and the vcpkg action/container revision matches the project's registry
 > baseline. A dedicated repository-contracts workflow rejects mutable action
 > refs, zero-byte source files, and drift between exported constitution classes,
-> pybind classes, and binding initializer registration. Thirteen empty CUDA/C++
+> Python binding classes, and binding initializer registration. Thirteen empty CUDA/C++
 > scaffold translation units were removed; the two public zero-byte headers are
 > now documented compatibility includes. The full docs helper finds a standard
 > Windows Doxygen install even when it is absent from `PATH`, and the local
 > preview guide distinguishes deployable API builds from prose-only previews.
-> Local validation: full C++/CUDA pybind build; 36 core cases / 988 assertions;
+> Local validation: full C++/CUDA Python-binding build; 36 core cases / 988 assertions;
 > 79 portable Python tests; 48 non-interactive CUDA tests; 5 repository-contract
 > tests; clang-format-18; release-policy/parity/pin/zero-byte checks; and a full
 > Doxygen + MkDoxy site containing the `Engine::frame_stats()` API page.
@@ -208,7 +194,7 @@
 
 > **XMake parity and deterministic packaging (2026-08-25, `refactor-main`)**:
 > stale GUI/torch/RPC configuration was removed, ccache is explicitly disabled,
-> and optional OpenUSD/OpenVDB targets now mirror CMake. The pybind target enables
+> and optional OpenUSD/OpenVDB targets now mirror CMake. The Python-binding target enables
 > USD consistently and performs one synchronous source copy plus explicit
 > extension/runtime-library copies, eliminating duplicate detached copy races.
 > The XMake user guide and build-agent notes describe the current switches.
@@ -245,7 +231,7 @@
 > markers now survive attribute clones and atlas JSON round trips (legacy JSON
 > defaults to `false`), and Python exposes the same optional argument. Core tests
 > cover strict filtering, clone behavior, dimension preservation, and serialized
-> round trips; the modified pybind translation unit also compiles independently.
+> round trips; the modified Python-binding translation unit also compiles independently.
 
 > **Scene lifecycle hardening (2026-08-25, `refactor-main`)**: snapshot commits
 > now replicate current/rest geometry independently, explicit slot removals,
@@ -775,7 +761,7 @@ regression).
   - strainRate: no longer hardcoded to 100 — `apply_to(...,
     strain_rate=100)` writes the triangle attribute `"strain_rate"`, and
     the backend reads the attribute (old scenes missing it get it
-    auto-created and backfilled with 100); pybind exposure synced.
+    auto-created and backfilled with 100); Python exposure synced.
   - **stretch/shear material-parameter separation**:
     `StrainLimitingBaraffWitkinShell::apply_to` dual-modulus overload
     `apply_to(sc, stretch_moduli, shear_moduli, ρ, t, strain_rate)`

@@ -1,5 +1,5 @@
 # Development purpose only.
-# When UIPC_BUILD_PYBIND is ON, the libuipc/python will be copied to CMAKE Build Directory.
+# When UIPC_BUILD_PYTHON_BINDINGS is ON, libuipc/python is copied to the CMake build directory.
 # After pyuipc is built, this pyproject.toml will help create a wheel package for testing.
 # NOTE: this pyproject.toml won't trigger any cmake build process.
 

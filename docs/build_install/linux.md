@@ -66,7 +66,7 @@ Build the project with the following commands.
 ```shell
 conda activate uipc_env
 cd libuipc; mkdir build; cd build
-cmake -S .. -DUIPC_BUILD_PYBIND=1 -DCMAKE_BUILD_TYPE=<Release/RelWithDebInfo> 
+cmake -S .. -DUIPC_BUILD_PYTHON_BINDINGS=1 -DCMAKE_BUILD_TYPE=<Release/RelWithDebInfo>
 cmake --build . -j8
 ```
 
@@ -87,7 +87,7 @@ Enable Python bindings with the following configuration.
 
 ```shell
 cd libuipc
-xmake f --pybind=true --python_system=true --python_version=3.11.x -c
+xmake f --python_bindings=true --python_system=true --python_version=3.11.x -c
 xmake build -j8
 xmake pack -v
 ```
@@ -102,7 +102,7 @@ Just run the executable files in `build/<Release/RelWithDebInfo>/bin` folder.
 
 ## Install Pyuipc
 
-With `UIPC_BUILD_PYBIND` option set to `ON`, the Python binding will be **built** and **installed** in the specified Python environment.
+With `UIPC_BUILD_PYTHON_BINDINGS` set to `ON`, the nanobind extension will be **built** and **installed** in the specified Python environment.
 
 If some **errors** occur during the installation, you can try to **manually** install the Python binding.
 
@@ -127,6 +127,6 @@ More samples are at [Pyuipc Samples](https://github.com/spiriMirror/libuipc-samp
 If you want to install the Pyuipc to any Python Venv (like [uv](https://docs.astral.sh/uv/)) after build, you can use the following command:
 
 ```shell
-cmake -S .. -DUIPC_BUILD_PYBIND=1 -DUIPC_PYTHON_EXECUTABLE_PATH=<YOUR_PYTHON_EXECUTABLE_PATH> -DCMAKE_BUILD_TYPE=<Release/RelWithDebInfo>
+cmake -S .. -DUIPC_BUILD_PYTHON_BINDINGS=1 -DUIPC_PYTHON_EXECUTABLE_PATH=<YOUR_PYTHON_EXECUTABLE_PATH> -DCMAKE_BUILD_TYPE=<Release/RelWithDebInfo>
 cmake --build .  -j8
 ```

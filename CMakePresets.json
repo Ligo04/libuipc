@@ -14,7 +14,7 @@
             "generator": "Ninja",
             "cacheVariables": {
                 "UIPC_USING_LOCAL_VCPKG": "ON",
-                "UIPC_BUILD_PYBIND": "OFF",
+                "UIPC_BUILD_PYTHON_BINDINGS": "OFF",
                 "UIPC_BUILD_EXAMPLES": "ON",
                 "UIPC_BUILD_TESTS": "ON",
                 "UIPC_BUILD_BENCHMARKS": "ON",
@@ -38,8 +38,7 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "UIPC_BUILD_PYTHON_WHEEL": "ON",
-                "UIPC_BUILD_PYBIND": "ON",
-                "UIPC_PYTHON_BINDING": "nanobind"
+                "UIPC_BUILD_PYTHON_BINDINGS": "ON"
             }
         }
     ],

@@ -74,7 +74,6 @@ add_custom_command(
     "--config=$<CONFIG>"
     "--build_type=${CMAKE_BUILD_TYPE}"
     "--build_wheel=${UIPC_BUILD_PYTHON_WHEEL}"
-    "--binding_backend=nanobind"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     COMMENT "Staging pyuipc and generating nanobind type stubs"
 )

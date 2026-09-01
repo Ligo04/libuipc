@@ -14,7 +14,7 @@ description: >-
 ## Architecture primer (read before reviewing)
 
 libuipc is a GPU-accelerated Incremental Potential Contact (IPC) simulation
-library (C++20 + optional Python/pybind11).
+library (C++20 + optional Python/nanobind bindings).
 
 **Layer split:**
 
@@ -26,7 +26,7 @@ library (C++20 + optional Python/pybind11).
 | I/O | `src/io/` | Scene + mesh serialisation |
 | Sanity check | `src/sanity_check/` | Pre-sim scene validation |
 | Backends | `src/backends/<name>/` | Physics engines as runtime-loaded **MODULE** DLLs |
-| Pybind | `src/pybind/` | Thin pybind11 wrapper; mirrors C++ submodules |
+| Python bindings | `src/nanobind/` | Thin nanobind wrapper; mirrors C++ submodules |
 
 **Backend plugin ABI** (`src/backends/common/module.h`):
 - Exports: `uipc_init_module`, `uipc_create_engine`, `uipc_destroy_engine`
@@ -71,7 +71,7 @@ Stats: +<add> / -<del> across <N> files
 #### Geometry / Constitution
   src/geometry/...   src/constitution/...
 #### Python bindings
-  src/pybind/...   python/src/uipc/...
+  src/nanobind/...   python/src/uipc/...
 #### Build / CMake
   CMakeLists.txt   src/backends/.../CMakeLists.txt
 #### Tests
@@ -119,11 +119,11 @@ Run `gh pr diff <PR_NUMBER>` and check every area below that is touched.
 - [ ] New CMake options added to the root `CMakeLists.txt` option block with sensible defaults
 - [ ] `file(GLOB ...)` patterns extended if new source subdirs added
 
-#### Python bindings (`src/pybind/` + `python/`)
+#### Python bindings (`src/nanobind/` + `python/`)
 - [ ] Check whether new features expose a public API that should be mirrored in the Python bindings
-- [ ] New C++ types exposed via matching pybind submodule (mirrors C++ namespace)
+- [ ] New C++ types exposed via the matching nanobind submodule (mirrors C++ namespace)
 - [ ] `__init__.py` import chain not broken (`pyuipc` → `init()` → `config["module_dir"]`)
-- [ ] Python-side tests added under `python/tests/` for new pybind surface
+- [ ] Python-side tests added under `python/tests/` for the new binding surface
 
 #### Tests
 - [ ] C++ tests use Catch2 macros; added via `uipc_add_test` in the appropriate

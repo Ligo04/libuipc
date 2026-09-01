@@ -7,7 +7,7 @@ from ._native import pyuipc
 def init():
     if pyuipc.__file__ is None:
         err_message = """Python binding is not built.
-        Please make a `Release` or `RelWithDebInfo` build with option `-DUIPC_BUILD_PYBIND=1` to enable python binding."""
+        Please make a `Release` or `RelWithDebInfo` build with option `-DUIPC_BUILD_PYTHON_BINDINGS=1` to enable the Python binding."""
         raise Exception(err_message)
 
     # get module path

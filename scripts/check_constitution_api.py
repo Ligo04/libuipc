@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_HEADERS = Path("include/uipc/constitution")
-DEFAULT_BINDING_ROOT = Path("src/pybind/pyuipc")
+DEFAULT_BINDING_ROOT = Path("src/nanobind/pyuipc")
 
 PUBLIC_CLASS_RE = re.compile(
     r"\bclass\s+UIPC_(?:CONSTITUTION|CORE)_API\s+([A-Za-z_]\w*)"
@@ -137,21 +137,19 @@ def check_constitution_api(
 
 def main(argv: Sequence[str] | None = None) -> int:
     del argv
-    binding_roots = [DEFAULT_BINDING_ROOT, Path("src/nanobind/pyuipc")]
     exported = collect_public_classes()
-    for binding_root in binding_roots:
-        errors = check_constitution_api(ROOT, binding_root)
-        if errors:
-            print(f"Constitution API parity check failed for {binding_root}:")
-            for error in errors:
-                print(f"- {error}")
-            return 1
+    errors = check_constitution_api(ROOT, DEFAULT_BINDING_ROOT)
+    if errors:
+        print(f"Constitution API parity check failed for {DEFAULT_BINDING_ROOT}:")
+        for error in errors:
+            print(f"- {error}")
+        return 1
 
-        initializers = collect_initializer_definitions(ROOT, binding_root)
-        print(
-            f"Constitution API parity check passed for {binding_root}: "
-            f"{len(exported)} public classes, {len(initializers)} binding initializers."
-        )
+    initializers = collect_initializer_definitions(ROOT, DEFAULT_BINDING_ROOT)
+    print(
+        f"Constitution API parity check passed for {DEFAULT_BINDING_ROOT}: "
+        f"{len(exported)} public classes, {len(initializers)} binding initializers."
+    )
     return 0
 
 

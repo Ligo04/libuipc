@@ -15,7 +15,6 @@ This directory is a structured summary of the libuipc codebase, allowing newly o
 | `04-constitutions.md` | Full list of constitution models (UID, parameters, physical meaning), Constraints and joints |
 | `05-cuda-backend.md` | CUDA backend subsystems, advance pipeline, cuda_tool (raw-CUDA utilities) and kernel naming, performance analysis |
 | `06-python-api-and-packaging.md` | dual binding adapters, Python package layout, wheel packaging pipeline |
-| `nanobind-migration-plan.md` | Source-grounded pybind11-to-nanobind migration plan, version/build-system gates, high-risk adapters, and regression matrix |
 | `07-build-test-workflow.md` | CMake/XMake builds, test system, CI drift incidents and the pin/overlay pattern, development conventions (summary of .cursor rules) |
 | `08-pitfalls-and-debugging.md` | **Collected hard-won pitfalls**: build/CI traps, suite pollution, perf-measurement pitfalls, Python/runtime API traps, contact/constraint semantics gotchas, cuda_tool contracts |
 | `09-known-issues-and-roadmap.md` | **Open issues and plans**: remaining Stiff-GIPC perf gap with levers, deferred CFL floor, dependency pins to unwind, external PR review status, samples repo state |

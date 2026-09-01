@@ -8,18 +8,18 @@
 
 ## CMake
 
-**Options** (root `CMakeLists.txt`): `UIPC_USING_LOCAL_VCPKG`(ON), `UIPC_BUILD_PYBIND`(OFF), `UIPC_PYTHON_BINDING`(`nanobind`, or legacy `pybind11`), `UIPC_BUILD_PYTHON_WHEEL`(OFF), `UIPC_BUILD_EXAMPLES/TESTS/BENCHMARKS`(ON), `UIPC_DEV_MODE`(OFF), `UIPC_WITH_USD_SUPPORT`(OFF), `UIPC_WITH_VDB_SUPPORT`(OFF), `UIPC_WITH_CUDA_BACKEND`(ON, forced OFF on Apple), `UIPC_CUDA_ARCHITECTURES`("native"). WHEEL=ON ⇒ PYBIND=ON. (The C++ GUI has been removed; the `UIPC_BUILD_GUI` option no longer exists.)
+**Options** (root `CMakeLists.txt`): `UIPC_USING_LOCAL_VCPKG`(ON), `UIPC_BUILD_PYTHON_BINDINGS`(OFF), `UIPC_BUILD_PYTHON_WHEEL`(OFF), `UIPC_BUILD_EXAMPLES/TESTS/BENCHMARKS`(ON), `UIPC_DEV_MODE`(OFF), `UIPC_WITH_USD_SUPPORT`(OFF), `UIPC_WITH_VDB_SUPPORT`(OFF), `UIPC_WITH_CUDA_BACKEND`(ON, forced OFF on Apple), `UIPC_CUDA_ARCHITECTURES`("native"). WHEEL=ON enables the nanobind extension. `UIPC_BUILD_PYBIND` remains a deprecated alias. (The C++ GUI has been removed; the `UIPC_BUILD_GUI` option no longer exists.)
 
 **Source glob**: project source globs use `CONFIGURE_DEPENDS`, so normal additions/removals are detected by the generated build. Still inspect the owning CMake/XMake file for explicitly listed sources, optional modules, generated code, or a new subdirectory.
 
 **Presets** (`CMakePresets.json` v6, Ninja generator):
 - `ci-release`: default Release build
-- `ci-build-wheel`: Release + PYBIND/WHEEL ON
+- `ci-build-wheel`: Release + Python bindings/wheel ON
 - (There is no preset named `release`.)
 
 ```bash
 cmake --preset ci-release && cmake --build --preset ci-release -j8
-# Or manually: mkdir build && cd build && cmake -S .. -DUIPC_BUILD_PYBIND=ON && cmake --build . --config Release -j8
+# Or manually: mkdir build && cd build && cmake -S .. -DUIPC_BUILD_PYTHON_BINDINGS=ON && cmake --build . --config Release -j8
 ```
 
 **Output directories**: Windows `<build>/<config>/bin` (runtime+library) and `.../lib`; Linux `<build>/<CMAKE_BUILD_TYPE>/bin|lib`. Aggregate target `uipc::uipc` (= core+geometry+constitution+io+sanity_check).
@@ -33,10 +33,10 @@ xmake run sim_case         # Run a test target
 ```
 Test target names are rewritten by the `uipc_test` rule into binary names `uipc_test_<target>`; `xmake run --help` lists all runnable targets.
 
-XMake mirrors the active CMake feature set: `backend_cuda`, `pybind`, `examples`,
+XMake mirrors the active CMake feature set: `backend_cuda`, `python_bindings`, `examples`,
 `tests`, and `benchmarks`, plus optional `usd` and `vdb` targets. The removed C++
 GUI, torch extension, and nonexistent RPC module have no stale options. Project
-policy explicitly disables `build.ccache`. The pybind post-build step copies the
+policy explicitly disables `build.ccache`. The Python-binding post-build step copies the
 package, extension, and colocated runtime libraries synchronously before
 packaging begins.
 

@@ -13,7 +13,7 @@ These previously verified gaps are closed on `refactor-main` as of 2026-08-25:
   unreferenced zero-byte scaffolds were removed. A repository gate rejects new
   zero-byte files under `include/` and `src/`.
 - `scripts/check_constitution_api.py` compares every exported constitution class
-  with its pybind class name and verifies every binding initializer is registered.
+  with its Python class name and verifies every binding initializer is registered.
   `RotatingMotor` and `LinearMotor` are both covered. Internal UID 27/28 remain
   intentionally internal and therefore outside the public-header contract.
 - Every external GitHub Action is pinned to a reviewed full commit SHA. Both
@@ -197,7 +197,7 @@ assertions).
   merged; a fix round was scoped and then declined for now. If revived:
   port to cuda_tool raw kernels, write `ecm_tet_geo_id`, fill all reported
   doublet slots, move the forward hook into the Newton loop, populate the
-  frame-0 positions, add pybind + tests.
+  frame-0 positions, add Python bindings + tests.
 - **libuipc-samples PR #5** (hugooole, keyboard→imgui in case 4): reviewed,
   safe to merge; would only want `keyboard` dropped from requirements.txt.
 

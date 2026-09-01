@@ -29,7 +29,7 @@ Use [xmake](https://xmake.io/) to build the project. The following steps configu
 ```shell
 uv venv --python 3.11
 source venv/bin/activate
-xmake f --pybind=true --python_system=true --python_version=3.12.x -c
+xmake f --python_bindings=true --python_system=true --python_version=3.12.x -c
 xmake build -j8
 xmake pack -v
 ```

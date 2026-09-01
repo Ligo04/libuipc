@@ -242,7 +242,7 @@ equivalent doctor probe) before CUDA compatibility is considered verified.
   disables ccache.
 - CMake/vcpkg pins fmt 10.2.1 while XMake pins fmt 12.1.0 for an NVCC compatibility
   workaround; keep ABI/version effects in mind.
-- XMake's pybind target is an importable shared module (`.pyd` on Windows),
+- XMake's Python-binding target is an importable shared module (`.pyd` on Windows),
   enables USD consistently, and performs packaging copies synchronously.
 
 When changing a component or option, update and validate both build descriptions;

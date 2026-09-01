@@ -150,7 +150,7 @@ RUN --mount=type=cache,target=/home/developer/Toolchain/vcpkg/downloads \
         cd /home/developer/libuipc && \
         mkdir -p build && cd build && \
         cmake -S .. \
-            -DUIPC_BUILD_PYBIND=1 \
+            -DUIPC_BUILD_PYTHON_BINDINGS=1 \
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
             -DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES} && \
         cmake --build . -j\$(nproc) && \

@@ -109,7 +109,7 @@ jobs:
         env:
           CMAKE_TOOLCHAIN_FILE: "${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
         run: |
-          cmake -S ${{ github.workspace }} -B ${{ github.workspace }}/build --preset ci-release -DUIPC_CUDA_ARCHITECTURES=89 -DUIPC_BUILD_PYBIND=ON -DUIPC_PYTHON_BINDING=nanobind
+          cmake -S ${{ github.workspace }} -B ${{ github.workspace }}/build --preset ci-release -DUIPC_CUDA_ARCHITECTURES=89 -DUIPC_BUILD_PYTHON_BINDINGS=ON
           cmake --build ${{ github.workspace }}/build --preset ci-release --parallel 4
 
       - name: Smoke-test nanobind Python binding

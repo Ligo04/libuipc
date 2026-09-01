@@ -58,7 +58,7 @@ Overview of the main directories and important files in the repository.
 
 ### `python/`
 
-- `src/uipc/` - Pure python code to enhance the C++ pybind11 bindings.
+- `src/uipc/` - Pure Python code layered on the native nanobind extension.
 - `tests/` - Python test suite.
 
 ### `scripts/`
@@ -77,7 +77,7 @@ Overview of the main directories and important files in the repository.
 - `core/` - Core engine systems and modules.
 - `geometry/` - Geometry algorithms and data types.
 - `io/` - Serialization and I/O.
-- `pybind/` - C++/Python bindings.
+- `nanobind/` - Native C++/Python bindings.
 - `sanity_check/` - Internal scene sanity checks to ensure the correctness of scene before the simulation.
 - `usd/` - USD integration.
 - `vdb/` - VDB integration.

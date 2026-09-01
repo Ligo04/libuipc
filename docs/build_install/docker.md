@@ -30,7 +30,7 @@ Build:
 
 ```shell
 mkdir build; cd build
-cmake -S .. -DUIPC_BUILD_PYBIND=1 -DCMAKE_BUILD_TYPE=Release
+cmake -S .. -DUIPC_BUILD_PYTHON_BINDINGS=1 -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
 ```
 
@@ -45,7 +45,7 @@ docker compose exec dev-xmake-cu128 bash
 Build:
 
 ```shell
-xmake config --pybind=y
+xmake config --python_bindings=y
 xmake -j$(nproc)
 ```
 

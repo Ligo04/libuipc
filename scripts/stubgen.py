@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Generate and validate recursive stubs for either pyuipc binding adapter."""
+"""Generate and validate recursive nanobind stubs for pyuipc."""
 
 from __future__ import annotations
 
 import argparse
 import ast
-import os
-import re
 import shutil
 import subprocess
 import sys
@@ -30,11 +28,6 @@ EXPECTED_STUBS = frozenset(
     }
 )
 DEFAULT_PATTERN_FILE = Path(__file__).with_name("pyuipc_stubgen.patterns")
-PYBIND11_KEYWORD_DECLARATION = re.compile(
-    r"^(?P<indent>[ \t]*)None(?P<suffix>[ \t]*(?::|=))", re.MULTILINE
-)
-
-
 def validate_nanobind_stubs(output_dir: Path, marker_file: Path) -> None:
     """Reject incomplete or syntactically invalid stub output."""
     actual = {
@@ -104,68 +97,8 @@ def generate_nanobind_stubs(
     validate_nanobind_stubs(output_dir, marker_file)
 
 
-def generate_pybind11_stubs(
-    source_dir: Path,
-    output_dir: Path,
-    marker_file: Path,
-) -> None:
-    """Run pybind11-stubgen with the same staged-package interface."""
-    source_dir = source_dir.resolve()
-    output_dir = output_dir.resolve()
-    marker_file = marker_file.resolve()
-    native_dir = source_dir / "uipc" / "_native"
-    if not native_dir.is_dir():
-        raise RuntimeError(f"staged native module directory is missing: {native_dir}")
-
-    for stale_stub in (source_dir / "uipc").rglob("*.pyi"):
-        stale_stub.unlink()
-    shutil.rmtree(output_dir / "pyuipc", ignore_errors=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    marker_file.parent.mkdir(parents=True, exist_ok=True)
-    marker_file.unlink(missing_ok=True)
-
-    environment = os.environ.copy()
-    python_path = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = os.pathsep.join(
-        part for part in (str(native_dir), python_path) if part
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pybind11_stubgen",
-            "-o",
-            str(output_dir),
-            "pyuipc",
-            "--ignore-unresolved-names",
-            "json",
-        ],
-        check=True,
-        env=environment,
-    )
-
-    actual = sorted((output_dir / "pyuipc").rglob("*.pyi"))
-    if not actual:
-        raise RuntimeError("pybind11-stubgen did not generate any stubs")
-    for stub_path in actual:
-        source = stub_path.read_text(encoding="utf-8")
-        source = PYBIND11_KEYWORD_DECLARATION.sub(
-            r"\g<indent>None_\g<suffix>", source
-        )
-        stub_path.write_text(source, encoding="utf-8")
-        ast.parse(source, filename=str(stub_path))
-    marker_file.touch()
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--binding-backend",
-        "--binding_backend",
-        choices=("nanobind", "pybind11"),
-        default="nanobind",
-        help="binding adapter whose stubs should be generated",
-    )
     parser.add_argument(
         "--source-dir",
         "--source_dir",
@@ -203,22 +136,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     marker_file = args.marker_file or args.source_dir / "uipc" / "py.typed"
-    if args.binding_backend == "nanobind":
-        pattern_files = args.pattern_files or [DEFAULT_PATTERN_FILE]
-        generate_nanobind_stubs(
-            source_dir=args.source_dir,
-            output_dir=args.output_dir,
-            marker_file=marker_file,
-            pattern_files=pattern_files,
-        )
-    else:
-        if args.pattern_files:
-            raise ValueError("stub patterns are only supported by nanobind")
-        generate_pybind11_stubs(
-            source_dir=args.source_dir,
-            output_dir=args.output_dir,
-            marker_file=marker_file,
-        )
+    pattern_files = args.pattern_files or [DEFAULT_PATTERN_FILE]
+    generate_nanobind_stubs(
+        source_dir=args.source_dir,
+        output_dir=args.output_dir,
+        marker_file=marker_file,
+        pattern_files=pattern_files,
+    )
     return 0
 
 
