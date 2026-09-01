@@ -21,6 +21,7 @@ Overview of the main directories and important files in the repository.
 - `scripts/` - Utility scripts and notebooks.
 - `src/` - Core C++ implementation.
 - `xmake/` - XMake rules and build helpers.
+- `xmake-requires.lock` - Platform-keyed XMake package resolution lock.
 
 ## Subfolder Purposes
 
@@ -60,6 +61,7 @@ Overview of the main directories and important files in the repository.
 
 - `src/uipc/` - Pure Python code layered on the native nanobind extension.
 - `tests/` - Python test suite.
+- `typing_tests/` - Static usage contracts checked against generated stubs.
 
 ### `scripts/`
 

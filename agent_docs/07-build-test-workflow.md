@@ -8,7 +8,7 @@
 
 ## CMake
 
-**Options** (root `CMakeLists.txt`): `UIPC_USING_LOCAL_VCPKG`(ON), `UIPC_BUILD_PYTHON_BINDINGS`(OFF), `UIPC_BUILD_PYTHON_WHEEL`(OFF), `UIPC_BUILD_EXAMPLES/TESTS/BENCHMARKS`(ON), `UIPC_DEV_MODE`(OFF), `UIPC_WITH_USD_SUPPORT`(OFF), `UIPC_WITH_VDB_SUPPORT`(OFF), `UIPC_WITH_CUDA_BACKEND`(ON, forced OFF on Apple), `UIPC_CUDA_ARCHITECTURES`("native"). WHEEL=ON enables the nanobind extension. `UIPC_BUILD_PYBIND` remains a deprecated alias. (The C++ GUI has been removed; the `UIPC_BUILD_GUI` option no longer exists.)
+**Options** (root `CMakeLists.txt`): `UIPC_USING_LOCAL_VCPKG`(ON), `UIPC_BUILD_PYTHON_BINDINGS`(OFF), `UIPC_BUILD_PYTHON_WHEEL`(OFF), `UIPC_NANOBIND_NOMINSIZE`(OFF), `UIPC_BUILD_EXAMPLES/TESTS/BENCHMARKS`(ON), `UIPC_DEV_MODE`(OFF), `UIPC_WITH_USD_SUPPORT`(OFF), `UIPC_WITH_VDB_SUPPORT`(OFF), `UIPC_WITH_CUDA_BACKEND`(ON, forced OFF on Apple), `UIPC_CUDA_ARCHITECTURES`("native"). WHEEL=ON enables the nanobind extension. `UIPC_NANOBIND_NOMINSIZE=ON` disables nanobind's default size optimization only for explicit comparison builds. `UIPC_BUILD_PYBIND` remains a deprecated alias. (The C++ GUI has been removed; the `UIPC_BUILD_GUI` option no longer exists.)
 
 **Source glob**: project source globs use `CONFIGURE_DEPENDS`, so normal additions/removals are detected by the generated build. Still inspect the owning CMake/XMake file for explicitly listed sources, optional modules, generated code, or a new subdirectory.
 
@@ -36,9 +36,16 @@ Test target names are rewritten by the `uipc_test` rule into binary names `uipc_
 XMake mirrors the active CMake feature set: `backend_cuda`, `python_bindings`, `examples`,
 `tests`, and `benchmarks`, plus optional `usd` and `vdb` targets. The removed C++
 GUI, torch extension, and nonexistent RPC module have no stale options. Project
-policy explicitly disables `build.ccache`. The Python-binding post-build step copies the
-package, extension, and colocated runtime libraries synchronously before
-packaging begins.
+policy explicitly disables `build.ccache` and enables
+`package.requires_lock`. `xmake-requires.lock` is the platform-keyed package
+baseline; dependency-maintenance changes update it explicitly with
+`xmake require --upgrade` on every affected platform. The repository-owned
+nanobind recipe is registered as a project package so the lock never contains a
+checkout-specific absolute path. External recipes are locked to the canonical
+`https://github.com/xmake-io/xmake-repo.git` URL, independent of a developer's
+configured mirror. The Python-binding post-build step copies the package,
+extension, and colocated runtime libraries synchronously before packaging
+begins.
 
 ## Test System
 
@@ -103,6 +110,11 @@ local propagation diagnostic. The hosted no-GPU smoke test verifies import,
 native files, version, and `Engine("none")`; it does **not** prove CUDA runtime or
 GPU compatibility. That needs a GPU runner/doctor check before a release can be
 described as CUDA-validated.
+
+Wheel jobs also run `mypy --strict python/typing_tests/nanobind_api.py`. The
+Linux CMake job creates an XMake wheel and runs
+`scripts/compare_stub_trees.py` against the CMake-generated stub directory,
+then rejects XMake lock-file drift.
 
 Pull requests that only change `docs/`, `agent_docs/`, README/license prose,
 editor metadata, xmake files, or the independent CMake/docs/xmake workflows are

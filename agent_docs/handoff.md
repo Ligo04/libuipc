@@ -1,6 +1,6 @@
 # Handoff — Current State of the Repo
 
-> **Nanobind-only Python bindings (updated 2026-08-30,
+> **Nanobind-only Python bindings (updated 2026-09-01,
 > `codex/migrate-pybind-to-nanobind`)**: `src/nanobind` is the only native
 > Python binding implementation. The former `src/pybind` tree, pybind11 build
 > selector, and pybind11 stub-generation path have been removed. CMake enables
@@ -19,6 +19,21 @@
 > `uipc/_native`. Both deprecated enable aliases resolve to nanobind, while an
 > attempted `pybind11` selector is rejected by CMake and XMake. Fresh remote CI
 > is still required before this cleanup becomes the new cross-platform baseline.
+> Follow-up migration gates cover ndarray layout/ownership, shared object
+> identity, C++-driven Python trampolines, and queued `ResidentThread`
+> destruction. Wheel CI runs a real mypy usage contract, Linux CI compares the
+> exact CMake/XMake stub contents, XMake uses a committed package lock, and
+> CMake keeps nanobind's default size optimization unless an explicit
+> `UIPC_NANOBIND_NOMINSIZE=ON` comparison is requested. Temporary
+> migration-branch push triggers and unrelated GUI test markers were removed.
+> On the same CPython 3.12 CPU Release source, the default nanobind optimization
+> produced a 2,026,432-byte extension; `NOMINSIZE=ON` produced 2,714,112 bytes
+> (+687,680 bytes, +33.94%), so the default is retained.
+> Local follow-up validation: CMake and XMake CPU Release builds; installable
+> XMake CPython 3.12 wheel; exact equality across all ten generated stub files;
+> 89 portable pytest cases (54 deselected); 33 repository/script tests; eight
+> focused lifecycle/ownership tests against each build; mypy strict, Ruff,
+> clang-format-18, workflow pins, YAML parsing, and CPU `Engine("none")` smoke.
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and

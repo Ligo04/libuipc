@@ -5,7 +5,6 @@ on:
     branches:
       - "main"
       - "refactor-main"
-      - "codex/migrate-pybind-to-nanobind"
     paths-ignore:
       - ".clang-format"
       - ".clangd"
@@ -15,8 +14,6 @@ on:
       - "README.md"
       - "docs/**"
       - "agent_docs/**"
-      - "**/xmake.lua"
-      - ".github/workflows/xmake.yml"
       - ".github/workflows/docs.yml"
       - ".github/workflows/python-wheels.yml"
   pull_request:
@@ -31,8 +28,6 @@ on:
       - "README.md"
       - "docs/**"
       - "agent_docs/**"
-      - "**/xmake.lua"
-      - ".github/workflows/xmake.yml"
       - ".github/workflows/docs.yml"
       - ".github/workflows/python-wheels.yml"
   workflow_dispatch:
@@ -125,3 +120,35 @@ jobs:
           --label-regex fast
           --output-on-failure
           --timeout 900
+
+      - name: Set up uv for CMake/XMake stub parity
+        if: matrix.os == 'ubuntu-22.04'
+        uses: astral-sh/setup-uv@162b8acf397cb069dec09a3f5a9847cf71cfa46a # v1
+        with:
+          version: '0.12.5'
+
+      - name: Set up XMake for CMake/XMake stub parity
+        if: matrix.os == 'ubuntu-22.04'
+        uses: xmake-io/github-action-setup-xmake@3a1a5dddfc7fa625d9a698738334bf55655a861a # v1
+        with:
+          xmake-version: 3.0.5
+          actions-cache-folder: '.xmake-cache'
+          actions-cache-key: stub-parity-ubuntu-22.04
+
+      - name: Compare CMake and XMake nanobind stubs
+        if: matrix.os == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          cmake -E copy_directory \
+            build/python/src/uipc/_native/pyuipc \
+            build/cmake-stub-reference/pyuipc
+          xmake config --yes --github_actions=y --backend_cuda=n \
+            --python_bindings=y --python_system=y --python_version=3.12.x \
+            --examples=n --tests=n --benchmarks=n --dev=n \
+            -o build/xmake-stub-parity
+          xmake build pyuipc
+          xmake pack -y -o build/xpack-stub-parity pyuipc
+          python scripts/compare_stub_trees.py \
+            build/cmake-stub-reference \
+            build/xpack-stub-parity/*.whl
+          git diff --exit-code -- xmake-requires.lock

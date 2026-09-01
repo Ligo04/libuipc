@@ -18,8 +18,10 @@ remain deprecated compatibility aliases. Nanobind is always the implementation.
 - C++ namespaces `pyuipc::xxx` map one-to-one to Python submodules `pyuipc.xxx`; each subdirectory has its own `module.cpp` that binds classes one by one via the `PyXxx{m}` constructor.
 - **Early exposure**: the main `module.cpp` first binds the core data structures (`PyFeature`, `PyBufferView`, `PyAttributeSlot`, `PyGeometry`, `PySimplicialComplex`, the various Slots, `PyParameterCollection`), then calls each submodule's `PyModule` (geometry utilities/IO depend on core types).
 - Top-level aliases: `Engine`, `World`, `Scene`, `SceneIO`, `Animation` are promoted to the `pyuipc` top level; also registers `init`, `default_config`, `config`, `build_info`, `uipc::Exception`, `__version__`. `build_info()` reports the compiled Python ABI, build type, CUDA-backend flag, CUDA architectures, and toolkit version for runtime diagnosis.
-- Build: CMake uses `nanobind_add_module(pyuipc NB_STATIC NOMINSIZE)` and XMake
-  links the repository-local static nanobind 3.0.0 package. Both targets link
+- Build: CMake uses `nanobind_add_module(pyuipc NB_STATIC)` so nanobind's
+  default size optimization remains active. `UIPC_NANOBIND_NOMINSIZE=ON` is an
+  explicit comparison-only opt-out; it is not the default. XMake links the
+  repository-local static nanobind 3.0.0 package. Both targets link
   `uipc::uipc`/the equivalent component libraries and depend on every backend.
   The XMake overlay follows the official recipe's automatic dependency
   resolution while matching nanobind's upstream Python floors: releases before
@@ -33,7 +35,9 @@ remain deprecated compatibility aliases. Nanobind is always the implementation.
   backend still relinks pyuipc and runs POST_BUILD
   `scripts/after_build_pyuipc.py` (copies the package/runtime libraries,
   regenerates `.pyi`, and refreshes the development install). CMake and XMake
-  both call `scripts/stubgen.py`, which invokes nanobind stubgen.
+  both call `scripts/stubgen.py`, which invokes nanobind stubgen. Linux CI then
+  compares the complete CMake stub directory with the XMake wheel using
+  `scripts/compare_stub_trees.py`; matching filenames alone is insufficient.
 
 ## Python package layout (`python/src/uipc/`)
 
@@ -97,8 +101,10 @@ run on wheel builders without a display or NVIDIA device. Select GPU coverage
 explicitly with `pytest -m "cuda and not example" python/tests`; interactive
 examples remain opt-in with `-m example`. Tests that replace `uipc` modules must
 restore `sys.modules` before returning so collection order cannot hide the real
-package. Each cibuildwheel environment runs both the metadata/backend smoke test
-and the portable pytest suite against the installed wheel.
+package. Each cibuildwheel environment runs the metadata/backend smoke test,
+the portable pytest suite, and `mypy --strict` against
+`python/typing_tests/nanobind_api.py` using the installed wheel's generated
+stubs.
 
 Release verification must go beyond `import uipc`: importing loads the native
 extension and core DLLs, while the backend is loaded lazily. At minimum create
@@ -112,6 +118,15 @@ escapes the smoke test.
   `src/nanobind/pyuipc/`; the constitution contract check audits this tree.
 - Do not break the import chain in `__init__.py` (`pyuipc` → `init()` → `config["module_dir"]`).
 - New binding surfaces need tests added in `python/tests/`.
+- ndarray bindings require layout, writability, aliasing, and owner-lifetime
+  coverage. Shared-pointer returns require an object-identity regression, and
+  Python trampolines must be invoked by a C++ caller rather than by directly
+  calling the Python override.
+- Worker callbacks must handle both queued destruction and interpreter
+  shutdown. `ResidentThread` registers CPython's early threading-shutdown hook,
+  releases the GIL while joining its worker during normal destruction, and
+  abandons captured Python references once shutdown begins or nanobind reports
+  that the interpreter can no longer be entered.
 - Audit exports rather than assuming C++/Python parity. `RotatingMotor` and
   `LinearMotor` are registered by
   `constitution/soft_transform_constraint.cpp`; an earlier hand-maintained audit

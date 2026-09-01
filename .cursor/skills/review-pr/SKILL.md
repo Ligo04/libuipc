@@ -124,6 +124,10 @@ Run `gh pr diff <PR_NUMBER>` and check every area below that is touched.
 - [ ] New C++ types exposed via the matching nanobind submodule (mirrors C++ namespace)
 - [ ] `__init__.py` import chain not broken (`pyuipc` → `init()` → `config["module_dir"]`)
 - [ ] Python-side tests added under `python/tests/` for the new binding surface
+- [ ] ndarray shape, dtype, element strides, writability, and owner lifetime are tested when exposing views
+- [ ] shared ownership preserves Python object identity; trampolines are exercised through a C++ caller
+- [ ] callbacks that can outlive Python guard interpreter shutdown and queued-worker destruction
+- [ ] CMake/XMake stub trees are content-compared and the mypy usage contract passes
 
 #### Tests
 - [ ] C++ tests use Catch2 macros; added via `uipc_add_test` in the appropriate

@@ -1,6 +1,11 @@
-# Create an extension module. NOMINSIZE keeps the project's configured
-# optimization policy aligned with the XMake build.
-nanobind_add_module(pyuipc NB_STATIC NOMINSIZE)
+# Use nanobind's default size optimization unless an explicit comparison build
+# requests NOMINSIZE. Keep the opt-out measurable instead of hard-coding it.
+set(_uipc_nanobind_module_options NB_STATIC)
+if(UIPC_NANOBIND_NOMINSIZE)
+    list(APPEND _uipc_nanobind_module_options NOMINSIZE)
+endif()
+nanobind_add_module(pyuipc ${_uipc_nanobind_module_options})
+unset(_uipc_nanobind_module_options)
 target_compile_features(pyuipc PUBLIC cxx_std_20)
 target_link_libraries(pyuipc PUBLIC uipc::uipc)
 # ensure all backends are built before pyuipc

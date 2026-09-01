@@ -1,7 +1,9 @@
 set_xmakever("3.0.5")
 
--- Project-local package recipes that have not reached xmake-repo yet.
-add_repositories("libuipc-packages xmake/repository", {rootdir = os.scriptdir()})
+-- Register the repository-owned nanobind recipe as a project package. Keeping
+-- it out of a path-based local repository prevents machine-specific absolute
+-- paths from entering xmake-requires.lock.
+includes("xmake/repository/packages/n/nanobind/xmake.lua")
 
 option("python_bindings", {default = false, description = "Build Python bindings"})
 option("pybind", {
@@ -46,6 +48,10 @@ set_version("0.9.0")
 -- Repository policy forbids compiler-cache wrappers because they make build
 -- provenance and CUDA diagnostics harder to reproduce.
 set_policy("build.ccache", false)
+
+-- Resolve project packages from the committed lock file. Update it only with
+-- an explicit `xmake require --upgrade` dependency-maintenance change.
+set_policy("package.requires_lock", true)
 
 if has_config("python_bindings") or has_config("pybind") then
     -- Python wheels must carry package runtimes even when matching libraries

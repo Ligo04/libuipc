@@ -26,6 +26,9 @@ endif()
 option(UIPC_BUILD_PYTHON_BINDINGS "Build Python bindings" ${_UIPC_BUILD_PYTHON_BINDINGS_DEFAULT})
 unset(_UIPC_BUILD_PYTHON_BINDINGS_DEFAULT)
 option(UIPC_BUILD_PYTHON_WHEEL "Wheel build mode for Python post-build helper" OFF)
+option(UIPC_NANOBIND_NOMINSIZE
+       "Disable nanobind's default size optimization for comparison builds"
+       OFF)
 option(UIPC_BUILD_EXAMPLES "Build examples" ON)
 option(UIPC_BUILD_TESTS "Build tests" ON)
 option(UIPC_BUILD_BENCHMARKS "Build benchmarks" ON)

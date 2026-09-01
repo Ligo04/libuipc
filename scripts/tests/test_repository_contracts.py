@@ -99,7 +99,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertFalse((ROOT / "src/pybind").exists())
         self.assertIn("find_package(nanobind", (ROOT / "src/nanobind/CMakeLists.txt").read_text(encoding="utf-8"))
 
-    def test_nanobind_migration_branch_runs_binding_ci_without_publishing(self) -> None:
+    def test_nanobind_binding_ci_is_branch_agnostic(self) -> None:
         branch = "codex/migrate-pybind-to-nanobind"
         workflow_paths = (
             ROOT / ".github/workflows/cmake.yml",
@@ -112,26 +112,29 @@ class RepositoryContractTests(unittest.TestCase):
         }
 
         for name, workflow in workflows.items():
-            push_trigger = workflow.split("push:", maxsplit=1)[1].split(
-                "pull_request:", maxsplit=1
-            )[0]
-            self.assertRegex(
-                push_trigger,
-                rf'(?m)^\s+- ["\']?{re.escape(branch)}["\']?\s*$',
-                f"{name} does not run when the nanobind migration branch is pushed",
+            self.assertNotIn(
+                branch,
+                workflow,
+                f"{name} contains a temporary migration-branch trigger",
             )
 
         cmake = workflows["cmake.yml"]
         self.assertIn("-DUIPC_BUILD_PYTHON_BINDINGS=ON", cmake)
         self.assertNotIn("-DUIPC_PYTHON_BINDING=", cmake)
+        self.assertIn("scripts/compare_stub_trees.py", cmake)
+        self.assertIn("build/cmake-stub-reference", cmake)
+        self.assertIn("build/xpack-stub-parity/*.whl", cmake)
 
         xmake = workflows["xmake.yml"]
         self.assertIn("--python_bindings=y", xmake)
         self.assertNotIn("--python_binding=", xmake)
         self.assertIn("astral-sh/setup-uv@", xmake)
         self.assertIn("xmake pack", xmake)
+        self.assertIn("python -m mypy --strict", xmake)
 
         wheels = workflows["python-wheels.yml"]
+        self.assertIn('CIBW_TEST_REQUIRES: "mypy==1.19.1', wheels)
+        self.assertIn("python -m mypy --strict", wheels)
         test_publish = wheels.split("publish-test-pypi:", maxsplit=1)[1].split(
             "publish-pypi:", maxsplit=1
         )[0]
@@ -160,6 +163,42 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("import mypy", xmake_pack)
         self.assertIn('os.environ.get("NB_STUBGEN")', package_init)
 
+    def test_xmake_dependencies_use_a_portable_lock(self) -> None:
+        root_xmake = (ROOT / "xmake.lua").read_text(encoding="utf-8")
+        lock = (ROOT / "xmake-requires.lock").read_text(encoding="utf-8")
+
+        self.assertIn('set_policy("package.requires_lock", true)', root_xmake)
+        self.assertIn(
+            'includes("xmake/repository/packages/n/nanobind/xmake.lua")',
+            root_xmake,
+        )
+        self.assertNotIn("add_repositories", root_xmake)
+        self.assertIn('["linux|x86_64"]', lock)
+        self.assertIn('["nanobind 3.0.0', lock)
+        self.assertIn("https://github.com/xmake-io/xmake-repo.git", lock)
+        self.assertNotIn("gitee.com/tboox/xmake-repo", lock)
+        self.assertNotRegex(lock, r'url\s*=\s*["\']/')
+
+    def test_cmake_uses_nanobind_default_size_optimization(self) -> None:
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        target_cmake = (
+            ROOT / "src/nanobind/pyuipc/CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+
+        self.assertRegex(
+            root_cmake,
+            r"option\(UIPC_NANOBIND_NOMINSIZE\s+"
+            r'"[^"]+"\s+OFF\)',
+        )
+        self.assertIn("if(UIPC_NANOBIND_NOMINSIZE)", target_cmake)
+        self.assertIn(
+            "list(APPEND _uipc_nanobind_module_options NOMINSIZE)",
+            target_cmake,
+        )
+        self.assertNotIn(
+            "nanobind_add_module(pyuipc NB_STATIC NOMINSIZE)", target_cmake
+        )
+
     def test_wheel_build_preserves_active_python_environment(self) -> None:
         post_build = (ROOT / "scripts/after_build_pyuipc.py").read_text(
             encoding="utf-8"
@@ -175,20 +214,6 @@ class RepositoryContractTests(unittest.TestCase):
             r"else:\s+# Avoid importing stale package files during an in-place build\.\s+"
             r"print\('Cleaning up the old package:'\)\s+uninstall_package\(\)",
         )
-
-    def test_polyscope_show_tests_are_marked_gui(self) -> None:
-        gui_tests = []
-        for path in (ROOT / "python/tests").rglob("test_*.py"):
-            source = path.read_text(encoding="utf-8")
-            if "ps.show()" in source:
-                gui_tests.append(path)
-                self.assertIn(
-                    "@pytest.mark.gui",
-                    source,
-                    f"{path} opens a window but is not marked gui",
-                )
-
-        self.assertTrue(gui_tests, "expected at least one Polyscope GUI test")
 
     def test_keyword_enum_has_runtime_and_stub_alias(self) -> None:
         engine = (ROOT / "src/nanobind/pyuipc/core/engine.cpp").read_text(

@@ -54,6 +54,74 @@ def _binding_backend() -> str:
             """,
         ),
         (
+            "resident_thread_queued_shutdown",
+            """
+            import threading
+
+            from uipc._native.pyuipc import ResidentThread
+
+            started = threading.Event()
+            release = threading.Event()
+            finished = threading.Event()
+            worker = ResidentThread()
+
+            def first_callback():
+                started.set()
+                assert release.wait(5)
+
+            assert worker.post(first_callback)
+            assert started.wait(5)
+            assert worker.post(lambda: finished.set())
+            release.set()
+
+            # Destruction joins the worker while the second Python callback is
+            # queued. It must not deadlock by retaining the GIL during join.
+            del worker
+            assert finished.wait(5)
+            """,
+        ),
+        (
+            "resident_thread_interpreter_shutdown",
+            """
+            import atexit
+            import os
+            import threading
+
+            from uipc._native.pyuipc import ResidentThread
+
+            started = threading.Event()
+            release = threading.Event()
+            callback_ran = False
+            worker = ResidentThread()
+
+            def first_callback():
+                started.set()
+                assert release.wait(10)
+
+            assert worker.post(first_callback)
+            assert started.wait(5)
+
+            def queued_callback():
+                global callback_ran
+                callback_ran = True
+
+            assert worker.post(queued_callback)
+
+            def destroy_worker():
+                global worker
+                del worker
+                if callback_ran:
+                    os._exit(23)
+
+            # Standard atexit handlers run in reverse registration order:
+            # release the active callback, then destroy the worker. The
+            # binding's earlier threading shutdown hook must prevent the
+            # queued callback from entering Python during interpreter exit.
+            atexit.register(destroy_worker)
+            atexit.register(release.set)
+            """,
+        ),
+        (
             "buffer_callbacks",
             """
             import gc
@@ -91,49 +159,79 @@ def _binding_backend() -> str:
         (
             "trampoline",
             """
+            import gc
+            import tempfile
+
+            from uipc import Engine, Scene, World
             from uipc._native.pyuipc.core import PyIEngine
+
+            calls = []
 
             class DummyEngine(PyIEngine):
                 def __init__(self):
                     super().__init__()
-                    self.frame = 0
+                    self.current_frame = 0
 
                 def do_init(self):
-                    pass
+                    calls.append("init")
 
                 def do_advance(self):
-                    self.frame += 1
+                    calls.append("advance")
+                    self.current_frame += 1
 
                 def do_sync(self):
-                    pass
+                    calls.append("sync")
 
                 def do_retrieve(self):
-                    pass
+                    calls.append("retrieve")
 
                 def do_to_json(self):
-                    return {"frame": self.frame}
+                    return {"frame": self.current_frame}
 
                 def do_dump(self):
+                    calls.append("dump")
                     return True
 
                 def do_recover(self, dst_frame):
-                    self.frame = dst_frame
+                    calls.append("recover")
+                    self.current_frame = dst_frame
                     return True
 
                 def get_frame(self):
-                    return self.frame
+                    return self.current_frame
 
-            engine = DummyEngine()
-            engine.do_advance()
-            assert engine.get_frame() == 1
-            assert engine.do_to_json() == {"frame": 1}
-            assert not engine.status().has_error()
+            implementation = DummyEngine()
+            engine = Engine(
+                "python-test",
+                implementation,
+                tempfile.mkdtemp(prefix="pyuipc-trampoline-"),
+            )
+            world = World(engine)
+            scene = Scene()
+            world.init(scene)
+
+            # Drop Python's direct reference. Engine's C++ shared_ptr must keep
+            # both the implementation and its Python overrides alive.
+            del implementation
+            gc.collect()
+
+            world.advance()
+            world.retrieve()
+            assert calls == ["init", "advance", "sync", "retrieve"]
+            assert engine.to_json() == {"frame": 1}
+            assert world.frame() == 1
+            assert world.dump()
+            assert world.recover(7)
+            assert world.frame() == 7
+
+            del scene, world, engine
+            gc.collect()
             """,
         ),
     ],
 )
 def test_binding_process_exits_cleanly(name: str, source: str) -> None:
-    if name == "resident_thread" and _binding_backend() != "nanobind":
+    if name.startswith("resident_thread") and _binding_backend() != "nanobind":
         pytest.skip("ResidentThread shutdown regression probe targets nanobind")
 
     result = _run_in_subprocess(source)
