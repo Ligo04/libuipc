@@ -43,9 +43,14 @@ baseline; dependency-maintenance changes update it explicitly with
 nanobind recipe is registered as a project package so the lock never contains a
 checkout-specific absolute path. External recipes are locked to the canonical
 `https://github.com/xmake-io/xmake-repo.git` URL, independent of a developer's
-configured mirror. The Python-binding post-build step copies the package,
-extension, and colocated runtime libraries synchronously before packaging
-begins.
+configured mirror. Lock maintenance and lock-drift validation use XMake 3.0.5,
+matching the workflow pin, and resolve Python as a non-system package so host
+Python and build-tool versions cannot rewrite the committed baseline. Wheel
+builds still select the active setup-python interpreter with
+`--python_system=y`; those environment-specific builds consume the lock but are
+not used to regenerate it. The Python-binding post-build step copies the
+package, extension, and colocated runtime libraries synchronously before
+packaging begins.
 
 ## Test System
 
@@ -114,7 +119,9 @@ described as CUDA-validated.
 Wheel jobs also run `mypy --strict python/typing_tests/nanobind_api.py`. The
 Linux CMake job creates an XMake wheel and runs
 `scripts/compare_stub_trees.py` against the CMake-generated stub directory,
-then rejects XMake lock-file drift.
+then rejects XMake lock-file drift. Its XMake parity build uses
+`--python_system=n` with the pinned XMake 3.0.5 so the check measures dependency
+resolution rather than versions discovered from the GitHub runner.
 
 Pull requests that only change `docs/`, `agent_docs/`, README/license prose,
 editor metadata, xmake files, or the independent CMake/docs/xmake workflows are

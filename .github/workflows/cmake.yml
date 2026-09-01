@@ -143,7 +143,7 @@ jobs:
             build/python/src/uipc/_native/pyuipc \
             build/cmake-stub-reference/pyuipc
           xmake config --yes --github_actions=y --backend_cuda=n \
-            --python_bindings=y --python_system=y --python_version=3.12.x \
+            --python_bindings=y --python_system=n --python_version=3.12.x \
             --examples=n --tests=n --benchmarks=n --dev=n \
             -o build/xmake-stub-parity
           xmake build pyuipc

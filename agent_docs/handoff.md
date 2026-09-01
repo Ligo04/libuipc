@@ -26,6 +26,12 @@
 > CMake keeps nanobind's default size optimization unless an explicit
 > `UIPC_NANOBIND_NOMINSIZE=ON` comparison is requested. Temporary
 > migration-branch push triggers and unrelated GUI test markers were removed.
+> Hosted XMake and the ten-wheel Linux/Windows matrix pass on commit
+> `9d1c6524953ea339c4121916263f1d933e1487d2`. The same CI cycle confirmed exact
+> CMake/XMake stub equality, then exposed that a system-Python parity build
+> rewrote lock entries with GitHub runner versions. Lock generation and parity
+> validation therefore use XMake 3.0.5 with non-system Python resolution;
+> wheel builds continue to use the active setup-python interpreter.
 > On the same CPython 3.12 CPU Release source, the default nanobind optimization
 > produced a 2,026,432-byte extension; `NOMINSIZE=ON` produced 2,714,112 bytes
 > (+687,680 bytes, +33.94%), so the default is retained.
