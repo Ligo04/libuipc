@@ -29,9 +29,13 @@
 > Hosted XMake and the ten-wheel Linux/Windows matrix pass on commit
 > `9d1c6524953ea339c4121916263f1d933e1487d2`. The same CI cycle confirmed exact
 > CMake/XMake stub equality, then exposed that a system-Python parity build
-> rewrote lock entries with GitHub runner versions. Lock generation and parity
-> validation therefore use XMake 3.0.5 with non-system Python resolution;
-> wheel builds continue to use the active setup-python interpreter.
+> rewrote lock entries with GitHub runner versions. Run `33500813585` confirmed
+> that non-system Python fixes the Python/TBB entries and preserves exact stub
+> equality, but XMake still serializes detected versions for `cmake`, `libffi`,
+> `ninja`, and `openssl`. Parity validation therefore compares portable lock
+> content strictly while normalizing only those four host-version fields;
+> wheel builds continue to use the active setup-python interpreter. That run's
+> Windows job was cancelled by matrix fail-fast after the Linux lock check.
 > On the same CPython 3.12 CPU Release source, the default nanobind optimization
 > produced a 2,026,432-byte extension; `NOMINSIZE=ON` produced 2,714,112 bytes
 > (+687,680 bytes, +33.94%), so the default is retained.

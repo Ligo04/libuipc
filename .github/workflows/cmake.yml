@@ -142,6 +142,7 @@ jobs:
           cmake -E copy_directory \
             build/python/src/uipc/_native/pyuipc \
             build/cmake-stub-reference/pyuipc
+          cmake -E copy xmake-requires.lock build/xmake-lock-reference
           xmake config --yes --github_actions=y --backend_cuda=n \
             --python_bindings=y --python_system=n --python_version=3.12.x \
             --examples=n --tests=n --benchmarks=n --dev=n \
@@ -151,4 +152,6 @@ jobs:
           python scripts/compare_stub_trees.py \
             build/cmake-stub-reference \
             build/xpack-stub-parity/*.whl
-          git diff --exit-code -- xmake-requires.lock
+          python scripts/compare_xmake_locks.py \
+            build/xmake-lock-reference \
+            xmake-requires.lock

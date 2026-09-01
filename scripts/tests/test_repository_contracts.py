@@ -179,7 +179,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("gitee.com/tboox/xmake-repo", lock)
         self.assertNotRegex(lock, r'url\s*=\s*["\']/')
 
-    def test_xmake_lock_validation_uses_pinned_non_system_resolution(self) -> None:
+    def test_xmake_lock_validation_is_portable_and_pinned(self) -> None:
         root_xmake = (ROOT / "xmake.lua").read_text(encoding="utf-8")
         cmake_workflow = (
             ROOT / ".github/workflows/cmake.yml"
@@ -196,6 +196,14 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("xmake-version: 3.0.5", xmake_workflow)
         self.assertIn("--python_system=n", parity_step)
         self.assertNotIn("--python_system=y", parity_step)
+        self.assertIn(
+            "cmake -E copy xmake-requires.lock build/xmake-lock-reference",
+            parity_step,
+        )
+        self.assertIn("scripts/compare_xmake_locks.py", parity_step)
+        self.assertNotIn(
+            "git diff --exit-code -- xmake-requires.lock", parity_step
+        )
 
     def test_project_included_nanobind_recipe_anchors_port_resource(self) -> None:
         recipe = (
