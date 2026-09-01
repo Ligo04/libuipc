@@ -36,6 +36,8 @@ package("nanobind")
 
     on_install("windows|x64", "linux", "macosx", "bsd", function (package)
         local builddir = path.join(os.curdir(), "build")
+        local recipe_dir = path.join(os.projectdir(), "xmake", "repository", "packages",
+                                     "n", "nanobind")
 
         local configs = {
             "-DNB_TEST=OFF",
@@ -46,7 +48,7 @@ package("nanobind")
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"))
         import("package.tools.cmake").install(package, configs)
 
-        os.cp(path.join(package:scriptdir(), "port", "xmake.lua"), path.join(builddir, "xmake.lua"))
+        os.cp(path.join(recipe_dir, "port", "xmake.lua"), path.join(builddir, "xmake.lua"))
         import("package.tools.xmake").install(package, {"--project=" .. builddir})
 
         if package:config("shared") then
