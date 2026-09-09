@@ -1,5 +1,5 @@
 -- Copied from xmake-repo dev@e063b2eb1633b9c5d37fbfe9a51b39b5115883fa.
--- The local recipe adds nanobind 3.0.0 and corrects the Python version floors
+-- The local recipe adds nanobind 3.0.1 and corrects the Python version floors
 -- until the official repository catches up.
 package("nanobind")
     set_homepage("https://github.com/wjakob/nanobind")
@@ -9,7 +9,7 @@ package("nanobind")
     set_urls("https://github.com/wjakob/nanobind/archive/refs/tags/$(version).tar.gz",
              "https://github.com/wjakob/nanobind.git", {submodules = false})
 
-    add_versions("v3.0.0", "1e6d9c2b2e746301b5cca1eec9a83338f3412cdec4ffae169fb7a2b2b2a9c734")
+    add_versions("v3.0.1", "34ded7cf2292f08a92c45490a095e76334a57751bbae03a8c83241803bf19623")
     add_versions("v2.12.0", "01f1f0cd0398743c18f33d07ae36ad410bd7f4a1e90683b508504de897d6e629")
     add_versions("v2.11.0", "62ba05e5f720c76c510d6ab2a77f8ccc17a76c5cea951bea47355a7dfa460449")
     add_versions("v2.10.2", "5bb7f866f6c9c64405308b69de7e7681d8f779323e345bd71a00199c1eaec073")
@@ -25,7 +25,7 @@ package("nanobind")
         -- Keep the official recipe's automatic dependency resolution while
         -- matching each nanobind release line's actual Python version floor.
         local version = package:version()
-        if version and version:ge("3.0.0") then
+        if version and version:ge("3.0.1") then
             package:add("deps", "python >=3.10")
         elseif version and version:ge("2.10.0") then
             package:add("deps", "python >=3.9")

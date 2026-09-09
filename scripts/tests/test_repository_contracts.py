@@ -34,7 +34,7 @@ class RepositoryContractTests(unittest.TestCase):
         target = (ROOT / "src/nanobind/xmake.lua").read_text(encoding="utf-8")
 
         python_floors = (
-            ('version:ge("3.0.0")', 'package:add("deps", "python >=3.10")'),
+            ('version:ge("3.0.1")', 'package:add("deps", "python >=3.10")'),
             ('version:ge("2.10.0")', 'package:add("deps", "python >=3.9")'),
             (None, 'package:add("deps", "python >=3.8")'),
         )
@@ -43,7 +43,7 @@ class RepositoryContractTests(unittest.TestCase):
                 self.assertIn(version_check, recipe)
             self.assertIn(dependency, recipe)
         self.assertLess(
-            recipe.index('version:ge("3.0.0")'),
+            recipe.index('version:ge("3.0.1")'),
             recipe.index('version:ge("2.10.0")'),
         )
         for config in ("python_version", "python_system"):
@@ -75,7 +75,7 @@ class RepositoryContractTests(unittest.TestCase):
             self.assertIsNotNone(match, f"nanobind version missing from {path}")
             versions.append(match.group(1))
 
-        self.assertEqual(set(versions), {"3.0.0"})
+        self.assertEqual(set(versions), {"3.0.1"})
 
     def test_nanobind_is_the_only_binding_implementation(self) -> None:
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -174,7 +174,7 @@ class RepositoryContractTests(unittest.TestCase):
         )
         self.assertNotIn("add_repositories", root_xmake)
         self.assertIn('["linux|x86_64"]', lock)
-        self.assertIn('["nanobind 3.0.0', lock)
+        self.assertIn('["nanobind 3.0.1', lock)
         self.assertIn("https://github.com/xmake-io/xmake-repo.git", lock)
         self.assertNotIn("gitee.com/tboox/xmake-repo", lock)
         self.assertNotRegex(lock, r'url\s*=\s*["\']/')

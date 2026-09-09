@@ -43,7 +43,7 @@ xpack("pyuipc")
             os.vrunv(python, {
                 "-c",
                 "from importlib.metadata import version; " ..
-                "assert version('nanobind') == '3.0.0'; import numpy"
+                "assert version('nanobind') == '3.0.1'; import numpy"
             })
             return true
         end }
@@ -67,7 +67,7 @@ xpack("pyuipc")
         end
 
         if not ok then
-            local requirements = {"nanobind==3.0.0", "numpy"}
+            local requirements = {"nanobind==3.0.1", "numpy"}
             os.vrunv(uv.program,
                 table.join({"pip", "install", "--python", python}, requirements))
         end

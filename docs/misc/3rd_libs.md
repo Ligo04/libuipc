@@ -59,7 +59,7 @@ The CUDA backend's kernel/buffer/linear-algebra wrappers live in the in-tree `cu
 
 ## Python-Side Dependencies
 
-See `pyproject.toml` / `python/pyproject.toml`: `nanobind 3.0.0` builds the native
+See `pyproject.toml` / `python/pyproject.toml`: `nanobind 3.0.1` builds the native
 bindings, while `polyscope` (optional GUI, `uipc.gui`), `numpy`, and the other
 runtime packages support the Python layer. Optional integrations (torch, warp,
 usd) are loaded lazily via `scripts/optional_import/`.

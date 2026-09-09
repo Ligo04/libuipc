@@ -107,8 +107,8 @@
             },
             version = "v0.9.8"
         },
-        ["nanobind 3.0.0#a0c24696"] = {
-            version = "v3.0.0"
+        ["nanobind 3.0.1#a0c24696"] = {
+            version = "v3.0.1"
         },
         ["ninja#f56260b5"] = {
             repo = {
@@ -212,7 +212,7 @@
                 commit = "6dd811ff378b581c2ae5ed6e6b13db2542611de8",
                 url = "https://github.com/xmake-io/xmake-repo.git"
             },
-            version = "3.0.0"
+            version = "3.0.1"
         },
         ["zlib#0b3b0fcf"] = {
             repo = {

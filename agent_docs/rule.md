@@ -110,7 +110,7 @@ record it here in the same commit.**
 
 ## Task-scoped (recorded for context, not general policy)
 
-- During nanobind 3.0.0 XMake overlay validation: use the latest XMake
+- During nanobind 3.0.1 XMake overlay validation: use the latest XMake
   installed in the workspace. `set_xmakever("3.0.5")` remains the project's
   minimum-version declaration, not the executable selected for local
   verification. (Set 2026-08-27.)
