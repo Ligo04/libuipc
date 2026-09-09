@@ -3,7 +3,6 @@ set_xmakever("3.0.5")
 -- Register the repository-owned nanobind recipe as a project package. Keeping
 -- it out of a path-based local repository prevents machine-specific absolute
 -- paths from entering xmake-requires.lock.
-includes("xmake/repository/packages/n/nanobind/xmake.lua")
 
 option("python_bindings", {default = false, description = "Build Python bindings"})
 option("pybind", {

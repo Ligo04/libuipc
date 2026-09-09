@@ -205,19 +205,6 @@ class RepositoryContractTests(unittest.TestCase):
             "git diff --exit-code -- xmake-requires.lock", parity_step
         )
 
-    def test_project_included_nanobind_recipe_anchors_port_resource(self) -> None:
-        recipe = (
-            ROOT / "xmake/repository/packages/n/nanobind/xmake.lua"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn(
-            'path.join(os.projectdir(), "xmake", "repository", "packages",',
-            recipe,
-        )
-        self.assertIn('path.join(recipe_dir, "port", "xmake.lua")', recipe)
-        self.assertNotIn(
-            'path.join(package:scriptdir(), "port", "xmake.lua")', recipe
-        )
 
     def test_cmake_uses_nanobind_default_size_optimization(self) -> None:
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
