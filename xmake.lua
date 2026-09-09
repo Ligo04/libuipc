@@ -4,11 +4,14 @@ set_xmakever("3.0.5")
 -- it out of a path-based local repository prevents machine-specific absolute
 -- paths from entering xmake-requires.lock.
 
-option("python_bindings", {default = false, description = "Build Python bindings"})
-option("pybind", {
-    default = false,
-    description = "Deprecated alias for python_bindings"
-})
+option("python_bindings")
+    set_default(false)
+    set_description("Build Python bindings")
+option_end()
+option("pybind")
+    set_default(false)
+    set_description("Deprecated alias for python_bindings")
+option_end()
 option("python_binding")
     set_default("nanobind")
     set_values("nanobind")
