@@ -1,8 +1,23 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
-Status as of 2026-08-28. Completed performance work is
+Status as of 2026-09-03. Completed performance work is
 recorded in `handoff.md`; this file tracks what is **open** — analyze here first
 before planning new work.
+
+AL-IPC now has the fork-derived earliest-TOI active-set filter, decay-derived
+pair lifetime, conditioning-aware penalty initialization, and a full-step inner
+solve boundary. Its multi-state `K_min > 1` cumulative termination rule is now
+implemented and validated on sample 88. Remaining paper-parity work includes
+penalty-free moving boundaries and the specialized conflict-free analytic PSD
+Hessian assembly. Do not claim complete parity with the reference simulator
+until those paths and its large stress scenes are independently ported and
+validated.
+
+The uniform AL `diag_norm` penalty mode remains experimental. It caused
+repeated non-descent line-search failures in mixed-resolution cloth/FEM sample
+88 even after friction derivatives were corrected; `per_vertex` is therefore
+the default. A future conditioning design should retain local mass/material
+heterogeneity rather than broadcasting one global scalar.
 
 ## Cross-cutting source-audit findings
 
@@ -13,7 +28,7 @@ These previously verified gaps are closed on `refactor-main` as of 2026-08-25:
   unreferenced zero-byte scaffolds were removed. A repository gate rejects new
   zero-byte files under `include/` and `src/`.
 - `scripts/check_constitution_api.py` compares every exported constitution class
-  with its Python class name and verifies every binding initializer is registered.
+  with its pybind class name and verifies every binding initializer is registered.
   `RotatingMotor` and `LinearMotor` are both covered. Internal UID 27/28 remain
   intentionally internal and therefore outside the public-header contract.
 - Every external GitHub Action is pinned to a reviewed full commit SHA. Both
@@ -21,7 +36,27 @@ These previously verified gaps are closed on `refactor-main` as of 2026-08-25:
   immutable vcpkg commit as the generated registry baseline. The repository
   contracts workflow rejects floating action and revision refs.
 
-## Performance: remaining gap vs Stiff-GIPC
+## Current performance baseline
+
+The current machine-specific reference is the
+[2026-09-01 cross-domain baseline](performance/2026-09-01-cross-domain-baseline.md):
+RTX 5090, CUDA 13.2, Windows Release, three fresh processes per scene, canonical
+Timer-free throughput paths.
+
+| Benchmark | Frames | Reference mean | Three-run range | Newton/frame | PCG/frame |
+|---|---:|---:|---:|---:|---:|
+| pure ABD wrecking balls | 120 | 129.5 ms | 126.4–131.3 ms | 3.95 | 107.3 |
+| case2 FEM + cloth | 250 | 201.1 ms | 199.0–230.6 ms | 6.64 | 246.8 |
+| MAS bunny | 100 | 60.2 ms | 60.1–62.0 ms | 4.67 | 358.8 |
+| ABD wall + cloth | 100 | 125.6 ms | 121.8–165.0 ms | 5.13 | 200.1 |
+
+All 12 throughput runs completed and converged without hitting iteration
+limits. Collision-rich scenes have trajectory and WDDM/dynamic-memory
+variability, so future work must compare three-run envelopes plus structured
+iteration counts. The older Stiff-GIPC ratios below have not been refreshed
+under this contract and must not be presented as current cross-project results.
+
+### Superseded Stiff-GIPC comparison context
 
 Measured on aligned scenes (same machine, clean runs; see handoff for the
 full evidence chain):
@@ -48,12 +83,13 @@ is structural host/device overhead (nsys evidence, case2 stacking phase):
   the old `newton/min_iter` doubled as a hard floor (≥6 with the benchmark
   configs), cancelling the semi-implicit early exit. Since then
   `min_iter` is a pure floor with default 0 and the beta-accumulation
-  start moved to `newton/semi_implicit/K_min` (default 1). Per-Newton
+  start moved to `newton/semi_implicit/K_min`. Semi-implicit termination is
+  now enabled by default with `K_min=6`. Per-Newton
   solver time already beats Stiff on the same MAS bunny (≈39 ms wall vs
   48.8 ms GPU), so the frame-time gap on MAS scenes is dominated by the
   Newton count, not solver efficiency.
 
-**Planned levers (in priority order)**:
+**Historical optimization ledger (completed or explicitly deferred):**
 1. ~~Cooperative-groups persistent-kernel fusion or CUDA-graph capture of the
    PCG inner loop~~ **DONE (2026-08-23)**: FusedPCG now replays
    `check_interval`-sized iteration blocks as CUDA graphs
@@ -118,11 +154,110 @@ is structural host/device overhead (nsys evidence, case2 stacking phase):
    case 88, `Compute DyTopo Effect` fell from 6.11 to 4.76 ms/Newton (-22.0%);
    final `Convert To BCOO` stayed flat (1.85 -> 1.86 ms/Newton), and the clean
    wall mean/median improved 175.6/196.4 -> 165.5/184.2 ms/frame.
-8. Current case-88 frame budget (60 frames, 165.5 ms mean representative):
+8. Historical case-88 frame budget at that revision/window (60 frames,
+   165.5 ms mean representative):
    Build Linear System 43.4 ms + DyTopo 26.3 ms + trajectory detect 26.9 ms
    + aggregate DCD 24.5 ms + FusedPCG 24.8 ms + misc. The next evidence-led
    targets are raw contact/FEM subsystem assembly and the remaining
    line-search launch traffic, not another broad-phase or DyTopo sort rewrite.
+9. Dynamic output initialization/growth (DONE 2026-08-30):
+   `DeviceVector` now has explicit discard/preserve and amortized reserve
+   policies. Fully regenerated collision, line-search, matrix-conversion,
+   active-set, and triplet outputs no longer copy or value-initialize dead
+   ranges when their logical size fluctuates. Existing `resize()` semantics
+   are unchanged for state and sentinel buffers. On case 88, `Scan and
+   Allocate` fell from 80.8 ms total over 60 frames to 38.0-65.5 ms, while
+   the initial/trial `Compute Energy` scopes together fell from 667.1 ms to
+   390.2-415.8 ms. End-to-end wall variance remains larger than this isolated
+   gain. The next step is batching collision counter readbacks, not broadening
+   discard semantics to buffers whose initialization contract is uncertain.
+10. Collision count readbacks (DONE 2026-08-30): the default trajectory
+    filter batches four broad-phase query counters into one D2H synchronization
+    and batches the four PP/PE/PT/EE CUB selection counters into another. Queue
+    overflow handling remains exact and reruns only affected queries. A fully
+    active detect/filter cycle therefore uses two count synchronizations rather
+    than eight. On case 88, trajectory detection changed from 5.07 to 5.01
+    ms/Newton and aggregate DCD from 4.67 to 4.61 ms/detect; the structural
+    synchronization reduction is larger than the noisy wall-time movement.
+    The next host/device target is line-search energy aggregation.
+11. Line-search energy aggregation (DONE 2026-08-30): ABD, FEM, and DyTopo
+    reporters now publish totals to contiguous device slots. One final CUB
+    reduction writes to a separate slot, followed by one contiguous D2H copy
+    for reporter diagnostics and the aggregate. On case 88, initial/trial
+    energy evaluations improved by 15.2%/17.3%, aggregate line search improved
+    by 5.0% per Newton iteration, and wall mean/median moved from 162.7/182.3
+    to 158.1/178.4 ms/frame. The next evidence-led target remains raw
+    contact/FEM gradient-Hessian assembly.
+12. Raw contact/FEM assembly (DONE 2026-08-30): SNH now projects its `9x9`
+    material Hessian directly into ten `3x3` vertex blocks instead of forming
+    dense `9x12` and `12x12` intermediates. Stack use fell 6440 -> 1320
+    bytes/thread, the SNH kernel fell 1.795 -> 1.047 ms/call (-41.7%), and
+    case-88 `Assemble Subsystems` fell 3.60 -> 2.97 ms/Newton (-17.6%). IPC
+    contact keeps a single heterogeneous launch but compile-time specializes
+    gradient-only versus Hessian work. A per-stencil split was measured and
+    rejected: serial PT/EE kernels raised DyTopo assembly 4.52 -> 7.67
+    ms/Newton despite smaller static stack frames. Final DyTopo assembly is
+    4.47 ms/Newton, and two clean wall runs measured 156.0-157.0 ms mean /
+    173.1-173.9 ms median.
+13. Backend module boundary (DONE 2026-08-30): test and packaged builds now
+    use the same shared-library artifact semantics. A required
+    `uipc_query_module` handshake validates ABI version, libuipc major/minor,
+    and backend identity before PMR synchronization or engine construction.
+    This prevents stale/mixed backend DLLs from reaching the C++ virtual ABI.
+14. CUDA build ownership (DONE 2026-08-30, corrected 2026-08-31 and
+    2026-09-01): 198 compiled
+    backend sources belong to seven primary domains and one optional
+    legacy-collision component, followed by one final RDC device-link into the
+    existing backend DLL. Matching CMake/XMake manifests reject unowned and
+    multiply-owned sources. CMake uses internal OBJECT targets; XMake keeps the
+    same logical partition but attaches sources to the final target because its
+    device-link omits CUDA OBJECT dependencies.
+    CMake's final target additionally owns one generated comment-only CUDA
+    language anchor because Visual Studio otherwise omits the RDC device-link
+    when all real CUDA sources arrive through OBJECT expressions. Functional
+    source ownership remains unchanged.
+15. Scene configuration ownership (DONE 2026-08-30): typed runtime defaults and
+    machine-readable schema metadata now come from one declaration. The public
+    normalized schema remains exactly equivalent, while future key additions can
+    no longer silently update only one of the two former parallel lists.
+16. SimSystem topology (DONE 2026-08-30): creator instantiation and every
+    collection traversal now use one deterministic complete-type-name order;
+    exact lookup uses `std::type_index`, compatible lookup skips invalid
+    variants, and active strong-dependency cycles fail with an explicit path.
+17. Legacy collision isolation (DONE 2026-08-30): the three alternate simplex
+    trajectory filters have a dedicated optional component. Lean builds omit
+    the sources and registrations, while the build-specific scene schema drops
+    the unavailable selectors instead of accepting a configuration that can
+    only fail later during backend system construction.
+18. Test/performance entry points (DONE 2026-08-30): isolated sim cases support
+    stable manifests and round-robin shards without replacing the aggregate
+    pollution test; CTest GPU aggregates share a resource lock; the Stiff-GIPC
+    case2 sample has a root-owned benchmark contract and revision-recording
+    runner instead of another copied scene.
+19. Decision/evidence retention (DONE 2026-08-30): accepted architecture now
+    has numbered ADRs, performance work has an evidence policy/template and a
+    case2 roll-up, and `handoff.md` is explicitly the chronological trail rather
+    than the sole permanent home for rationale and measurements.
+20. CI portability follow-up (DONE 2026-08-31): XMake CUDA sources now stay on
+    the final shared target, which supplies the source-root include,
+    backend-directory definitions, shared-library PIC behavior, and the one
+    complete RDC device-link on both platforms. This replaces an intermediate
+    OBJECT-target implementation that failed successively on missing includes,
+    definitions, Linux PIC, and finally Windows device-link. The repository
+    contract guards the final-target ownership requirement. In addition,
+    repository-contract tests no longer confuse an intentionally unmaterialized
+    samples submodule with an invalid benchmark declaration.
+21. Thin-shell reference measure (DONE 2026-09-01): elastic and both plastic
+    Discrete Shells paths retain the paper's complete `L0/h_bar = 3L0^2/A`
+    metric and no longer multiply the adjacent area a second time. The stored
+    thickness is consistently the one-sided collision radius `r`: formula-based
+    bending uses full thickness `2r`, and Baraff-Witkin stretch uses `2r` while
+    its separately calibrated shear coefficient remains thickness-independent.
+22. QR-SVD float sign transfer (DONE 2026-09-01): the Wilkinson shift in
+    libuipc, GPU_IPC, and Stiff-GIPC no longer calls the standard-library
+    sign-copy function from host/device templates. It applies the sign with a
+    branch in the original scalar type and defines `sign(0)=+1`; a libuipc CUDA
+    regression instantiates and executes the float path on the GPU.
 Every such change must re-pass the full sim suite (currently 95 cases / 14212
 assertions).
 
@@ -145,29 +280,22 @@ assertions).
 
 ## Open issues
 
-- **Nanobind migration is only validated through XMake on Linux/CPython
-  3.12-3.13**: the product extension, CPython 3.12 CPU wheel, recursive stubs,
-  portable tests, a CPython 3.12 CUDA release build, CUDA-engine smoke test,
-  and the `wrecking_balls` sample pass with the local 3.0.0 overlay. CMake
-  metadata is statically synchronized, but no CMake command was run. Still
-  required before release: CMake build/import/stub parity, Windows, the full
-  CUDA-marked Python suite, and the CPython 3.10-3.14 matrix. The overlay now
-  follows the official recipe's automatic Python dependency resolution. Since
-  the static nanobind core is ABI-specific, shared XMake package caches must be
-  isolated or cleared when switching Python minors.
-- **PyPI 0.0.26 Windows wheel needs the CUDA 12 cuBLAS runtime**: package
+- **Published wheels through 0.0.27 need the CUDA 12 cuBLAS runtime; current
+  source removes it**: package
   installation and `import uipc` succeed, but `Engine("cuda", ...)` fails on
   a CUDA 13.2-only machine because `uipc_backend_cuda.dll` directly imports
   `cublas64_12.dll`; the machine provides only `cublas64_13.dll`. This is not
   a missing bundled vcpkg DLL and not a driver-compatibility problem. Current
-  workaround: install CUDA 12.8 side-by-side and expose its `bin` directory,
-  or build from source against CUDA 13. The immutable 0.0.26 wheel cannot be
-  corrected in place. The next-release policy keeps the explicit system CUDA
-  12.8 runtime, adds CPython 3.14, replaces the Ada-only code image with native
-  7.5/8.0/8.6/8.9 images plus 8.9 PTX, embeds build metadata, and ships
-  `python -m uipc doctor`. Remaining before calling this closed: release those
-  wheels and add a GPU-capable CI job that constructs the CUDA engine; a hosted
-  no-GPU import/none-backend smoke test is insufficient.
+  workaround for 0.0.27: install CUDA 12.8 side-by-side and expose its `bin`
+  directory, or build from current source. The source tree now replaces the
+  remaining cuBLAS dot/norm calls with persistent raw-CUDA/CUB reductions and
+  audits every wheel for dynamic Toolkit dependencies. Future wheels require a
+  compatible NVIDIA driver rather than a local Toolkit: the base CUDA 12.x
+  floor applies to packaged SASS, while PTX-only GPUs require the recorded CUDA
+  12.8 JIT-driver floor. Remaining before
+  calling the release-level issue closed: publish those wheels and add a
+  GPU-capable CI job that constructs the CUDA engine; hosted binary inspection
+  plus the no-GPU smoke test cannot prove actual driver/GPU execution.
 - **CUDA-graph capture crash in the C++ suite binary (worked around)**: with
   Timer objects created inside the captured call chain, the single-process
   suite deterministically fail-fasted (0xC0000409) at the second engine's
@@ -179,9 +307,13 @@ assertions).
   interaction with stream capture in the test binary; if someone revisits,
   start from `scripts/run_sim_case_isolated.py` + a binary-search over
   engine-count.
-- **Remaining case2 gap after the PCG graph work**: measure again with the
-  graph on; the next levers are BVH distance-fusion and FEM assembly
-  throughput (doc above).
+- **Performance work must start from the current four-scene baseline**: graph
+  replay, DCD distance fusion, SNK1, discard-aware growth, batched readbacks,
+  and direct FEM/contact assembly are already included. The synchronized
+  diagnostic has no single universal hotspot: rigid is global-solve/assembly
+  heavy, MAS bunny is linear-solve heavy, and case2/wall-cloth distribute cost
+  across solve, line search, trajectory detection, DyTopo, and DCD. Profile the
+  target scene before selecting another lever.
 
 ## External PRs under review
 
@@ -197,7 +329,7 @@ assertions).
   merged; a fix round was scoped and then declined for now. If revived:
   port to cuda_tool raw kernels, write `ecm_tet_geo_id`, fill all reported
   doublet slots, move the forward hook into the Newton loop, populate the
-  frame-0 positions, add Python bindings + tests.
+  frame-0 positions, add pybind + tests.
 - **libuipc-samples PR #5** (hugooole, keyboard→imgui in case 4): reviewed,
   safe to merge; would only want `keyboard` dropped from requirements.txt.
 

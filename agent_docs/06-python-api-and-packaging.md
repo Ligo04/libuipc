@@ -1,43 +1,14 @@
 # 06 — Python API and Packaging
 
-## Binding implementation
+## pybind structure (`src/pybind/pyuipc/`)
 
-The native Python extension has one implementation:
-
-- `src/nanobind/pyuipc/` contains the nanobind 3.0.0 implementation.
-
-CMake enables it with `UIPC_BUILD_PYTHON_BINDINGS`; XMake uses
-`--python_bindings`. The former `UIPC_BUILD_PYBIND` and `--pybind` switches
-remain deprecated compatibility aliases. Nanobind is always the implementation.
-
-### Nanobind implementation (`src/nanobind/pyuipc/`)
-
-`NB_MODULE(pyuipc, m)` in the entry `module.cpp`:
+`PYBIND11_MODULE(pyuipc, m)` in the entry `module.cpp`:
 
 - Submodules: `unit`, `geometry`, `constitution`, `diff_sim`, `core`, `backend`, `builtin`, `usd`. The `usd` module object is created unconditionally, but USD classes are registered only when `UIPC_WITH_USD_SUPPORT` is enabled.
 - C++ namespaces `pyuipc::xxx` map one-to-one to Python submodules `pyuipc.xxx`; each subdirectory has its own `module.cpp` that binds classes one by one via the `PyXxx{m}` constructor.
 - **Early exposure**: the main `module.cpp` first binds the core data structures (`PyFeature`, `PyBufferView`, `PyAttributeSlot`, `PyGeometry`, `PySimplicialComplex`, the various Slots, `PyParameterCollection`), then calls each submodule's `PyModule` (geometry utilities/IO depend on core types).
 - Top-level aliases: `Engine`, `World`, `Scene`, `SceneIO`, `Animation` are promoted to the `pyuipc` top level; also registers `init`, `default_config`, `config`, `build_info`, `uipc::Exception`, `__version__`. `build_info()` reports the compiled Python ABI, build type, CUDA-backend flag, CUDA architectures, and toolkit version for runtime diagnosis.
-- Build: CMake uses `nanobind_add_module(pyuipc NB_STATIC)` so nanobind's
-  default size optimization remains active. `UIPC_NANOBIND_NOMINSIZE=ON` is an
-  explicit comparison-only opt-out; it is not the default. XMake links the
-  repository-local static nanobind 3.0.0 package. Both targets link
-  `uipc::uipc`/the equivalent component libraries and depend on every backend.
-  The XMake overlay follows the official recipe's automatic dependency
-  resolution while matching nanobind's upstream Python floors: releases before
-  2.10 require `python >=3.8`, 2.10-2.12 require `python >=3.9`, and 3.x
-  requires `python >=3.10`. Project-level `add_requireconfs` may constrain that
-  dependency, but the concrete interpreter is selected by the outer XMake
-  configuration/environment. The static nanobind core is
-  Python-ABI-specific, so builds that switch Python minors must isolate or
-  clear the nanobind package cache.
-  Backend target files are also `LINK_DEPENDS` in CMake, so changing only a
-  backend still relinks pyuipc and runs POST_BUILD
-  `scripts/after_build_pyuipc.py` (copies the package/runtime libraries,
-  regenerates `.pyi`, and refreshes the development install). CMake and XMake
-  both call `scripts/stubgen.py`, which invokes nanobind stubgen. Linux CI then
-  compares the complete CMake stub directory with the XMake wheel using
-  `scripts/compare_stub_trees.py`; matching filenames alone is insufficient.
+- Build: `pybind11_add_module(pyuipc)` links `uipc::uipc` and depends on every backend. Backend target files are also `LINK_DEPENDS`, so changing only a backend still relinks pyuipc and runs POST_BUILD `scripts/after_build_pyuipc.py` (copies the package/runtime libraries, regenerates `.pyi`, and refreshes the development install).
 
 ## Python package layout (`python/src/uipc/`)
 
@@ -71,15 +42,27 @@ torch/warp adapters still require their own optional frameworks.
 - `python/src/uipc/compatibility.json` is the canonical release support policy.
   `scripts/check_release_policy.py` verifies both pyprojects, classifiers, the
   workflow ABI/toolkit matrix, and the CMake wheel architecture list against it.
-- `wheel.packages = ["python/src/uipc"]`; CMake defines `UIPC_BUILD_PYTHON_BINDINGS/WHEEL=ON`, targets `75-real;80-real;86-real;89-real;89-virtual`, and disables tests/examples/benchmarks. This gives Turing/Ampere/Ada native code plus a forward-compatible PTX path instead of the 0.0.26 wheel's Ada-only target.
+- `wheel.packages = ["python/src/uipc"]`; CMake defines `UIPC_BUILD_PYBIND/WHEEL=ON`, targets `75-real;80-real;86-real;89-real;120-real;89-virtual`, and disables tests/examples/benchmarks. This gives Turing/Ampere/Ada/Blackwell-consumer native code plus a forward-compatible PTX path. Every final, component, and test CUDA target uses `uipc_set_target_cuda_architectures(...)`, which sets the property without list expansion and reads it back as a configure-time invariant; 0.0.27 and earlier shipped Turing-only SASS with no PTX because raw `set_target_properties` truncated the list.
 - When `if(DEFINED SKBUILD)`, `UIPC_INSTALL_DIR = uipc/_native`: the pyuipc extension + vcpkg runtime DLLs are all installed into `_native/` inside the package; `.pyi` stubs are installed to the package root.
-- cibuildwheel: on linux, auditwheel excludes all CUDA libraries (relies on system CUDA 12.8).
-- The Windows wheel also relies on the system CUDA 12 runtime. In 0.0.26,
+- cibuildwheel: on Linux, auditwheel defensively excludes CUDA Toolkit
+  libraries. The current backend has no dynamic Toolkit dependency; a
+  post-build `readelf`/`dumpbin` audit rejects any regression before upload.
+- On Windows, scikit-build-core may select the Visual Studio generator. The
+  final CUDA target owns a generated comment-only `.cu` language anchor so VS
+  schedules the RDC device-link for the 198 functional objects supplied by
+  CMake OBJECT domains. Without it all ABI jobs reach the final DLL and fail
+  with unresolved `__cudaRegisterLinkedBinary_*` symbols. This is a general
+  CMake multi-config fix, not a wheel-only Ninja override.
+- Published wheels through 0.0.27 rely on the system CUDA 12 runtime:
   `dumpbin /DEPENDENTS uipc_backend_cuda.dll` shows a direct
-  `cublas64_12.dll` import. CUDA 13 installs only `cublas64_13.dll`, so a
-  CUDA 13-only machine can import `uipc` but cannot construct
-  `Engine("cuda", ...)`. The prebuilt-wheel compatibility statement must say
-  CUDA **12.8 runtime**, not "12.6+". Source builds can target CUDA 13.
+  `cublas64_12.dll` import. Current source replaces the four cuBLAS dot/norm
+  calls with persistent raw-CUDA/CUB reductions and removes the CMake/XMake
+  link. The resulting backend has no CUDA Toolkit DLL import; future wheels
+  require only a compatible NVIDIA driver. Packaged SASS uses the CUDA 12.x
+  minor-compatibility floors (Linux >=525.60.13, Windows >=528.33); a GPU that
+  relies on the wheel builder's CUDA 12.8 Update 1 PTX JIT instead requires
+  Linux >=570.124.06 or Windows >=572.61. The build toolkit remains 12.8 for a
+  reproducible binary baseline.
 
 **Development mode (`python/pyproject.toml` + `python/setup.py`)**:
 - During the CMake build, `after_build_pyuipc.py` copies `python/src/` + pyproject to `<build>/python/`, copies the extension and shared libraries into `src/uipc/_native/`, generates stubs, and in non-wheel mode runs `pip install` directly.
@@ -92,41 +75,29 @@ torch/warp adapters still require their own optional frameworks.
 the audited revision. Prerequisite: pyuipc installed (CMake build or
 `uv pip install -e .`).
 
-The release matrix covers CPython 3.10-3.14 on Windows and manylinux. The
-immutable 0.0.26 release stops at 3.13; Python 3.14 support begins with the next
-wheel release.
+The release matrix and immutable 0.0.27 release cover CPython 3.10-3.14 on
+Windows and manylinux.
 
 Pytest excludes `example` and `cuda` by default, so the portable unit suite can
 run on wheel builders without a display or NVIDIA device. Select GPU coverage
 explicitly with `pytest -m "cuda and not example" python/tests`; interactive
 examples remain opt-in with `-m example`. Tests that replace `uipc` modules must
 restore `sys.modules` before returning so collection order cannot hide the real
-package. Each cibuildwheel environment runs the metadata/backend smoke test,
-the portable pytest suite, and `mypy --strict` against
-`python/typing_tests/nanobind_api.py` using the installed wheel's generated
-stubs.
+package. Each cibuildwheel environment runs both the metadata/backend smoke test
+and the portable pytest suite against the installed wheel.
 
-Release verification must go beyond `import uipc`: importing loads the native
+Release verification must go beyond `import uipc`: importing loads the pybind
 extension and core DLLs, while the backend is loaded lazily. At minimum create
 `Engine("cuda", temporary_workspace)` from a clean environment; preferably
-advance one asset-free frame. Otherwise a missing CUDA-major runtime dependency
-escapes the smoke test.
+advance one asset-free frame. Binary dependency inspection proves Toolkit
+independence, but only a GPU probe detects driver, code-image, and execution
+failures.
 
 ## Key points for extending bindings
 
-- When adding a new C++ public API, update the nanobind implementation under
-  `src/nanobind/pyuipc/`; the constitution contract check audits this tree.
+- When adding a new C++ public API, consider syncing the pybind side: add a `PyXxx` binding file in the corresponding submodule directory and register it in that directory's `module.cpp`; keep the namespace mapping consistent.
 - Do not break the import chain in `__init__.py` (`pyuipc` → `init()` → `config["module_dir"]`).
 - New binding surfaces need tests added in `python/tests/`.
-- ndarray bindings require layout, writability, aliasing, and owner-lifetime
-  coverage. Shared-pointer returns require an object-identity regression, and
-  Python trampolines must be invoked by a C++ caller rather than by directly
-  calling the Python override.
-- Worker callbacks must handle both queued destruction and interpreter
-  shutdown. `ResidentThread` registers CPython's early threading-shutdown hook,
-  releases the GIL while joining its worker during normal destruction, and
-  abandons captured Python references once shutdown begins or nanobind reports
-  that the interpreter can no longer be entered.
 - Audit exports rather than assuming C++/Python parity. `RotatingMotor` and
   `LinearMotor` are registered by
   `constitution/soft_transform_constraint.cpp`; an earlier hand-maintained audit
@@ -136,12 +107,15 @@ escapes the smoke test.
 ## Packaging/helper invariants
 
 - Root and development metadata both include `matplotlib`, require
-  `pytest>=9.0.3` for the dev extra, and describe the prebuilt-wheel CUDA 12.8
-  runtime requirement consistently.
+  `pytest>=9.0.3` for the dev extra, and describe the prebuilt-wheel NVIDIA
+  driver requirement consistently. `compatibility.json` separately records
+  the 12.8 build toolkit, static runtime policy, and platform driver floors.
 - `python -m uipc doctor [--probe-cuda] [--json]` separates Python ABI, native
-  extension ABI, CUDA runtime-library, backend-load, driver, and GPU-code-image
-  failures. It consumes both packaged `compatibility.json` and native
-  `build_info()` instead of guessing from the package version.
+  extension ABI, self-contained CUDA runtime, backend-load, driver, and
+  GPU-code-image failures. It consumes both packaged `compatibility.json` and
+  native `build_info()` instead of guessing from the package version, selects
+  SASS before PTX when both can serve a GPU, and applies the higher driver floor
+  only when PTX JIT is actually required.
 - The Warp adapter falls back to the dtype's element size when a one-dimensional
   array reports no stride; a focused optional-Warp test covers this path.
 - Python exposes `Scene.Objects.created_count()` as the exclusive object-ID upper
@@ -157,7 +131,12 @@ escapes the smoke test.
   cluster size 16). Old scripts calling `mesh_partition(...)` raise
   ImportError — migrate them to the config switch.
 - `newton/min_iter` semantics narrowed: it is now a pure hard floor with
-  default `0` (no forced minimum). The semi-implicit beta accumulation
-  start moved to `config["newton"]["semi_implicit"]["K_min"]` (default 1).
+  default `0` (no forced minimum). On the standard IPC path, the semi-implicit
+  beta accumulation start lives at
+  `config["newton"]["semi_implicit"]["K_min"]` (default 6), and
+  semi-implicit termination is enabled by default. AL-IPC consumes the same
+  `enable` and `K_min` keys for its cumulative-safe-path delay, but compares
+  remaining weight with `config["contact"]["al-ipc"]["toi_threshold"]`;
+  `beta_tol` is IPC-only.
   Old scenes that set `min_iter` for the Stiff-GIPC Kmin role should set
   `K_min` instead.

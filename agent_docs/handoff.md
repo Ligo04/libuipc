@@ -1,49 +1,410 @@
 # Handoff — Current State of the Repo
 
-> **Nanobind-only Python bindings (updated 2026-09-01,
-> `codex/migrate-pybind-to-nanobind`)**: `src/nanobind` is the only native
-> Python binding implementation. The former `src/pybind` tree, pybind11 build
-> selector, and pybind11 stub-generation path have been removed. CMake enables
-> bindings with `UIPC_BUILD_PYTHON_BINDINGS`; XMake uses `--python_bindings`.
-> `UIPC_BUILD_PYBIND` and `--pybind` remain deprecated compatibility aliases
-> for one transition period. The legacy implementation selectors are also
-> accepted temporarily, but only the value `nanobind` is valid. The package and
-> extension keep the public name `pyuipc`. The last pre-cleanup CI baseline at
-> commit `b1baeacc8c2e7e57cc845d67e1ef0dc49582e14a` passed both CMake jobs, both
-> XMake jobs, all ten Linux/Windows CPython 3.10-3.14 wheel jobs, and repository
-> contracts. Fresh Linux validation uses the project `.venv` (CPython 3.12.3):
-> all repository script tests pass (29 tests and 6 subtests); a clean CMake CPU
-> Release build compiles `pyuipc`, generates ten recursive stubs, installs, and
-> runs `Engine("none")`; local XMake `3.1.1+HEAD.3ba37a0` builds and packages an
-> installable 6,068,323-byte wheel whose TBB libraries load from
-> `uipc/_native`. Both deprecated enable aliases resolve to nanobind, while an
-> attempted `pybind11` selector is rejected by CMake and XMake. Fresh remote CI
-> is still required before this cleanup becomes the new cross-platform baseline.
-> Follow-up migration gates cover ndarray layout/ownership, shared object
-> identity, C++-driven Python trampolines, and queued `ResidentThread`
-> destruction. Wheel CI runs a real mypy usage contract, Linux CI compares the
-> exact CMake/XMake stub contents, XMake uses a committed package lock, and
-> CMake keeps nanobind's default size optimization unless an explicit
-> `UIPC_NANOBIND_NOMINSIZE=ON` comparison is requested. Temporary
-> migration-branch push triggers and unrelated GUI test markers were removed.
-> Hosted XMake and the ten-wheel Linux/Windows matrix pass on commit
-> `9d1c6524953ea339c4121916263f1d933e1487d2`. The same CI cycle confirmed exact
-> CMake/XMake stub equality, then exposed that a system-Python parity build
-> rewrote lock entries with GitHub runner versions. Run `33500813585` confirmed
-> that non-system Python fixes the Python/TBB entries and preserves exact stub
-> equality, but XMake still serializes detected versions for `cmake`, `libffi`,
-> `ninja`, and `openssl`. Parity validation therefore compares portable lock
-> content strictly while normalizing only those four host-version fields;
-> wheel builds continue to use the active setup-python interpreter. That run's
-> Windows job was cancelled by matrix fail-fast after the Linux lock check.
-> On the same CPython 3.12 CPU Release source, the default nanobind optimization
-> produced a 2,026,432-byte extension; `NOMINSIZE=ON` produced 2,714,112 bytes
-> (+687,680 bytes, +33.94%), so the default is retained.
-> Local follow-up validation: CMake and XMake CPU Release builds; installable
-> XMake CPython 3.12 wheel; exact equality across all ten generated stub files;
-> 89 portable pytest cases (54 deselected); 33 repository/script tests; eight
-> focused lifecycle/ownership tests against each build; mypy strict, Ruff,
-> clang-format-18, workflow pins, YAML parsing, and CPU `Engine("none")` smoke.
+> **Routing note (2026-08-30)**: this file is the chronological audit trail and
+> may retain detailed commands/incidents. New durable architecture rationale
+> belongs in `agent_docs/adr/`; reusable performance conclusions and rejected
+> experiments belong in `agent_docs/performance/`. Add a short handoff pointer
+> instead of growing this file as the only source of truth.
+
+> **Embedded C++ METIS migration (2026-09-03, `refactor-main`)**: geometry now
+> links the private `uipc_metis` target from `src/geometry/metis/`; the separate
+> `external/METIS` and `external/GKlib` source trees and build targets were
+> removed. CMake and XMake keep METIS independently compilable and exclude its
+> sources from direct `uipc_geometry` compilation. The C++ port was made
+> const-correct for diagnostic strings and self-contained for modern MSVC.
+> Unused glibc getopt/regex/qsort and optional MT19937-64 sources were removed;
+> required sorting now uses a clean in-tree deterministic C++
+> partition/insertion implementation that preserves the former equal-key
+> ordering, so only the METIS/GKlib Apache notices remain. A deterministic
+> public `mesh_partition` regression covers the linked
+> API; zero-sized partitions, 32-bit capacity overflow, and invalid returned
+> partition IDs are rejected before division or indexing. Portable CPU/wall
+> timers and out-of-core temporary-file removal replace incomplete port stubs.
+> Against preserved pre-removal C binaries, three synthetic graph families,
+> four full `fluffy_ball.msh` configurations, and two `animal_well.msh`
+> configurations on both Windows/MSVC and Linux/GCC produced identical return
+> codes, edge cuts, and every per-vertex partition ID on the same platform. See
+> [`ADR 0007`](adr/0007-embedded-cpp-metis.md) for exact hashes and boundaries.
+> PR #492's first Linux XMake run caught a compiler-filtered `-fPIC` flag being
+> silently omitted from `uipc_metis`; the target now applies the C++ flag
+> without a tool-name filter while retaining XMake's support probe, matching
+> CMake's PIC property and allowing its
+> thread-local GKlib state to link into `libuipc_geometry.so`. The adjacent
+> GNU/POSIX `strerror_r` portability warning was fixed at the same time so Linux
+> error paths return the correct diagnostic string.
+
+> **AL-IPC sample 88 trajectory correction (2026-09-03, `refactor-main`)**:
+> the severe early trajectory split was traced to AL ignoring the configured
+> `K_min=6`, an EE friction derivative assembled with the PT Jacobian, and the
+> uniform `diag_norm` penalty being unsuitable as the default for mixed
+> cloth/volumetric masses. AL now delays cumulative safe-path attenuation until
+> `K_min`, uses the correct EE Jacobian, and defaults to mass-based `per_vertex`
+> scaling while keeping `diag_norm` experimental. Exhausted line search restores its recorded start
+> point rather than accepting the last energy-increasing trial. PT/EE/plane
+> finite-difference tests pass, as does the AL `K_min` simulation assertion.
+> In matched 60-frame sample 88 runs, upper/lower centroid error versus IPC fell
+> from 0.2963/0.0807 to 0.0115/0.0045. A full corrected 250-frame run completed
+> with all 250 frames converged and no line-search limit, Newton limit, or
+> runtime error. See the durable evidence and
+> regression boundary in
+> [`2026-09-03-al-ipc-case88-correction.md`](performance/2026-09-03-al-ipc-case88-correction.md).
+> **Parallel-EE policy (2026-09-03, `refactor-main`)**: standard IPC retains
+> normal `need_mollify()` detection with coefficient `1e-3` and its complete
+> mollified normal energy/gradient/Hessian; standard IPC friction skips the
+> detected parallel pairs. AL-IPC uses the shared negative disabled threshold
+> for both normal and frictional contact, so all AL pairs follow ordinary EE
+> paths. The CUDA regression checks both threshold behaviors with exactly
+> parallel edges.
+> Final validation passed CMake/Core 36 cases / 1040 assertions, CUDA backend
+> 22 / 335, the single-process simulation suite 95 / 14213, Python portable
+> tests 80 passed / 1 skipped, repository contracts 43/43, fast CTest 3/3,
+> the complete Doxygen/MkDoxy/MkDocs build, and the XMake production CUDA
+> target. XMake's aggregate CUDA test target still encounters the already
+> documented CUDA 13.2/fmt 12 character-literal incompatibility; the CMake
+> build compiled and executed every new CUDA test.
+
+> **AL-IPC `AL-release` integration audit (2026-09-02, `refactor-main`)**:
+> the six fork-only commits were reviewed against current libuipc and the
+> AL-IPC paper rather than cherry-picked across 188 intervening local commits.
+> The useful core is reimplemented in current `cuda_tool`: per-vertex
+> earliest-TOI candidate filtering (excluding existing pairs), decay-derived
+> active-pair lifetime, stable preservation of old pair state, configurable
+> Hessian-diagonal penalty initialization, AL-specific CCD safety margin, and
+> the full-step boundary between inner Newton work and outer multiplier/CCD
+> updates. Scratch is persistent and amortized. Important fork defects were
+> not copied: its 32-bit `__float_as_int` atomic corrupts this project's
+> double-precision `Float`; its fixed 25-update lifetime disagrees with the
+> documented `gamma < 0.01` rule; it includes existing pairs in the candidate
+> minima; and its raw displacement convergence test discards the current
+> `NewtonToleranceManager`. The fork's global CCD-margin edit was scoped to
+> AL-IPC so normal IPC retains its established margin. Large benchmark assets,
+> screenshots, and unrelated example/README edits were intentionally omitted.
+> At this audit revision AL kept its pre-existing `K_min = 1`
+> cumulative-safe-path termination; the 2026-09-03 correction above supersedes
+> that limitation with the configured multi-state `K_min > 1` rule. On
+> CUDA 13.2 / RTX 5090, CMake and XMake production builds passed, as did the
+> focused AL math test (17 assertions after final review), Core (36 cases /
+> 1040 assertions), CUDA backend (17 / 291), all 19 AL sections, and the full
+> single-process simulation suite (95 / 14212). Repository contracts passed
+> 43/43, the current native Python schema reports 48 keys, and the full
+> Doxygen/MkDoxy/MkDocs site built. In mixed ABD/FEM case 18, maximum active
+> pairs fell from 81 to 42 and total PCG iterations from 1125 to 700; outer
+> solves rose from 114 to 135, so future performance claims must still use the
+> canonical large scenes.
+
+> **cuBLAS-free CUDA runtime boundary (2026-09-02)**: published wheels through
+> 0.0.27 directly import CUDA 12 cuBLAS, but current source no longer uses or
+> links cuBLAS. `LinearSystemContext` dot/norm now use named block-partial
+> kernels plus CUB final reduction; partial/result storage is persistent and
+> geometrically grown, CUB scratch remains per-stream and persistent, and norm
+> uses a scaled-square state to avoid overflow/underflow. The heavy reduction
+> header is included only by the three calling TUs and focused CUDA test, so the
+> lightweight `linear_system.h`/`cuda_tool.h` path does not transitively pull in
+> all CUB algorithms. CMake and XMake links are synchronized. A wheel CI audit
+> rejects dynamic Toolkit libraries via dumpbin/readelf; compatibility policy
+> requires driver >=525.60.13 (Linux) or >=528.33 (Windows) when a packaged
+> SASS image applies, and >=570.124.06 / >=572.61 when the CUDA 12.8 Update 1
+> PTX image must be JIT compiled. Final
+> CUDA 13.2/RTX 5090 validation passed the CMake and XMake backend builds, the
+> 12-assertion focused reduction test, all 274 CUDA-backend assertions, all
+> 14,212 assertions in the 95-case simulation suite, four representative
+> benchmark scenes, 43 repository-script tests, 79 portable Python tests, the
+> real CUDA doctor probe, and a full Doxygen/MkDoxy/MkDocs build. Both local
+> build systems produced a backend DLL with no CUDA Toolkit imports.
+
+> **Windows wheel RDC fix (2026-09-01)**: `main@b6f2b006` had five real
+> Windows wheel failures; CMake, XMake, repository contracts, and all five Linux
+> wheels passed. scikit-build-core's Visual Studio generator compiled all 198
+> domain OBJECT sources with RDC but omitted `nvcc -dlink`, ending with 198
+> unresolved `__cudaRegisterLinkedBinary_*` symbols. A minimal cross-TU CUDA
+> probe reproduced the failure for both OBJECT attachment idioms. Giving the
+> final shared target one directly owned, generated comment-only `.cu` source
+> made Visual Studio emit the correct device-link and the probe passed. CMake
+> now carries that language anchor; domain ownership and XMake are unchanged,
+> and a repository contract prevents its removal. Validation then configured
+> the real project with the Visual Studio 2022 generator, compiled all 198 CUDA
+> sources, executed `nvcc -dlink` over every domain object, produced and loaded
+> the 17,622,528-byte `uipc_backend_cuda.dll`, and passed `0_abd_gravity`
+> (IPC + AL-IPC, 178 assertions). The existing Ninja build also regenerated,
+> device-linked, and rebuilt `sim_case` successfully; repository contracts pass
+> 36/36. GitHub then passed CMake run `33490698492`, XMake run `33490698388`,
+> and Repository Contracts run `33490698389`. A manual non-publishing wheel run
+> `33490746393` passed all ten CPython 3.10–3.14 Windows/Linux jobs; the five
+> Windows jobs that had failed on `main` now build, install-test, and upload
+> successfully.
+
+> **Canonical benchmark suite expansion (2026-09-01)**: root benchmark
+> ownership now covers sample 6 (`rigid-wrecking-balls`), 88
+> (`stiff-gipc-case2`), 89 (`mas-bunny`), and 93 (`cube-wall-cloth`). The sample
+> implementations share machine-readable headless reporting without changing
+> scene parameters. Normal runs keep synchronized Timer scopes off and archive
+> full-precision frame times, backend Newton/line-search/linear-solver counts,
+> final-state observables, raw logs, revisions/runtime facts, and an approximate
+> WDDM total-memory peak; separate Timer-enabled runs provide stage diagnostics.
+> All four entries completed real three-frame smoke runs and then three full
+> interleaved throughput runs. Median run means on RTX 5090/CUDA 13.2 are
+> 129.5 ms/frame (rigid, 120 frames), 201.1 (case2, 250), 60.2 (MAS bunny,
+> 100), and 125.6 (wall/cloth, 100); all frames completed/converged with no
+> iteration-limit hits. Collision-rich trajectories and WDDM memory/timing
+> have measured envelopes rather than exact goldens. Durable method, raw run
+> IDs, stage diagnostics, and interpretation are in
+> `agent_docs/performance/2026-09-01-cross-domain-baseline.md`; historical
+> 73/156/301 ms notes below are not the current baseline.
+
+> **Post-merge clang-format race fix (2026-09-01)**: PR #486 merged while its
+> format job was running. The job then fetched moving `origin/main` with
+> `--depth=1`, replacing the original PR base and producing `no merge base`;
+> no source formatting violation occurred. The workflow now diffs the immutable
+> pull-request `base.sha...head.sha`, and a repository contract prevents the
+> moving shallow-fetch pattern from returning.
+
+> **QR-SVD float sign hardening (2026-09-01)**: the Wilkinson shift in
+> libuipc, GPU_IPC, and Stiff-GIPC now computes its magnitude in the template
+> scalar type and applies the sign with `d < 0 ? -shift : shift`, explicitly
+> taking `sign(0)=+1`. This removes the unsafe standard-library sign-copy call
+> from CUDA float paths. The sibling commits are GPU_IPC `4fb6019` and
+> Stiff-GIPC `bb2849a`. Libuipc has a named-kernel regression covering float
+> positive, negative, and negative-zero inputs on the GPU; the repository
+> contract also forbids reintroducing the call. A standalone CUDA 13.2 / sm_120
+> execution returned `[-1, -0.414213538, 2.41421366]`; libuipc's complete CUDA
+> backend built with device-link in 541 seconds and sim_case passed 95 cases /
+> 14212 assertions. GPU_IPC and Stiff-GIPC both completed full Release builds;
+> GPU_IPC also completed one frame. Stiff cases 1 and 2 remain blocked before
+> QR-SVD by their pre-existing `DeviceBuffer allocation size overflow` during
+> initial triplet allocation. The local aggregate backend test target remains
+> blocked by the unrelated CUDA 13.2/fmt 12 character-literal issue, although
+> the new test translation unit itself compiles.
+
+> **Samples cloth calibration (2026-09-01)**: at that checkpoint,
+> `libuipc-samples/main` ended at `4e83b83` and the parent gitlink followed it.
+> The later benchmark contract advances the gitlink to `4fb26b7` on the
+> samples `benchmark-baseline` branch; measurements used its scene-identical
+> instrumentation parent `8701983`, and the child only corrects benchmark
+> prose. All
+> eight simulated-cloth
+> examples use Baraff-Witkin membrane plus formula-based Discrete Shell
+> bending with one-sided thickness `r=1e-3` and density 200. Example 88 remains
+> the common baseline (`stretch E=5e4`, `shear E=1e1`, `nu=0.49`,
+> `strain_rate=100`, `bending E=3e4`); subsequent owner tuning sets example 11
+> to stretch/bending `E=1e4`, example 34 to `E=1e4`, `nu=0.40`, and example 93
+> to `strain_rate=10000`. Python syntax checks passed for every changed scene.
+
+> **Semi-implicit Newton default (2026-09-01, `refactor-main`)**:
+> `newton/semi_implicit/enable` now defaults to `1` and
+> `newton/semi_implicit/K_min` defaults to `6`. The beta tolerance remains
+> `1e-3`, and `K_min` remains an accumulation start rather than a hard Newton
+> iteration floor; `newton/min_iter` is still the separate floor and defaults
+> to zero. The scene-config schema test locks both new defaults. Validation
+> passed Core 36 cases / 1005 assertions and the complete CUDA sim suite 95
+> cases / 14212 assertions.
+
+> **Thin-shell reference-weight correction (2026-09-01, `refactor-main`)**:
+> the elastic, strain-plastic, and stress-plastic Discrete Shells paths had
+> multiplied their already integrated `L0/h_bar = 3L0^2/A` metric by `A` a
+> second time. Their generic outer weight is now neutral, preserving the
+> paper's inverse-area normalization and uniform-scale invariance. The stored
+> vertex `thickness=r` is explicitly one-sided: formula-based bending uses
+> `E*(2r)^3/(12*(1-nu^2))`, and Baraff-Witkin stretch uses
+> `(lambda+2mu)*(2r)`. Its separately calibrated shear coefficient remains
+> thickness-independent. Focused regression coverage checks all three bending
+> variants at two uniformly scaled rest hinges. Validation passed repository
+> contracts 30/30, Core 36 cases / 1001 assertions, the full CUDA backend build
+> including device-link, sim_case 95 cases / 14212 assertions, and the focused
+> MAS stitch regression 1 case / 4 assertions. Rebuilding the complete local
+> CUDA test executable remains blocked by the existing CUDA 13.2/fmt 12
+> character-literal incompatibility in unrelated `.cu` tests; the new host-side
+> reference-weight test itself compiles.
+
+> **GitHub check portability fixes (2026-08-31, `refactor-main`)**: successive
+> full XMake runs exposed that CUDA OBJECT dependencies first lacked the project
+> `src/` include, then backend definitions, then Linux PIC, and finally did not
+> enter XMake's CUDA device-link at all. The last issue produced 198 unresolved
+> `__cudaRegisterLinkedBinary_*` symbols on Windows; Linux had allowed the same
+> unresolved references in a shared object. The final design keeps CMake OBJECT
+> targets, but XMake attaches its matching logical component manifest directly
+> to the one shared target. That gives both platforms one complete RDC
+> device-link and inherits the final target's includes, definitions, and PIC.
+> A repository-contract test prevents reintroducing XMake CUDA OBJECT
+> dependencies. Repository Contracts deliberately checks out no submodules, so
+> its benchmark-manifest test now
+> validates the declaration without requiring
+> samples assets; runtime asset validation has an isolated partial-checkout unit
+> test. Rapid-push cancellations were concurrency behavior, not additional
+> source failures. Local repository contracts passed 29/29. A clean Windows
+> `xmake build --jobs=8 cuda` emitted the expected
+> `devlinking.release uipc_backend_cuda_gpucode.cu.obj`, linked the DLL, and
+> completed in 574.109 seconds; a legacy-off configuration omitted exactly the
+> three legacy filter sources. The local XMake configuration was then restored
+> to legacy-on and native architecture selection.
+
+> **Aggregate architecture validation (2026-08-30, through `67ff50c3`)**:
+> the default Release build completed for Core, none/CUDA backends, and all
+> native test targets. CTest passed 7/7 aggregates with CPU work concurrent and
+> all four GPU entries serialized by `uipc_gpu`; this includes sim_case 95 /
+> 14212. Python passed 79 portable tests (1 skipped, 54 deselected) and 48 CUDA
+> non-example tests (1 skipped, 85 deselected). Repository/script contracts
+> passed 27/27; default, legacy-off, and CUDA-off XMake configurations parsed;
+> full MkDocs+Doxygen output built; clang-format-18 passed for every C++ change
+> versus `origin/main`. Both tracked submodules were clean and `refactor-main`
+> matched `origin/refactor-main` before this documentation checkpoint.
+
+> **ADR and performance evidence archive (2026-08-30, `refactor-main`)**:
+> five accepted ADRs now cover the backend handshake, CUDA component boundary,
+> scene-config contract, deterministic SimSystem topology, and test/benchmark
+> entry points. `agent_docs/performance/` defines evidence/interpretation rules,
+> provides a reusable template, and consolidates the four 2026-08-30 case2
+> assembly stages plus the rejected stencil split. Existing handoff history is
+> preserved rather than rewritten. Archive numbering/sections/local links are
+> enforced by the scripts contract suite (27/27 passed).
+
+> **Test sharding and benchmark registry (2026-08-30, `refactor-main`)**:
+> the 95-case single-process `uipc.sim_case` remains the authoritative
+> global-state-pollution regression. `run_sim_case_isolated.py` now also emits
+> JSON manifests and stable sorted round-robin shards for parallel diagnosis;
+> a real 4-way discovery produced 24 cases in shard 0. CTest serializes its four
+> aggregate GPU executables through the `uipc_gpu` resource lock while allowing
+> CPU concurrency. Root `benchmarks/manifest.json` promotes samples example 88
+> as `stiff-gipc-case2`; `run_benchmark.py` validates assets/canonical env and
+> records both git revisions plus run status. Validation: runner unit tests 8
+> passed (complete scripts contract suite 25/25), dry-run/list, and an actual
+> one-frame case2 run (return 0, metadata written with hardware/runtime facts
+> and parsed frame timing).
+
+> **Optional legacy collision component (2026-08-30, `refactor-main`)**:
+> the V0, stackless, and linear-BVH simplex trajectory filters now belong to
+> the logical `collision_legacy` component (CMake target
+> `cuda_collision_legacy_objects`), separate from the default collision path.
+> Compatibility builds retain all 198 CUDA sources; setting
+> `UIPC_WITH_CUDA_LEGACY_COLLISION=OFF` or
+> `cuda_legacy_collision=false` omits those three registrations and links 195
+> sources. The scene schema carries the same build capability and exposes only
+> selectors present in the DLL. A CUDA integration test constructs an engine
+> for every advertised selector. Validation covered CMake/XMake ON and OFF,
+> Python schema tests 5 passed in both configurations, default IPC simulation
+> in both configurations, Core 36 cases / 1001 assertions, CUDA backend 13 cases
+> / 250 assertions, and the full simulation suite 95 cases / 14212 assertions
+> after restoring the default compatibility build. CUDA-only test targets are
+> now conditionally included as well, so no-CUDA CMake/XMake configuration no
+> longer retains dangling simulation/regression/example dependencies; an
+> isolated no-CUDA build passed the none-only sanity suite (3 cases / 50
+> assertions).
+
+> **Deterministic SimSystem topology (2026-08-30, `refactor-main`)**:
+> backend creators are sorted by complete demangled type name before system
+> construction; exact lookup uses `std::type_index` rather than a potentially
+> colliding raw hash; compatible derived lookup follows the same order and
+> skips invalid variants. Build, invalidation, formatting, and `systems.json`
+> now share that order. Active strong-dependency cycles abort initialization
+> with the complete cycle path. Validation: new dependency-graph unit tests
+> (including disabled nodes and self-cycles), Core/Common CTest, CUDA backend
+> 12 cases / 238 assertions, ordinal-sorted IPC and AL-IPC system manifests,
+> and full simulation suite 95 cases / 14212 assertions.
+
+> **Single-source scene configuration contract (2026-08-30,
+> `refactor-main`)**: `scene_default_config.cpp` now declares each key once,
+> including its typed default and schema metadata. `Scene::default_config()`
+> and `Scene::config_schema()` are derived from that same contract, eliminating
+> the previous parallel default/metadata lists. The normalized public schema is
+> byte-for-byte equivalent to the pre-refactor schema. Validation: focused C++
+> schema case 668 assertions, Core 36 cases / 988 assertions, and Python schema
+> tests 5 passed.
+
+> **CUDA internal component build (2026-08-30, `refactor-main`)**: the CUDA
+> backend's 198 compiled sources are partitioned into seven primary domain
+> components plus optional legacy collision. CMake uses internal OBJECT targets;
+> XMake's matching manifest attaches sources directly to `uipc_backend_cuda` so
+> its built-in device-link sees every RDC object. Runtime registration and ABI
+> behavior remain one DLL. Configuration rejects missing or duplicate source
+> ownership. Validation: clean Release build, CUDA backend 12 cases / 238
+> assertions, and full simulation suite 95 cases / 14212 assertions. The XMake
+> implementation detail was corrected after the later CI audit above.
+
+> **Backend ABI handshake and artifact parity (2026-08-30,
+> `refactor-main`)**: every backend now exports `uipc_query_module` in
+> addition to init/create/destroy. Before initialization, Core validates the
+> size-versioned ABI record, exact backend identity, and libuipc major/minor
+> version, turning stale/mixed DLLs into an immediate diagnostic. CMake no
+> longer changes a backend from MODULE to SHARED when tests are enabled;
+> CMake and XMake both always produce the same runtime-loadable shared-library
+> form. Both none/CUDA DLL export tables contain all four symbols. Validation:
+> Core 36 cases / 988 assertions through the new loader path, plus CUDA backend
+> 12 cases / 238 assertions.
+
+> **Profile-guided contact/FEM assembly (2026-08-30, `refactor-main`)**:
+> Nsight Systems identified the two fused simplex-contact assembly kernels,
+> StableNeoHookean3D gradient/Hessian, and shell bending as the dominant raw
+> assembly kernels. SNH no longer materializes dense `9x12 dF/dx` and `12x12`
+> Hessian matrices: reusable FEM helpers project the energy gradient/Hessian
+> directly through tetrahedron shape gradients into the four gradient vectors
+> and ten upper-triangular `3x3` blocks. The SNH kernel's per-thread stack fell
+> from 6440 to 1320 bytes and its profiled average from 1.795 to 1.047 ms
+> (-41.7%). Case-88 `Assemble Subsystems` fell from 3.60 to 2.97 ms/Newton
+> (-17.6%) and `Build Linear System` from 7.93 to 7.32 ms/Newton (-7.8%). Two
+> clean 60-frame runs measured 156.0-157.0 ms mean and 173.1-173.9 ms median,
+> versus 158.1/178.4 ms before this stage; iteration-count variation limits
+> the wall-time gain, so the scoped/kernel measurements are primary.
+>
+> The simplex contact kernels retain one PT/EE/PE/PP launch but compile
+> separate gradient-only and Hessian variants. Gradient-only resources are
+> normal 106 registers/272-byte stack and friction 112/144, while full
+> Hessian performance stays flat (combined profiler average about 4.12 to
+> 4.08 ms). A tested per-contact-type split reduced static stack usage but
+> serialized rare, individually expensive PT/EE Hessian threads; it regressed
+> `Assemble Dytopo Effect` from 4.52 to 7.67 ms/Newton and was rejected.
+> Validation: Release CUDA build; CUDA backend 12 cases / 238 assertions;
+> focused contact/FEM/MAS/bending 10 cases / 1426 assertions; full simulation
+> suite 95 cases / 14212 assertions; targeted compute-sanitizer memcheck 0
+> errors and 0 leaked bytes (2 cases / 504 assertions).
+
+> **Device-side line-search energy aggregation (2026-08-30,
+> `refactor-main`)**: top-level ABD, FEM, and DyTopo energy reporters now write
+> their totals into contiguous device slots. `LineSearcher` performs one final
+> CUB reduction into a separate output slot, then downloads all reporter totals
+> and the aggregate with one contiguous D2H copy/synchronization. Per-reporter
+> finite-value diagnostics and detailed reporting remain intact. ABD and FEM
+> retain their existing component reductions but combine those device results
+> with named one-thread kernels; DyTopo reduces directly into its assigned
+> slot. On case 88 over 60 frames, initial-energy evaluation fell from 0.624 to
+> 0.529 ms/call (-15.2%), trial-energy evaluation from 0.542 to 0.448 ms/call
+> (-17.3%), and aggregate line search from 7.38 to 7.01 ms/Newton (-5.0%). Wall
+> mean/median moved from 162.7/182.3 to 158.1/178.4 ms/frame. Validation: CUDA
+> backend build, 11 CUDA test cases / 217 assertions, and the full simulation
+> suite (95 cases / 14212 assertions).
+
+> **Batched collision-count readback (2026-08-30, `refactor-main`)**:
+> the default `InfoStacklessBVH` exposes launch-only detect/query operations
+> plus an explicit result-finalization step. The simplex trajectory filter now
+> launches all active PP/PE/PT/EE broad-phase queries, gathers their four device
+> counters with one tiny kernel, and performs one contiguous D2H copy/sync.
+> Overflow queues retain required-based growth and are the only queries rerun.
+> The four CUB selection counts are likewise stored contiguously and downloaded
+> once. Thus a fully populated detect/filter cycle uses two count readbacks
+> instead of eight; synchronous BVH callers keep their original API. On case 88
+> after the discard-growth change, clean-run trajectory detection moved from
+> 5.07 to 5.01 ms/Newton and aggregate DCD from 4.67 to 4.61 ms/detect; wall
+> mean/median moved 163.7/183.2 to 162.7/182.3 ms but remains within normal
+> contact-stage variance. Validation: CUDA backend build, 11 CUDA test cases /
+> 213 assertions, and the full simulation suite (95 cases / 14212 assertions).
+
+> **Required-based CUDA output growth (2026-08-30, `refactor-main`)**:
+> `cuda_tool::DeviceVector` now distinguishes value-initialized `resize()`
+> from `resize_discard()` / `resize_preserve()` and exact or amortized reserve
+> operations. Discard growth allocates 150% of the latest requirement, does
+> not copy stale contents, and does not initialize ranges that a following
+> kernel or CUB primitive completely regenerates. Existing subsystem-specific
+> 1.1x/1.5x policies remain in force through exact `reserve_discard()` calls.
+> The migration covers matrix-converter scratch, global/DyTopo triplets,
+> line-search energy arrays, active-set scratch, and collision candidate/TOI
+> buffers; state vectors and buffers with an initialization contract retain
+> normal `resize()`. Case 88, 60 frames on RTX 5090, reduced `Scan and
+> Allocate` from 80.8 ms total to 38.0-65.5 ms and the two `Compute Energy`
+> scopes from 667.1 ms to 390.2-415.8 ms across clean runs. Wall time remains
+> contact-sensitive (163.7-171.0 ms mean versus a 169.8 ms baseline), so the
+> scoped timers are the reliable result. Unchanged runs diverge at atomic
+> roundoff scale and reach about 0.59 mm by frame 60, matching the observed
+> baseline-to-change envelope. Validation: CUDA backend build, 11 CUDA test
+> cases / 213 assertions, full simulation suite (95 cases / 14212 assertions),
+> and compute-sanitizer memcheck (0 errors, 0 leaked bytes).
 
 > **CUB completion and active sparse-format clarification (2026-08-25,
 > `refactor-main`)**: the legacy `stackless_bvh` and
@@ -122,12 +483,12 @@
 > SHAs, and the vcpkg action/container revision matches the project's registry
 > baseline. A dedicated repository-contracts workflow rejects mutable action
 > refs, zero-byte source files, and drift between exported constitution classes,
-> Python binding classes, and binding initializer registration. Thirteen empty CUDA/C++
+> pybind classes, and binding initializer registration. Thirteen empty CUDA/C++
 > scaffold translation units were removed; the two public zero-byte headers are
 > now documented compatibility includes. The full docs helper finds a standard
 > Windows Doxygen install even when it is absent from `PATH`, and the local
 > preview guide distinguishes deployable API builds from prose-only previews.
-> Local validation: full C++/CUDA Python-binding build; 36 core cases / 988 assertions;
+> Local validation: full C++/CUDA pybind build; 36 core cases / 988 assertions;
 > 79 portable Python tests; 48 non-interactive CUDA tests; 5 repository-contract
 > tests; clang-format-18; release-policy/parity/pin/zero-byte checks; and a full
 > Doxygen + MkDoxy site containing the `Engine::frame_stats()` API page.
@@ -189,9 +550,9 @@
 > 75/80/86/89 SASS plus compute-89 PTX rather than only architecture 89, and
 > embed ABI/toolkit/architecture metadata in `build_info()`. The packaged
 > `compatibility.json` is checked against both pyprojects and CI. `python -m
-> uipc doctor` diagnoses Python ABI, CUDA 12 cuBLAS discovery, backend dynamic
-> loading, NVIDIA driver/GPU architecture, and optionally a real CUDA engine
-> construction via `--probe-cuda`.
+> uipc doctor` diagnoses Python ABI, the self-contained CUDA runtime boundary,
+> backend dynamic loading, NVIDIA driver/GPU architecture, and optionally a real
+> CUDA engine construction via `--probe-cuda`.
 > Pytest now defaults to the portable `not example and not cuda` suite; GPU and
 > interactive cases have explicit markers, module-stubbing tests restore global
 > import state, and every cibuildwheel job executes the portable suite against
@@ -219,7 +580,7 @@
 
 > **XMake parity and deterministic packaging (2026-08-25, `refactor-main`)**:
 > stale GUI/torch/RPC configuration was removed, ccache is explicitly disabled,
-> and optional OpenUSD/OpenVDB targets now mirror CMake. The Python-binding target enables
+> and optional OpenUSD/OpenVDB targets now mirror CMake. The pybind target enables
 > USD consistently and performs one synchronous source copy plus explicit
 > extension/runtime-library copies, eliminating duplicate detached copy races.
 > The XMake user guide and build-agent notes describe the current switches.
@@ -256,7 +617,7 @@
 > markers now survive attribute clones and atlas JSON round trips (legacy JSON
 > defaults to `false`), and Python exposes the same optional argument. Core tests
 > cover strict filtering, clone behavior, dimension preservation, and serialized
-> round trips; the modified Python-binding translation unit also compiles independently.
+> round trips; the modified pybind translation unit also compiles independently.
 
 > **Scene lifecycle hardening (2026-08-25, `refactor-main`)**: snapshot commits
 > now replicate current/rest geometry independently, explicit slot removals,
@@ -323,8 +684,10 @@
 >   `linear_system/use_cuda_graph = 0`.
 > - **Newton exit semantics split (2026-08-24)**: `newton/min_iter` is a pure
 >   hard floor (default 0 = off); the semi-implicit beta start moved to
->   `newton/semi_implicit/K_min` (default 1). Found via the case-89 parity
->   run: Stiff averages 2.55 Newton/frame while we forced >=6. Case 88
+>   `newton/semi_implicit/K_min` (default 1 at that revision; superseded by
+>   the 2026-09-01 default of 6 with semi-implicit termination enabled). Found
+>   via the case-89 parity run: Stiff averages 2.55 Newton/frame while we forced
+>   >=6. Case 88
 >   429 -> 320 ms/frame from this alone.
 > - **Perf rounds on case 88 (2026-08-24, now ~266 ms mean / ~299 ms
 >   median)**: two-level warp->block reduction in `Spmv_rbk_sym_spmv_dot` /
@@ -766,6 +1129,11 @@ regression).
 
 ## Cloth stiffness model update + strain_rate exposure (after `b7056879`)
 
+> **Partly superseded on 2026-09-01:** the historical area multiplier and
+> one-sided stretch/bending formulas below were corrected as recorded at the
+> top of this handoff. They remain here only as the chronological explanation
+> of the regression.
+
 - Cloth stiffness formulas aligned with mas-pncg; membrane-element weights
   use the triangle **area** (not volume, avoiding incorrect volume-measure
   weighting of the thickness-independent shear):
@@ -786,7 +1154,7 @@ regression).
   - strainRate: no longer hardcoded to 100 — `apply_to(...,
     strain_rate=100)` writes the triangle attribute `"strain_rate"`, and
     the backend reads the attribute (old scenes missing it get it
-    auto-created and backfilled with 100); Python exposure synced.
+    auto-created and backfilled with 100); pybind exposure synced.
   - **stretch/shear material-parameter separation**:
     `StrainLimitingBaraffWitkinShell::apply_to` dual-modulus overload
     `apply_to(sc, stretch_moduli, shear_moduli, ρ, t, strain_rate)`
@@ -910,3 +1278,57 @@ regression).
   in-range / negative marker) behaves exactly per spec; full sim suite
   95/14214 + 6 fast binaries green. Note the built-in default stiffness
   effectively changes 1e9 -> 1e8 for scenes that never set the default model.
+
+## Wheel CUDA architecture list never reached nvcc (2026-09-03)
+
+- Symptom: `pyuipc` 0.0.27 wheels (cp312 and cp313 manylinux both checked)
+  contain `sm_75` SASS only and zero PTX, although `pyproject.toml` and
+  `compatibility.json` declared `75/80/86/89-real` plus `89-virtual`. On an
+  RTX 5090 (`sm_120`) `world.init(scene)` throws CUDA error 500
+  `named symbol not found` from `cuda_tool/launch.h`.
+- Root cause: `set_target_properties(... PROPERTIES ... CUDA_ARCHITECTURES
+  ${UIPC_CUDA_ARCHITECTURES} ...)` did not quote the variable. An unquoted
+  multi-element list expands into separate arguments and destroys the
+  key/value pairing, so the property kept `75-real` and the remaining entries
+  became bogus property names (`80-real` ended up as a property whose value
+  was `86-real`). The `89-virtual` PTX entry was lost the same way.
+- Fixed by quoting three sites: `src/backends/cuda/CMakeLists.txt`,
+  `src/backends/cuda/components.cmake`,
+  `apps/tests/backends/cuda/CMakeLists.txt`.
+- Release matrix now also carries `120-real` for consumer Blackwell, mirrored
+  in `python/src/uipc/compatibility.json` so
+  `scripts/check_release_policy.py` stays green. Note this grows wheel size
+  and CI compile time by one full architecture.
+- Verification: configured with the full list and confirmed all 199 CUDA
+  translation units in `compile_commands.json` now carry six
+  `arch=compute_*,code=*` entries including `code=[compute_89]`; before the
+  fix only `sm_75` was emitted. Reference build with `native` on the 5090
+  (`sm_120`) runs `hello_affine_body` and the Python `0_check_libuipc` sample
+  to completion.
+- XMake was deliberately left alone (rule 7 reviewed): its CUDA arch surface
+  is `add_cugencodes("sm_89")` under `github_actions` and
+  `add_cugencodes("native")` otherwise, passed as single values with no
+  multi-arch list, so it has neither the quoting defect nor a release matrix
+  to mirror. XMake does not build the published wheel; the PyPI path is
+  scikit-build-core plus CMake.
+- Follow-up in the same area: the option's documented comma form
+  (`-DUIPC_CUDA_ARCHITECTURES=75,89`) was normalized into
+  `CMAKE_CUDA_ARCHITECTURES` only, while the backend targets read the option
+  itself, so the comma reached nvcc and the first `.cu` failed with
+  `'89' is not in 'keyword=value' format`. The root `CMakeLists.txt` now
+  normalizes the cache entry in place. A `get_target_property` fast fail on the
+  `cuda` target guards the truncation case; configure was checked with the full
+  six-entry list, the comma form, and `native`.
+- Post-merge hardening on `refactor-main` replaces all three raw property sites
+  with `uipc_set_target_cuda_architectures`, which sets and reads back the
+  property for the final library, every component OBJECT target, and the CUDA
+  test target. A repository contract prevents any target kind from bypassing
+  the helper. Wheel compatibility now distinguishes the CUDA 12.x SASS driver
+  floor from the CUDA 12.8 PTX-JIT floor; `uipc doctor` reports the selected
+  code path and no longer labels an old-driver PTX-only GPU compatible.
+  Validation configured the comma-form release matrix and found all 214 CUDA
+  translation units in the test-enabled build carrying all six codegen flags,
+  then restored `native`. CMake and XMake production builds, fast CTest 3/3,
+  repository contracts 48/48, portable Python tests 80 passed / 1 skipped, the
+  real Python 3.14 CUDA doctor probe, and the complete documentation build all
+  passed.

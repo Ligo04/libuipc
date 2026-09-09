@@ -5,7 +5,8 @@ simulation scene. `Scene::config_schema()` / `Scene.config_schema()` is the
 machine-readable contract for every registered key: defaults, storage and JSON
 types, units, hard constraints, lifecycle, implementation status, descriptions,
 and source-level consumers. The tables below present the same contract for
-humans. Defaults and metadata come from
+humans. A single typed declaration creates both the runtime defaults and schema
+metadata, preventing the two views from drifting as keys evolve. It lives in
 [`scene_default_config.cpp`](https://github.com/spiriMirror/libuipc/blob/main/src/core/core/scene_default_config.cpp),
 while effective-value rules and selector values were checked against the CUDA
 backend that consumes them.
@@ -136,9 +137,9 @@ appropriate geometry instead.
 | `newton/velocity_tol_relative` | float | `0.0` | `> 0` enables; `<= 0` disables | Scene-relative override. Effective velocity tolerance becomes `value * rest_scene_bbox_diagonal`. |
 | `newton/ccd_tol` | float | `1.0` | normally `(0, 1]` | Newton convergence additionally requires the latest CCD step fraction to be at least this value. |
 | `newton/transrate_tol` | float, 1/s | `0.1` | `>= 0` | ABD transform-rate tolerance. The per-step threshold is `transrate_tol * dt`; irrelevant when no affine bodies exist. |
-| `newton/semi_implicit/enable` | flag | `0` | `0`, `1` | Enables the semi-implicit beta termination criterion. |
-| `newton/semi_implicit/beta_tol` | float | `1e-3` | normally `[0, 1]` | Semi-implicit early-exit threshold for accumulated beta. |
-| `newton/semi_implicit/K_min` | integer | `1` | `>= 0` | Iteration at which beta accumulation starts. It is **not** a minimum Newton-iteration count. |
+| `newton/semi_implicit/enable` | flag | `1` | `0`, `1` | Enables cumulative-step termination in IPC and the configured `K_min` delay in AL-IPC. |
+| `newton/semi_implicit/beta_tol` | float | `1e-3` | normally `[0, 1]` | Standard IPC early-exit threshold for accumulated beta. AL-IPC uses `contact/al-ipc/toi_threshold` instead. |
+| `newton/semi_implicit/K_min` | integer | `6` | `>= 0` | Delays cumulative-progress attenuation until the configured step count. It is not a hard ordinary-Newton floor in IPC; in AL-IPC it prevents safe-path termination before that many completed outer steps. Values below `1` are treated as `1` by AL-IPC. |
 
 See [Newton and Linear Solvers](scene_configs/newton.md) for the exact
 termination logic and tuning guidance.
@@ -183,11 +184,22 @@ algorithm parameters rather than material contact resistance.
 
 | Key | Type | Default | Valid domain | Meaning |
 | --- | --- | --- | --- | --- |
-| `contact/al-ipc/mu_scale_fem` | float | `5e7` | `> 0` | Scales FEM augmented-Lagrangian penalty estimates. |
-| `contact/al-ipc/mu_scale_abd` | float | `1e5` | `> 0` | Scales ABD penalty estimates; the estimator multiplies body mass, this value, and `dt²`. |
-| `contact/al-ipc/toi_threshold` | float | `0.1` | normally `(0, 1]` | TOI threshold used by active-set handling. |
-| `contact/al-ipc/alpha_lower_bound` | float | `1e-6` | normally `(0, 1]` | Lower bound for AL step length. |
-| `contact/al-ipc/decay_factor` | float | `0.3` | normally `(0, 1)` | Penalty/constraint decay factor. |
+| `contact/al-ipc/mu_scale_mode` | string | `"per_vertex"` | `"per_vertex"`, `"diag_norm"` | Selects the stable mass-based per-vertex estimate or experimental uniform Hessian-diagonal scaling. |
+| `contact/al-ipc/mu_scale_diag_norm` | float | `0.1` | `> 0` | In `diag_norm` mode, sets `mu = value * max_i(abs(H_E(i,i)))`, with AL contact excluded from `H_E`. |
+| `contact/al-ipc/mu_scale_fem` | float | `5e7` | `> 0` | FEM scale used only in `per_vertex` mode: `mu_i = mass_i * value * dt²`. |
+| `contact/al-ipc/mu_scale_abd` | float | `1e5` | `> 0` | ABD scale used only in `per_vertex` mode: `mu_i = body_mass * value * dt²`. |
+| `contact/al-ipc/toi_threshold` | float | `0.1` | normally `(0, 1]` | Remaining cumulative safe-path weight tolerated by AL termination. Smaller values require more outer progress. |
+| `contact/al-ipc/alpha_lower_bound` | float | `1e-6` | normally `(0, 1]` | CCD steps at or below this value do not advance the collision-free state or termination progress. |
+| `contact/al-ipc/decay_factor` | float | `0.3` | normally `(0, 1)` | Multiplies an inactive constraint's weight after each outer AL update. The pair is removed once the accumulated weight is below `0.01`. |
+
+`per_vertex` is the default because it remains stable when one scene mixes
+cloth, volumetric FEM, affine bodies, and very different vertex masses.
+`diag_norm` follows the conditioning-aware initialization in the AL-IPC paper,
+but applies one uniform value to every vertex and is retained as an explicit
+experimental comparison mode. Validate its trajectory and line-search status
+before using it for production scenes. If its assembled diagonal norm is empty
+or non-finite, the backend logs a warning and falls back to `per_vertex` for
+that frame.
 
 ## Adaptive contact resistance
 
@@ -208,7 +220,7 @@ over the configured fallback bounds.
 
 | Key | Type | Default | Valid domain / choices | Meaning |
 | --- | --- | --- | --- | --- |
-| `collision_detection/method` | string | `"info_stackless_bvh"` | `"info_stackless_bvh"`, `"stackless_bvh"`, `"linear_bvh"`; `"info_stackless_bvh_v0"` is a legacy comparison path | Broad-phase trajectory filter. Keep the default unless benchmarking or diagnosing the broad phase. |
+| `collision_detection/method` | string | `"info_stackless_bvh"` | `"info_stackless_bvh"`; optionally `"info_stackless_bvh_v0"`, `"stackless_bvh"`, `"linear_bvh"` | Broad-phase trajectory filter. Keep the default unless benchmarking or diagnosing the broad phase. |
 | `sanity_check/enable` | flag | `1` | `0`, `1` | Runs pre-initialization intersection and distance checks. A failed check makes the world invalid. |
 | `sanity_check/mode` | string | `"normal"` | `"normal"`, `"quiet"` | `normal` also writes diagnostic geometry when a check fails; `quiet` reports the failure without exporting that geometry. |
 | `diff_sim/enable` | flag | `0` | `0`, `1` | Initializes differentiable-simulation state. Calling non-const `scene.diff_sim()` sets this flag automatically; do so before world initialization. |
@@ -217,6 +229,13 @@ over the configured fallback bounds.
 | `extras/debug/dump_linear_pcg` | flag | `0` | `0`, `1` | Dumps PCG vectors for `linear_pcg`. `fused_pcg` warns and ignores this option. |
 | `extras/debug/dump_mas_matrices` | flag | `0` | `0`, `1` | Dumps MAS matrices when the MAS FEM preconditioner is active. |
 | `extras/strict_mode/enable` | flag | `0` | `0`, `1` | Converts nonlinear/line-search limit warnings into engine errors. Recommended for automated validation, not exploratory tuning. |
+
+The three alternate collision selectors are compiled only when
+`UIPC_WITH_CUDA_LEGACY_COLLISION=ON` (CMake, the default) or
+`cuda_legacy_collision=true` (XMake). Builds with the option disabled omit the
+filter implementations and remove their names from the schema enum, so scene
+construction rejects a serialized or manually edited unavailable selector.
+The machine-readable entry exposes this state in `conditionalValues`.
 
 ## Effective-value precedence
 

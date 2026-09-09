@@ -35,6 +35,6 @@ Args:
     sc: SimplicialComplex to apply to.
     moduli: ElasticModuli2D (default: Young's modulus 1.0 MPa, Poisson's ratio 0.49).
     mass_density: Mass density (default: 200.0).
-    thickness: Shell thickness in meters (default: 0.001 m).)");
+    thickness: One-sided shell thickness radius r in meters (default: 0.001 m; full material thickness is 2r).)");
 }
 }  // namespace pyuipc::constitution

@@ -14,6 +14,37 @@ touching that area; several of these have bitten us more than once.
   pyd, project/binary dirs, config/build type, and `--build_wheel OFF`). A stale
   dll once made a whole performance-alignment round compare against an old
   binary.
+- **Set CUDA architecture lists only through
+  `uipc_set_target_cuda_architectures`.** An unquoted
+  `CUDA_ARCHITECTURES ${UIPC_CUDA_ARCHITECTURES}` inside raw
+  `set_target_properties` expands a multi-arch list and breaks the `PROPERTIES`
+  key/value pairing. The checked helper uses the single-property API and reads
+  the value back for every final, component OBJECT, and CUDA-test target. Every
+  release wheel up to 0.0.27 used the raw form and shipped `sm_75` SASS only,
+  with the `89-virtual` PTX fallback dropped, so Blackwell (`sm_120`) failed at
+  `world.init(scene)` with CUDA error 500 `named symbol not found`. The local
+  default `native` is a single element, so the defect never reproduces in a
+  developer build. Verify a change through `arch=compute_*,code=*` in
+  `compile_commands.json`, not `flags.make`.
+  To audit a built artifact use
+  `cuobjdump -all --list-elf <so> | grep -oP 'sm_\d+' | sort -u` for SASS and
+  `cuobjdump -all -ptx <so> | grep -c '^\s*\.target'` for PTX;
+  `--list-ptx` reports nothing even for libraries that do embed PTX.
+- **A virtual architecture needs a newer driver than the CUDA 12.x SASS
+  floor.** Minor-version compatibility down to Linux 525.60.13 / Windows
+  528.33 requires a matching SASS image; a CUDA 12.8 `compute_89` PTX fallback
+  built by CUDA 12.8 Update 1 needs its matching driver generation (Linux
+  570.124.06 / Windows 572.61 here).
+  Keep both floors in `compatibility.json`, and keep the doctor path-aware so
+  an H100 using PTX is not reported compatible merely because 525 can run a
+  CUDA 12 SASS application.
+- **The comma form of `UIPC_CUDA_ARCHITECTURES` only works because the root
+  `CMakeLists.txt` normalizes the option in place.** The backend targets read
+  the option directly into their `CUDA_ARCHITECTURES` property, so normalizing
+  `CMAKE_CUDA_ARCHITECTURES` alone is not enough: a comma list survives
+  configure and then fails the first `.cu` compile with
+  `nvcc fatal : '89' is not in 'keyword=value' format`. Keep the in-place
+  `set(... CACHE STRING ... FORCE)` if that block is ever refactored.
 - **Changing `IEngine` virtuals requires every backend's most-derived vtable to
   be rebuilt.** Do not trust a core-only relink: explicitly rebuild `none` and
   `cuda`, then run the Python post-build sync above. A mixed old/new vtable can
@@ -75,6 +106,11 @@ touching that area; several of these have bitten us more than once.
 
 ## Performance measurement
 
+- **Start from the current four-scene reference**, not a number copied from
+  handoff history. The 2026-09-01 RTX 5090/CUDA 13.2 baseline is
+  `performance/2026-09-01-cross-domain-baseline.md` and requires three fresh
+  processes, the declared frame window, structured iteration counts, and a
+  separate Timer diagnostic.
 - **Build contention pollutes timing completely.** A hot build once made
   sanity_check look like a 112 ms/frame culprit (idle machine: 2-5 ms).
   Benchmark only on an idle machine.
@@ -84,8 +120,10 @@ touching that area; several of these have bitten us more than once.
   segments, or recompute marginal costs (instrumented runs) instead of
   naive frame diffs.
 - **Stiff-GIPC's logged "average time cost" is per-Newton-iteration GPU
-  time** (`totalTime/totalNT`), not per-frame. Its clean reference numbers:
-  wrecking ball 42.8 ms/frame (frames 2-120), case2 142.8 ms/frame.
+  time** (`totalTime/totalNT`), not per-frame. Its historical clean reference
+  numbers were wrecking ball 42.8 ms/frame (frames 2-120) and case2
+  142.8 ms/frame. They were not rerun under the current manifest/revisions, so
+  do not combine them with the 2026-09-01 libuipc baseline into a new ratio.
 - cub wrappers keep a **stream-level workspace cache**
   (`cuda_tool/details::cub_temp_storage`); per-call cudaMalloc/cudaFree
   (~10-100 µs + implicit sync each) once cost ~15%/frame. Never go back to
@@ -115,7 +153,7 @@ touching that area; several of these have bitten us more than once.
 - **Cloth vs Stiff-GIPC alignment audit (2026-08-24)**: the SLBWS membrane
   (energy/gradient/Hessian incl. the one-sided cubic limiter and both
   analytic SPD projections) matches Stiff's Baraff-Witkin term for term.
-  Convention differences are stiffness mappings (ours `E·t/(1-ν²)` per
+  Convention differences are stiffness mappings (ours `E·(2r)/(1-ν²)` per
   area; Stiff `E/(2(1+ν))` per area×thickness) and the bending model
   (ours: dihedral hinge with rest angle + per-Newton 12x12 EVD; Stiff's
   default build: flat-rest quadratic cotangent-Q with a constant PSD
@@ -148,10 +186,11 @@ touching that area; several of these have bitten us more than once.
   `_native/` dir before running — otherwise python silently runs the OLD
   solver and trajectory/timing comparisons are garbage (this once cost a
   full debug round chasing a MAS "freeze" that was just a stale dll).
-- **Do not use incremental Scene commits as a general replication protocol.**
-  The current update path omits subscene changes, does not faithfully propagate
-  geometry removal, and assumes append-aligned geometry IDs. Use full SceneIO for
-  topology-changing transfers and read doc 11 before extending commit/update.
+- **Incremental Scene commits require the exact compatible baseline.** They now
+  propagate subscene/contact topology, geometry removal, sparse IDs, and
+  allocator state, but they are deltas rather than standalone Scene files. Use
+  full SceneIO to establish or migrate a baseline, reject pending mutations at
+  snapshot time, and read doc 11 before extending commit/update.
 - **The `none` backend is not a CPU simulator.** It advances the frame without
   physics and does not settle post-init pending geometry mutations.
 

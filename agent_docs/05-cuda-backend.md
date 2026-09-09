@@ -1,6 +1,50 @@
 # 05 — CUDA Backend
 
-Directory: `src/backends/cuda/` (compiled as the MODULE library `uipc_backend_cuda`). Entry point `entrance.cpp` → `cuda::SimEngine` (`sim_engine.h` + `engine/*.cu`). The GPU id comes from the engine config `gpu/device`.
+Directory: `src/backends/cuda/` (compiled as the runtime-loadable shared library `uipc_backend_cuda`). Entry point `entrance.cpp` → `cuda::SimEngine` (`sim_engine.h` + `engine/*.cu`). The GPU id comes from the engine config `gpu/device`.
+
+## Internal Build Components
+
+The backend remains one DLL and performs one final CUDA device-link. Its 198
+compiled `.cu/.cpp` files are owned by seven primary logical components plus
+one optional legacy-collision component:
+
+| Logical component | CMake OBJECT target | Owned domains |
+|---|---|---|
+| `runtime` | `cuda_runtime_objects` | Root/engine, global geometry, animation, time integration, pipeline, diagnostics, and orchestration |
+| `affine_body` | `cuda_affine_body_objects` | ABD state, constitutions, constraints, joints, and subsystem assembly |
+| `collision` | `cuda_collision_objects` | Default broad phase and current trajectory filters |
+| `collision_legacy` | `cuda_collision_legacy_objects` | Optional V0, stackless, and linear-BVH simplex trajectory filters |
+| `contact` | `cuda_contact_objects` | Active set, contact, DyTopo, distance, and inter-primitive effects |
+| `fem` | `cuda_fem_objects` | FEM data, constitutions, constraints, MAS, and subsystem assembly |
+| `linear_system` | `cuda_linear_system_objects` | Global sparse assembly, PCG, SpMV, and preconditioners |
+| `coupling` | `cuda_coupling_objects` | ABD/FEM coupling receivers and subsystems |
+
+`components.cmake` and `components.lua` are matching ownership manifests. Both
+reject a compiled source that is unowned or assigned twice. CMake realizes the
+partition as internal OBJECT targets. XMake attaches the same logical groups
+directly to `uipc_backend_cuda`: its built-in CUDA device-link scans source
+batches owned by the final target and does not include CUDA OBJECT dependencies.
+Both paths use RDC and resolve all device symbols once in the final module. This
+preserves static `REGISTER_SIM_SYSTEM` objects without turning domains into
+runtime DLL boundaries.
+
+CMake's Visual Studio generator has a language-detection limitation: when every
+`.cu` reaches the final DLL only through OBJECT expressions, it skips
+`nvcc -dlink` even with `CUDA_RESOLVE_DEVICE_SYMBOLS=ON`. CMake therefore
+generates one comment-only `uipc_cuda_device_link_anchor.cu` in the binary
+directory and attaches it directly to the final target. It contains no runtime
+code and is not a ninth domain; it only makes multi-config generators schedule
+the same single device-link that Ninja and XMake already perform.
+
+`UIPC_WITH_CUDA_LEGACY_COLLISION` (CMake) /
+`cuda_legacy_collision` (XMake) defaults to ON for compatibility. Turning it
+off omits the three legacy filter translation units and their static
+registrations, leaving 195 compiled backend sources. Core receives the same
+build capability and removes those selectors from `Scene::config_schema()`, so
+configuration cannot advertise a filter missing from the backend DLL. The
+`wrecking_ball` example now follows the default filter and is included only in
+CUDA-enabled builds; examples no longer create a hidden dependency on the
+legacy component.
 
 ## Subsystem Directories
 
@@ -57,6 +101,23 @@ Pipeline
 
 Note: a parent timer's duration **includes** its child timers (e.g. when Newton Iteration takes 80%, PCG/Line Search are already counted in it). The actual hierarchy is defined by the runtime output `timer_frames.json` (it changes dynamically with the enabled features).
 
+### Line-search energy aggregation
+
+Top-level line-search reporters do not download independent scalar totals.
+`LineSearcher` assigns one contiguous device slot to every ABD, FEM, or DyTopo
+reporter. Reporters launch their component reductions asynchronously and write
+their final value into that slot. A final CUB sum reads the reporter slots and
+writes to a distinct aggregate slot; one contiguous D2H transfer then returns
+the individual values plus the total. This preserves reporter-specific finite
+checks and diagnostic output while reducing the normal energy pass to one host
+synchronization.
+
+ABD and FEM still require separate reductions for their physical energy
+components, but named one-thread combine kernels add those device scalars
+without an intervening host read. DyTopo's CUB reduction writes directly into
+its assigned slot. Keep every CUB input and output range disjoint, including
+the final reporter-total reduction.
+
 `Engine::frame_stats()` / Python `Engine.frame_stats()` is the stable
 machine-readable complement to the Timer tree. CUDA returns schema v1 with the
 pipeline, completion/convergence flags, Newton count, cumulative line-search
@@ -101,6 +162,71 @@ CCD, and termination algorithms remain intentionally distinct. Timer enablement
 and reporting are caller-controlled--neither advance path changes the
 process-global Timer state or prints a report implicitly.
 
+AL-IPC follows a nested solve boundary that must not be collapsed into the IPC
+line search. The unconstrained/penalty iterate may penetrate, so its energy line
+search starts at one without the IPC CFL clamp. A backtracked step continues the
+same fixed-multiplier inner solve. Only a full step updates the multipliers,
+runs CCD from the last collision-free state to the iterate, and advances that
+safe state by a finite step clamped to `[0, 1]`.
+
+AL's cumulative safe-path check consumes
+`newton/semi_implicit/{enable,K_min}`. The initial-state weight remains one
+through the first `K_min - 1` completed outer updates, is attenuated by each
+later `(1 - CCD alpha)`, and is compared with
+`contact/al-ipc/toi_threshold`. `beta_tol` remains IPC-only;
+`newton/min_iter` is the separate hard floor on both paths. A failed AL line
+search restores both vertex and reporter state to the recorded start point;
+never allow the final rejected trial to become the next frame's state.
+
+`GlobalActiveSetManager` implements the per-vertex earliest-TOI filter from
+AL-IPC Algorithm 3. Existing active pairs are excluded when computing each
+vertex minimum. PT and EE candidates are mapped through the global surface
+topology, then retained when their TOI matches at least one incident minimum.
+`Float` is double in this project; never port the fork's `int*`/
+`__float_as_int` atomic minimum. The implementation uses a 64-bit CAS minimum
+and persistent 1.5x-grown scratch buffers. CUB radix sort is stable, so old
+pairs precede duplicate new pairs and keep their lambda/decay state; do not
+restore the old cross-thread `sort_idx(i-1)` rewrite.
+
+Inactive constraints increment a non-negative decay count, active constraints
+reset it to zero, and a pair is removed at the first count for which
+`pow(decay_factor, count) < 0.01`. The removal limit is derived from the scene
+factor instead of the historical hard-coded 25. The default
+`mu_scale_mode="per_vertex"` uses the FEM/ABD mass-based estimators. The
+experimental `"diag_norm"` mode assembles the non-contact system and fills all
+vertex penalties with `mu_scale_diag_norm * max_i(abs(H_E(i,i)))`; this
+uniform scale produced repeated non-descent steps in the mixed cloth/FEM case
+88 and must remain opt-in until a heterogeneous conditioning strategy is
+validated.
+
+AL simplex friction uses PT and EE-specific tangent Jacobians. Keep the EE
+energy, gradient, and Hessian on `edge_edge_jacobi`; substituting
+`point_triangle_jacobi` gives a finite but physically wrong direction.
+Standard IPC evaluates parallel EE normally with the positive `1e-3`
+mollifier coefficient; its normal path implements the mollified energy,
+gradient, and Hessian, while its friction path skips detected parallel pairs.
+AL-IPC passes the shared negative disabled threshold in both normal and
+frictional contact. Its `need_mollify()` result is therefore always false, and
+every AL pair follows the corresponding ordinary EE path.
+
+## Current cross-domain performance reference
+
+The current absolute reference is the
+[2026-09-01 cross-domain baseline](performance/2026-09-01-cross-domain-baseline.md),
+measured on RTX 5090 / CUDA 13.2 with three fresh Timer-free processes per
+scene. Median run means are 129.5 ms/frame for pure ABD wrecking balls,
+201.1 ms/frame for the 250-frame FEM/cloth case2 contract, 60.2 ms/frame for
+the MAS bunny, and 125.6 ms/frame for the ABD-wall/cloth scene. All recorded
+frames completed and converged without hitting configured iteration limits.
+
+Separate synchronized Timer windows show scene-specific costs rather than one
+universal backend bottleneck: global solve consumes 19.76/11.64/8.53/11.17 ms
+per Newton call for rigid/case2/MAS/wall-cloth respectively, while line search
+uses 6.62/7.88/2.58/4.70 ms and DyTopo uses 3.98/4.66/0.55/3.85 ms. Consult the
+record for frame windows, PCG/Newton counts, memory envelopes, and numerical
+variability before selecting an optimization target. The older numbers below
+are controlled historical A/B evidence, not current absolute baselines.
+
 ## Sparse linear-system storage: BCOO is the active solve path
 
 The production CUDA solve path does **not** currently solve a BSR matrix.
@@ -136,7 +262,10 @@ default broad phase. Its rebuild path is deliberately CUB-only:
   races blocks that have already published results.
 
 The `info_stackless_bvh_v0` selector is a legacy comparison path, while
-`stackless_bvh` and `linear_bvh` are alternate broad phases. The V0 and
+`stackless_bvh` and `linear_bvh` are alternate broad phases. All three
+registered simplex filters live in the `collision_legacy` component (the CMake
+target is `cuda_collision_legacy_objects`) and are
+available only when the legacy-collision build option is enabled. The V0 and
 `stackless_bvh` builders now use the same separate-input/output CUB radix-sort
 pattern, named initialization kernels, and persistent scan workspace as the
 default implementation. This removes the final production Thrust dependency
@@ -145,6 +274,16 @@ default selector. `stackless_bvh` and V0 both have direct brute-force
 build/detect/query parity coverage; the V0 test rebuilds at two sizes to cover
 persistent CUB workspace reuse and growth. The alternate selectors still need
 representative benchmarks before making speed claims.
+
+The default simplex trajectory filter batches host-visible counts. It launches
+all active broad-phase queries first, gathers the four queue counters into a
+single device array, and downloads them with one synchronization. If a count
+exceeds its queue capacity, only that queue grows and reruns. PP/PE/PT/EE CUB
+selection counts use the same contiguous one-copy pattern. The public
+`InfoStacklessBVH::detect/query` methods remain synchronous for independent
+callers; `launch_detect/launch_query` plus `prepare_query_result` are the
+internal batching interface. Do not consume a launch-only query result before
+the count batch has been synchronized and finalized.
 
 The MAS preconditioner also performs its hierarchy prefix scans through
 `cuda_tool::DeviceScan`. These wrappers share `details::cub_temp_storage`, so
@@ -164,6 +303,29 @@ FEMLineSearchReporter_step_forward_kernel
 - Launch block size is auto-selected by occupancy via `cuda_tool::best_block_dim(kernel)` (consistent with muda's occupancy-based selection, guaranteeing unchanged FP behavior); the grid is computed by `cuda_tool::best_grid_dim(n, kernel)`. **The block-size cache is keyed by kernel function address** (`unordered_map<const void*, int>`); it must not be a `static` cache keyed by function-pointer type — different kernels with the same signature would share a cache entry, and cross-kernel block-size interference perturbs the atomic reduction order, which once caused a case 36 frame 17 line-search failure in the full test suite (not reproducible when run in isolation).
 - Memory operations such as `buffer::kernel_fill<int>` uniformly go through `cuda_tool::BufferLaunch` (internally named template kernels).
 - `_shorten_kernel_name()` in `python/src/uipc/profile/nsight.py` was originally used to extract the outer function name from `parallel_for_kernel<Lambda>`; with named kernels this proxy is no longer needed (the symbols are readable as-is).
+
+### Resource-aware contact and FEM assembly
+
+`StableNeoHookean3D_do_compute_gradient_hessian_kernel` projects derivatives
+to vertex space without constructing dense `dF/dx` or a full `12x12` element
+Hessian. `fem_utils.h` provides the tetrahedron shape gradients plus direct
+`B^T g` and `B_l^T H B_r` helpers. The kernel writes four gradient doublets and
+the ten upper-triangular `3x3` Hessian triplets directly, preserving the global
+index ordering used by `TripletMatrixAssembler::half_block`. The dense and
+block formulas have backend regression coverage. On RTX 5090 this reduced the
+kernel stack from 6440 to 1320 bytes/thread and Nsight Systems time from 1.795
+to 1.047 ms/call.
+
+The IPC simplex normal/friction assembly kernels deliberately keep PT, EE, PE,
+and PP in one launch. Although splitting by stencil lowers each specialized
+kernel's static stack frame, PT/EE Hessian evaluation is expensive even for a
+few contacts. The fused launch overlaps those threads with the much larger PE
+population; four sequential launches regressed case-88 DyTopo assembly by
+about 70%. The uniform `gradient_only` decision is compile-time specialized
+instead, giving lightweight gradient variants without changing the full
+Hessian launch topology. Resource counts alone are therefore insufficient:
+validate launch restructuring with both kernel profiles and the enclosing
+stage timer.
 
 ## FusedPCG CUDA graph modes (linear_system/use_cuda_graph, default 1)
 
@@ -268,9 +430,9 @@ Graph-stability design (no rebuilds from contact-pair fluctuation):
 | `stream.h` | `CUDA_TOOL_CHECK` error checking, `default_stream`, `Stream` (`Stream::Default()`) |
 | `view.h` / `view_nd.h` | `CBufferView/BufferView/VarView/CVarView`, `Dense/CDense` (scalar viewers), `ViewerBase`, `Extent2D`, `Buffer2DView`, `Dense1D/Dense2D` (with `make_dense_1d/2d`) |
 | `launch.h` | `best_block_dim/best_grid_dim` (occupancy-based block size / grid computation) |
-| `buffer.h` | `DeviceVector/DeviceBuffer/DeviceVar/DeviceBuffer2D`, `BufferLaunch` (fill/copy/resize; internally named template kernels) |
+| `buffer.h` | `DeviceVector/DeviceBuffer/DeviceVar/DeviceBuffer2D`, `BufferLaunch`. `resize()` value-initializes growth; `resize_discard()` is for fully regenerated output and grows to 150% of the latest requirement; `resize_preserve()` retains the old logical range without initializing the new range. Exact and amortized preserve/discard reserve variants make ownership and growth policy explicit. |
 | `cub.h` | Thin wrappers (pointer-style) for `DeviceReduce/Scan/Select/Partition/RadixSort/MergeSort/RunLengthEncode` + warp-level cub headers; **temporary storage uses a stream-level workspace cache** (`details::cub_temp_storage`, grows 2× on demand, reused across calls — per-call cudaMalloc/cudaFree costs ~10-100µs each and implicitly synchronizes with the device, which once caused a ~15%/frame performance regression in the 6_wrecking_balls scene) |
-| `linear_system.h` + `linear_system/views.h` | `DeviceTripletMatrix/DoubletVector/DenseVector/BCOOMatrix/BSRMatrix/DenseMatrix` + full set of views (Triplet/Doublet/DenseVector/BCOO) + `LinearSystemContext` (cublas dot/norm) |
+| `linear_system.h` + `linear_reduction.h` + `linear_system/views.h` | `DeviceTripletMatrix/DoubletVector/DenseVector/BCOOMatrix/BSRMatrix/DenseMatrix` + full set of views (Triplet/Doublet/DenseVector/BCOO) + `LinearSystemContext`; dot/norm use named partial-reduction kernels, persistent geometrically grown partial/result buffers, the per-stream CUB workspace, and scaled-square norm accumulation without cuBLAS |
 | `eigen.h` + `eigen/` | Device-side small-matrix math (`eigen::evd/svd/pd/inverse/atomic_add`; ported verbatim from muda ext/eigen, bit-for-bit identical) |
 | `debug.h` | `debug_sync_all/check_finite` + the `UIPC_KERNEL_ASSERT/ERROR/WARN` macro family (gated by `uipc::RUNTIME_CHECK`) |
 | `graph.h` | `GraphCapture`: self-contained CUDA-graph block capture/replay (capture body on a capture stream, replay via `launch_sync()`, permanent fallback on capture failure). Instantiation API is selected by `CUDART_VERSION` (`cudaGraphInstantiateWithFlags` ≥11.4 through 13.x, legacy 5-arg form below), so the same source builds across CUDA 11/12/13 |
@@ -278,7 +440,14 @@ Graph-stability design (no rebuilds from contact-pair fluctuation):
 | `atomic.h` | Scalar `atomic_add/atomic_exch` |
 
 - Build notes: requires `--extended-lambda --expt-relaxed-constexpr`; MSVC + CUDA≥13 requires `/Zc:preprocessor`; fmt has a UTF-8 conflict in the nvcc device pass, so cuda_tool uses `std::runtime_error`; Eigen `::arg` needs a global shim (already built into `type_define.h`).
-- **The umbrella header `cuda_tool.h` does not include `cub.h`**: the CCCL device-algorithm headers are extremely heavy (~165k extra expanded lines per TU), so the ~23 files using the `Device*` wrappers explicitly `#include <cuda_tool/cub.h>`; `linear_system.h` no longer transitively includes cub.h either.
+- Use `resize_discard()` only when every live output element is subsequently
+  written by a kernel, copy, or CUB primitive. State/history buffers and
+  sentinel ranges that rely on zero/default construction must use `resize()`
+  or an explicit fill. Subsystems with a tuned reserve ratio call
+  `reserve_discard(required * ratio)` before `resize_discard(required)`, so
+  capacity is based on the latest requirement without silently changing the
+  subsystem's memory budget.
+- **The umbrella header `cuda_tool.h` does not include `cub.h`**: the CCCL device-algorithm headers are extremely heavy (~165k extra expanded lines per TU), so files using the `Device*` wrappers explicitly `#include <cuda_tool/cub.h>`; `linear_system.h` does not transitively include it. The separate `linear_reduction.h` is included only by the three dot/norm callers and focused test.
 - **RDC must be enabled** (`CUDA_SEPARABLE_COMPILATION ON` + `CUDA_RESOLVE_DEVICE_SYMBOLS ON`): `affine_body/utils.cu` defines `UIPC_GENERIC` free functions (e.g. `q_to_transform`) that are called across translation units by device code in other TUs; disabling RDC gives `ptxas fatal: Unresolved extern`. The xmake-side equivalent is `add_cuflags("-rdc=true")`.
 - **Lesson learned (correction dated 2026-08-20)**: CMake+ninja does not track compile-flag changes (purely mtime-driven) — after switching a global flag like RDC, a "full build" may actually only recompile TUs whose source files changed, and stale objects can slip through linking and create a false "verification passed" impression; after changing global flags you must manually clean the object directory before verifying. This once led to the wrong conclusion that RDC could be disabled (the RDC part of commit d2f48087 has since been corrected).
 - Compile-time profile (32 cores, CUDA 13.2, RTX 5090): full build ~4.7 min / ~8800 CPU·s, 219 .cu files averaging ~35s; a single TU's preprocessed expansion is ~1.63M lines, of which CUDA toolchain headers ~860k, WinSDK ~310k, MSVC STL ~150k, Eigen ~150k, the project itself <20k — the bulk is toolchain headers; the project headers have already been trimmed as far as possible.

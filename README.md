@@ -57,6 +57,9 @@ Runnable examples live in [libuipc-samples/examples/](https://github.com/spiriMi
 
 ### Stiff-GIPC Benchmark Suite (88–93)
 
+The reproducible headless cross-domain registry and current machine-specific
+reference are documented in [Testing and Benchmarks](https://spirimirror.github.io/libuipc-doc/development/testing_and_benchmarks/).
+
 - [88: set_case2](https://github.com/spiriMirror/libuipc-samples/tree/main/examples/88_stiff_gipc_benchmark)
 - [89: set_case7](https://github.com/spiriMirror/libuipc-samples/tree/main/examples/89_mas_bunny)
 - [90: set_case1](https://github.com/spiriMirror/libuipc-samples/tree/main/examples/90_abd_fem_cube_stack)
@@ -95,16 +98,25 @@ Runnable examples live in [libuipc-samples/examples/](https://github.com/spiriMi
 pip install pyuipc
 ```
 
-The release pipeline builds **Windows / Linux, Python 3.10–3.14, CUDA 12.8
-runtime** wheels. The immutable 0.0.26 release predates Python 3.14 support, so
-Python 3.14 users need the next release or a source build.
-The Windows wheel dynamically loads `cublas64_12.dll`; a CUDA 13-only install
-does not provide that versioned runtime. Use CUDA 12.8 side-by-side, or build
-from source for CUDA 13.
+The release pipeline builds **Windows / Linux, Python 3.10–3.14** wheels with
+CUDA 12.8. Wheels built from the current source carry the CUDA runtime code they
+use and require a compatible NVIDIA driver, not a locally installed CUDA
+Toolkit. For GPUs served by a packaged SASS image, the driver floor is
+525.60.13 on Linux and 528.33 on Windows; newer CUDA 13 drivers remain backward
+compatible under NVIDIA's
+[CUDA compatibility model](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html).
+Those are the CUDA 12.x minor-compatibility floors when the GPU selects a
+packaged SASS image. A GPU that must JIT the packaged CUDA 12.8 PTX requires at
+least driver 570.124.06 on Linux or 572.61 on Windows.
 
-New wheels contain native code for compute capabilities 7.5, 8.0, 8.6, and 8.9,
-plus compute-8.9 PTX for forward JIT on newer GPUs. Diagnose an installation
-before running a scene:
+The immutable 0.0.27 wheel still dynamically loads `cublas64_12.dll`. Install
+CUDA 12.8 side-by-side when using that release on a CUDA 13-only machine, or use
+a source build until the next wheel release removes the dependency.
+
+New wheels contain native code for compute capabilities 7.5, 8.0, 8.6, 8.9,
+and 12.0, plus compute-8.9 PTX for forward JIT on other newer GPUs. The doctor
+distinguishes a selected native SASS image from the PTX path and applies the
+matching driver floor. Diagnose an installation before running a scene:
 
 ```bash
 python -m uipc doctor

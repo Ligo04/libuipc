@@ -51,6 +51,8 @@ set(UIPC_USD_INSTALL_DIR "" CACHE PATH
 # Backend Options
 # =========================================================================
 option(UIPC_WITH_CUDA_BACKEND "Build with CUDA backend" ON)
+option(UIPC_WITH_CUDA_LEGACY_COLLISION
+       "Build legacy CUDA broad-phase trajectory filters" ON)
 # if MAC OS, disable CUDA backend
 if(APPLE)
     # Force OFF
@@ -64,6 +66,12 @@ set(UIPC_CUDA_ARCHITECTURES "native" CACHE STRING "Setup CUDA architectures (e.g
 if (DEFINED UIPC_CUDA_ARCHITECTURES AND NOT UIPC_CUDA_ARCHITECTURES STREQUAL "")
     # Accept comma- or semicolon-separated lists, normalize to semicolon list
     string(REPLACE "," ";" _uipc_cuda_archs "${UIPC_CUDA_ARCHITECTURES}")
+    # Normalize the option itself, not just the CMake variable: the backend
+    # targets set their CUDA_ARCHITECTURES property straight from
+    # UIPC_CUDA_ARCHITECTURES, and nvcc rejects the comma form with
+    # "'89' is not in 'keyword=value' format" at compile time.
+    set(UIPC_CUDA_ARCHITECTURES "${_uipc_cuda_archs}" CACHE STRING
+        "Setup CUDA architectures (e.g. \"75,89\" or \"native\")" FORCE)
     # Export to CMAKE_CUDA_ARCHITECTURES for the generator to consume
     set(CMAKE_CUDA_ARCHITECTURES ${_uipc_cuda_archs} CACHE STRING "CUDA architectures" FORCE)
     message(STATUS "Propagated UIPC_CUDA_ARCHITECTURES -> CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -107,9 +115,6 @@ endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON) # Generate compile_commands.json
-
-# dependencies
-add_subdirectory(external)
 
 # uipc
 add_subdirectory(src)

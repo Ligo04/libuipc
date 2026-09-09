@@ -1,10 +1,5 @@
 [build-system]
-requires = [
-    "nanobind==3.0.0",
-    "numpy",
-    "scikit-build-core>=0.10.0",
-    "setuptools-scm>=8.0.0",
-]
+requires = ["nanobind==3.0.0", "numpy", "scikit-build-core>=0.10.0", "setuptools-scm>=8.0.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -30,7 +25,7 @@ maintainers = [
 
 readme = "README.md"
 license = {file = "LICENSE"}
-description = "A Cross-Platform Modern C++20 Library of Unified Incremental Potential Contact (prebuilt wheels require CUDA 12.8)"
+description = "A Cross-Platform Modern C++20 Library of Unified Incremental Potential Contact (prebuilt wheels require a compatible NVIDIA driver)"
 
 keywords = ["ipc", "computer graphics", "physics simulation", "cuda", "fem", "contact"]
 
@@ -113,8 +108,13 @@ build-type = "Release"
 source-dir = "."
 
 [tool.scikit-build.cmake.define]
+<<<<<<< ours
 UIPC_CUDA_ARCHITECTURES = "75-real;80-real;86-real;89-real;89-virtual"
 UIPC_BUILD_PYTHON_BINDINGS = "ON"
+=======
+UIPC_CUDA_ARCHITECTURES = "75-real;80-real;86-real;89-real;120-real;89-virtual"
+UIPC_BUILD_PYTHON_BINDINGS = "ON"
+>>>>>>> theirs
 UIPC_BUILD_EXAMPLES = "OFF"
 UIPC_BUILD_TESTS = "OFF"
 UIPC_BUILD_BENCHMARKS = "OFF"

@@ -60,6 +60,11 @@ record it here in the same commit.**
    not re-introduce it (or similar compiler-cache layers) without an
    explicit request.
 
+- **Use only the embedded C++ METIS target.** Mesh partitioning must use
+  `src/geometry/metis/` through `uipc_metis`; do not restore separate
+  `external/METIS` or `external/GKlib` source trees or targets. Keep the CMake
+  and XMake source boundary equivalent. (Set 2026-09-03.)
+
 ## CUDA backend
 
 9. **Raw kernels only**: business GPU code is written as named
@@ -76,6 +81,32 @@ record it here in the same commit.**
    temporary storage must be persistent and reused (normally through
    `cuda_tool`'s per-stream workspace); never allocate/free CUB scratch on
    every call. (Set 2026-08-25.)
+
+13. **Make CUDA buffer growth semantics explicit.** Keep `resize()` for
+   value-initialized state. Use `resize_discard()` only for output that the
+   following kernel/copy/CUB call completely regenerates, and use
+   `resize_preserve()` only when the old logical range must survive but the new
+   range may remain uninitialized. Growth capacity must be based on the latest
+   requirement with deliberate headroom; do not copy or initialize dead output
+   ranges merely to emulate `std::vector`. (Set 2026-08-30.)
+
+14. **Profile heterogeneous kernel fusion/splitting end to end.** Static
+    register or stack reductions do not prove a speedup. In particular, keep
+    IPC simplex PT/EE/PE/PP Hessian assembly in one launch unless both the
+    kernel profile and enclosing DyTopo timer prove a split is faster: rare
+    PT/EE threads are expensive and overlap the dominant PE population in the
+    fused launch. Compile-time specialization of a uniform mode such as
+    `gradient_only` is preferred when it removes dead work without serializing
+    stencil families. (Set 2026-08-30.)
+
+15. **Use pipeline-specific parallel-EE handling.** AL-IPC never classifies
+    parallel EE pairs: both normal and frictional contact use the shared
+    negative disabled threshold, making `need_mollify()` false and routing all
+    AL pairs through their ordinary EE paths. Standard IPC uses the positive
+    `1e-3` coefficient. Its normal-contact path evaluates the complete
+    mollified energy, gradient, and Hessian for detected parallel pairs; its
+    friction path skips detected parallel pairs. Do not make `need_mollify()`
+    globally constant. (Set 2026-09-03; refined 2026-09-03.)
 
 ## Task-scoped (recorded for context, not general policy)
 

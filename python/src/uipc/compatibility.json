@@ -12,11 +12,21 @@
   },
   "wheel": {
     "cuda_toolkit": "12.8",
+    "requires_system_cuda_toolkit": false,
+    "minimum_driver": {
+      "linux": "525.60.13",
+      "windows": "528.33"
+    },
+    "minimum_ptx_jit_driver": {
+      "linux": "570.124.06",
+      "windows": "572.61"
+    },
     "cuda_architectures": [
       "75-real",
       "80-real",
       "86-real",
       "89-real",
+      "120-real",
       "89-virtual"
     ],
     "platform_tokens": [

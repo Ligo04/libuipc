@@ -6,7 +6,6 @@ import argparse
 import contextlib
 import csv
 import ctypes
-import ctypes.util
 import importlib
 import json
 import os
@@ -33,10 +32,10 @@ def parse_architectures(value: str | Iterable[str]) -> tuple[str, ...]:
     return tuple(item.strip().lower() for item in values if item.strip())
 
 
-def architecture_supports(
+def architecture_code_path(
     architectures: str | Iterable[str], compute_capability: str
-) -> bool | None:
-    """Return whether an architecture list can run on a compute capability."""
+) -> str | None:
+    """Return ``sass``, ``ptx``, ``unsupported``, or ``None`` if indeterminate."""
     tokens = parse_architectures(architectures)
     if not tokens or any(token in {"native", "all", "all-major"} for token in tokens):
         return None
@@ -47,6 +46,7 @@ def architecture_supports(
     device = int(match.group(1)) * 10 + int(match.group(2) or 0)
 
     understood = False
+    has_ptx_path = False
     for token in tokens:
         arch_match = re.fullmatch(r"(\d+)(?:-(real|virtual))?", token)
         if not arch_match:
@@ -54,14 +54,36 @@ def architecture_supports(
         understood = True
         target = int(arch_match.group(1))
         kind = arch_match.group(2)
-        if kind == "real" and device == target:
-            return True
-        if kind == "virtual" and device >= target:
-            return True
-        if kind is None and device >= target:
-            # CMake's unsuffixed form emits both SASS and PTX.
-            return True
-    return False if understood else None
+        same_major_sass = target // 10 == device // 10 and target <= device
+        if kind in {"real", None} and same_major_sass:
+            return "sass"
+        if kind in {"virtual", None} and device >= target:
+            has_ptx_path = True
+    if has_ptx_path:
+        return "ptx"
+    return "unsupported" if understood else None
+
+
+def architecture_supports(
+    architectures: str | Iterable[str], compute_capability: str
+) -> bool | None:
+    """Return whether an architecture list can run on a compute capability."""
+    code_path = architecture_code_path(architectures, compute_capability)
+    if code_path is None:
+        return None
+    return code_path != "unsupported"
+
+
+def required_driver_for_architecture(
+    wheel_policy: dict[str, Any],
+    driver_platform: str,
+    architectures: str | Iterable[str],
+    compute_capability: str,
+) -> tuple[str, str | None]:
+    """Return the required driver and selected device-code path."""
+    code_path = architecture_code_path(architectures, compute_capability)
+    policy_key = "minimum_ptx_jit_driver" if code_path == "ptx" else "minimum_driver"
+    return str(wheel_policy[policy_key][driver_platform]), code_path
 
 
 def parse_nvidia_smi_rows(output: str) -> list[dict[str, str]]:
@@ -77,6 +99,18 @@ def parse_nvidia_smi_rows(output: str) -> list[dict[str, str]]:
             }
         )
     return gpus
+
+
+def version_at_least(actual: str, required: str) -> bool:
+    def components(value: str) -> tuple[int, ...]:
+        return tuple(int(item) for item in re.findall(r"\d+", value))
+
+    actual_components = components(actual)
+    required_components = components(required)
+    width = max(len(actual_components), len(required_components))
+    return actual_components + (0,) * (width - len(actual_components)) >= (
+        required_components + (0,) * (width - len(required_components))
+    )
 
 
 def query_gpus() -> tuple[list[dict[str, str]], str | None]:
@@ -103,42 +137,6 @@ def query_gpus() -> tuple[list[dict[str, str]], str | None]:
     return parse_nvidia_smi_rows(result.stdout), None
 
 
-def _candidate_runtime_directories() -> list[Path]:
-    directories: list[Path] = []
-    for name, value in os.environ.items():
-        if name == "CUDA_PATH" or name.startswith("CUDA_PATH_V"):
-            directories.append(Path(value) / "bin")
-            directories.append(Path(value) / "lib" / "x64")
-    directories.extend(
-        Path(value) for value in os.environ.get("PATH", "").split(os.pathsep) if value
-    )
-    result: list[Path] = []
-    seen: set[str] = set()
-    for directory in directories:
-        key = os.path.normcase(os.path.abspath(directory))
-        if key not in seen:
-            result.append(directory)
-            seen.add(key)
-    return result
-
-
-def find_cublas_runtime(cuda_toolkit: str) -> list[str]:
-    major = cuda_toolkit.split(".", maxsplit=1)[0]
-    if os.name == "nt":
-        filename = f"cublas64_{major}.dll"
-        matches = [
-            str(directory / filename)
-            for directory in _candidate_runtime_directories()
-            if (directory / filename).is_file()
-        ]
-        return matches
-
-    library = ctypes.util.find_library("cublas")
-    if library and (f".so.{major}" in library or major in library):
-        return [library]
-    return []
-
-
 def find_cuda_backend(native_dir: Path) -> Path | None:
     patterns = (
         "uipc_backend_cuda.dll",
@@ -158,9 +156,6 @@ def load_backend_library(path: Path) -> str | None:
         with contextlib.ExitStack() as stack:
             if os.name == "nt" and hasattr(os, "add_dll_directory"):
                 stack.enter_context(os.add_dll_directory(str(path.parent)))
-                for directory in _candidate_runtime_directories():
-                    if directory.is_dir():
-                        stack.enter_context(os.add_dll_directory(str(directory)))
             ctypes.CDLL(str(path))
     except (OSError, ValueError) as error:
         return str(error)
@@ -255,30 +250,13 @@ def collect_diagnostics(*, probe_cuda: bool = False) -> dict[str, Any]:
     )
 
     compiled_toolkit = str(build_info.get("cuda_toolkit_version", "unknown"))
-    required_toolkit = (
-        compiled_toolkit
-        if re.fullmatch(r"\d+(?:\.\d+){1,2}", compiled_toolkit)
-        else str(wheel_policy["cuda_toolkit"])
-    )
-    runtime_major = required_toolkit.split(".", maxsplit=1)[0]
-    cublas = find_cublas_runtime(required_toolkit)
     checks.append(
         _result(
             "CUDA runtime",
-            "ok" if cublas else "fail",
-            (
-                ", ".join(cublas)
-                if cublas
-                else f"CUDA {required_toolkit} cuBLAS was not found"
-            ),
-            hint=(
-                None
-                if cublas
-                else f"Install CUDA {required_toolkit} side-by-side and expose its bin/lib "
-                f"directory. A newer NVIDIA driver alone does not provide the CUDA "
-                f"{runtime_major} cuBLAS dynamic library."
-            ),
-            data=cublas,
+            "ok",
+            f"self-contained runtime built with CUDA {compiled_toolkit}; "
+            "no system CUDA Toolkit is required",
+            data={"compiled_toolkit": compiled_toolkit, "system_toolkit": False},
         )
     )
 
@@ -298,41 +276,100 @@ def collect_diagnostics(*, probe_cuda: bool = False) -> dict[str, Any]:
         )
 
     gpus, gpu_error = query_gpus()
+    driver_platform = "windows" if os.name == "nt" else "linux"
+    minimum_driver = str(wheel_policy["minimum_driver"][driver_platform])
+    compiled_architectures = str(build_info.get("cuda_architectures", "unknown"))
+    architecture_known = compiled_architectures not in {"", "unknown", "none"}
+    driver_requirements: list[tuple[dict[str, str], str, str | None]] = []
+    for gpu in gpus:
+        if architecture_known:
+            required_driver, code_path = required_driver_for_architecture(
+                wheel_policy,
+                driver_platform,
+                compiled_architectures,
+                gpu["compute_capability"],
+            )
+        else:
+            required_driver, code_path = minimum_driver, None
+        driver_requirements.append((gpu, required_driver, code_path))
+
+    driver_compatible = bool(gpus) and all(
+        version_at_least(gpu["driver_version"], required_driver)
+        for gpu, required_driver, _ in driver_requirements
+    )
+    failed_driver_requirements = [
+        (gpu, required_driver, code_path)
+        for gpu, required_driver, code_path in driver_requirements
+        if not version_at_least(gpu["driver_version"], required_driver)
+    ]
+    driver_data = [
+        {
+            **gpu,
+            "code_path": code_path,
+            "minimum_driver": required_driver,
+        }
+        for gpu, required_driver, code_path in driver_requirements
+    ]
     checks.append(
         _result(
             "NVIDIA driver",
-            "ok" if gpus else ("fail" if probe_cuda else "warn"),
+            (
+                "ok"
+                if driver_compatible
+                else "fail"
+                if gpus or probe_cuda
+                else "warn"
+            ),
             (
                 "; ".join(
                     f"{gpu['name']} (sm_{gpu['compute_capability'].replace('.', '')}, "
-                    f"driver {gpu['driver_version']})"
-                    for gpu in gpus
+                    f"driver {gpu['driver_version']}, "
+                    f"{code_path.upper() if code_path in {'sass', 'ptx'} else 'code path unknown'}, "
+                    f"requires >= {required_driver})"
+                    for gpu, required_driver, code_path in driver_requirements
                 )
                 if gpus
                 else gpu_error or "no NVIDIA GPU reported"
             ),
-            hint=None if gpus else "Install a current NVIDIA driver and verify nvidia-smi.",
-            data=gpus,
+            hint=(
+                None
+                if driver_compatible
+                else (
+                    "Upgrade the NVIDIA driver to satisfy "
+                    + "; ".join(
+                        f"{gpu['name']} >= {required_driver}"
+                        f" ({'PTX JIT' if code_path == 'ptx' else 'SASS/runtime'})"
+                        for gpu, required_driver, code_path in failed_driver_requirements
+                    )
+                    if failed_driver_requirements
+                    else f"Install NVIDIA driver {minimum_driver} or newer and verify "
+                    "nvidia-smi. A local CUDA Toolkit is not required."
+                )
+            ),
+            data=driver_data,
         )
     )
 
-    compiled_architectures = str(build_info.get("cuda_architectures", "unknown"))
     architecture_source = "native build metadata"
     for index, gpu in enumerate(gpus):
-        supported = (
-            None
-            if compiled_architectures in {"", "unknown", "none"}
-            else architecture_supports(
-                compiled_architectures, gpu["compute_capability"]
-            )
+        code_path = (
+            architecture_code_path(compiled_architectures, gpu["compute_capability"])
+            if architecture_known
+            else None
         )
+        supported = None if code_path is None else code_path != "unsupported"
         status = "ok" if supported else ("fail" if supported is False else "warn")
+        path_detail = (
+            f", selected {code_path.upper()}"
+            if code_path in {"sass", "ptx"}
+            else ""
+        )
         checks.append(
             _result(
                 f"GPU architecture #{index}",
                 status,
                 f"sm_{gpu['compute_capability'].replace('.', '')} against "
-                f"[{compiled_architectures}] ({architecture_source})",
+                f"[{compiled_architectures}] ({architecture_source}{path_detail})",
                 hint=(
                     (
                         "A native architecture target cannot be compared statically; use "
@@ -347,6 +384,10 @@ def collect_diagnostics(*, probe_cuda: bool = False) -> dict[str, Any]:
                     else "Install a wheel containing this SASS target or a compatible PTX target, "
                     "or build from source with -DUIPC_CUDA_ARCHITECTURES=native."
                 ),
+                data={
+                    "code_path": code_path,
+                    "compiled_architectures": compiled_architectures,
+                },
             )
         )
 

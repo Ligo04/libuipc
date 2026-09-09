@@ -88,7 +88,7 @@ The native extension is only part of `python/src/uipc/`. The pure-Python layer a
 Packaging/helper invariants verified in the current tree:
 
 - root and development metadata include `matplotlib`, pin the dev extra to
-  `pytest>=9.0.3`, and use the same prebuilt-wheel CUDA 12.8 statement;
+  `pytest>=9.0.3`, and use the same driver-only prebuilt-wheel statement;
 - the Warp empty-strides fallback uses the dtype element size;
 - `Scene.Objects.created_count()` is bound to Python and
   `assets.strip_constitutions` uses that ID upper bound, so sparse object IDs are
@@ -119,7 +119,7 @@ Representative map:
 | rods/codimension-one bending | `23_kirchoff_rod_bending` |
 | mixed ABD + FEM/cloth | `90_abd_fem_cube_stack`, `93_cube_wall_cloth` |
 | scene save/load | `14_load_scene` |
-| incremental scene commits | `15_scene_commit` (read doc 11 limitations first) |
+| incremental scene commits | `15_scene_commit` (read doc 11 baseline/lifecycle contract first) |
 | geometry operations | `16_geometry_operation`, `27_compute_mesh_d_hat` |
 | joints/articulation | `17_affine_body_revolute_joint`, `18_pendulum_joint`, `33_external_articulation_constraint`, `38_*`, `39_*` |
 | contact pair materials | `14_load_scene` |
@@ -130,7 +130,14 @@ Representative map:
 
 Samples often include polyscope GUI loops. For CI or agent experiments, prefer a
 headless branch with a finite frame count, `advance/retrieve` pairing, and one
-small numerical assertion. Examples `88`–`93` already demonstrate this pattern.
+small numerical assertion. Examples 6 and 88–93 already demonstrate this pattern.
+The root `benchmarks/manifest.json` promotes examples 6, 88, 89, and 93 as the
+canonical cross-domain performance suite. Run them through
+`scripts/run_benchmark.py` so the sample submodule revision, canonical
+environment, full frame distribution, backend iteration counts, physical
+observable, approximate memory peak, command, and result status are recorded
+together. Throughput runs leave synchronized Timer scopes disabled; stage
+diagnostics are separate runs.
 
 ## Documentation Source and Deployment
 
@@ -217,7 +224,8 @@ warnings are generated-API routes that do not exist until MkDoxy runs.
 ## Release Workflow Boundary
 
 `.github/workflows/python-wheels.yml` builds Windows/Linux wheels for CPython
-3.10–3.14 on CUDA 12.8 (0.0.26 remains a 3.10–3.13 release). The normal flow is:
+3.10–3.14 with CUDA 12.8. Release 0.0.27 contains that complete ABI matrix. The
+normal flow is:
 
 ```text
 tag/build -> installed-wheel smoke tests -> wheel artifacts -> TestPyPI
@@ -230,16 +238,21 @@ and publishes them to PyPI, so it depends on those artifacts still being retaine
 `scripts/smoke_test_wheel.py` is deliberately safe on hosted runners without a GPU:
 it validates the imported version, packaged native directory, and
 `Engine("none", workspace)`. This catches broken installation/layout and basic
-ABI-load failures, but not the lazy CUDA backend. `import uipc` and the current
-hosted smoke test cannot detect a missing CUDA runtime DLL; a CUDA-capable release
-runner must additionally construct `Engine("cuda", workspace)` (or run the
-equivalent doctor probe) before CUDA compatibility is considered verified.
+ABI-load failures, but not the lazy CUDA backend. Every wheel is also unpacked
+and inspected with `dumpbin` or `readelf`; CUDA Toolkit dependencies are a hard
+failure. A CUDA-capable release runner must still construct
+`Engine("cuda", workspace)` (or run the equivalent doctor probe) before driver,
+GPU-architecture, and execution compatibility are considered verified.
 
 ## Current Build-Metadata Differences to Keep Visible
 
 - CMake remains the primary and wheel-tested build. XMake now mirrors the
   active USD/VDB options, omits removed GUI/torch/RPC surfaces, and explicitly
   disables ccache.
+- Windows wheel builds may use CMake's Visual Studio generator; the final CUDA
+  target's generated language anchor is required so its domain OBJECT inputs
+  participate in the one RDC device-link. XMake already owns CUDA sources
+  directly on the final target and needs no matching synthetic source.
 - CMake/vcpkg pins fmt 10.2.1 while XMake pins fmt 12.1.0 for an NVCC compatibility
   workaround; keep ABI/version effects in mind.
 - XMake's Python-binding target is an importable shared module (`.pyd` on Windows),

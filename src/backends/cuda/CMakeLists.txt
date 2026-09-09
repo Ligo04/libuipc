@@ -23,9 +23,6 @@ uipc_add_backend(cuda)
 
 # basic setup
 target_link_libraries(cuda PUBLIC
-    cublas
-    cusparse
-    cusolver
     uipc_geometry
     uipc_io
 )
@@ -50,10 +47,26 @@ set_target_properties(cuda PROPERTIES
     # needs a manual object cleanup to take effect!)
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES ${UIPC_CUDA_ARCHITECTURES}
     CUDA_STANDARD_REQUIRED ON
     CUDA_STANDARD 20
 )
+
+# Use the checked single-property helper for every CUDA target. This prevents
+# semicolon-list expansion from silently narrowing a release wheel.
+uipc_set_target_cuda_architectures(cuda "${UIPC_CUDA_ARCHITECTURES}")
+
+# CMake's Visual Studio generator does not schedule the RDC device-link when a
+# target receives CUDA exclusively through OBJECT-library expressions. Give the
+# final backend target a generated CUDA-language source so every generator sees
+# CUDA directly. The file intentionally contains no runtime code; all 198
+# functional sources remain owned by the domain OBJECT targets below.
+set(UIPC_CUDA_DEVICE_LINK_ANCHOR
+    "${CMAKE_CURRENT_BINARY_DIR}/uipc_cuda_device_link_anchor.cu")
+file(GENERATE
+    OUTPUT "${UIPC_CUDA_DEVICE_LINK_ANCHOR}"
+    CONTENT "// Generated CMake CUDA-language anchor for the final RDC device-link.\n")
+set_source_files_properties("${UIPC_CUDA_DEVICE_LINK_ANCHOR}" PROPERTIES GENERATED TRUE)
+target_sources(cuda PRIVATE "${UIPC_CUDA_DEVICE_LINK_ANCHOR}")
 
 target_compile_options(cuda PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>: --diag-suppress=20012,1388,27,174,1394,997,1866,69,177,554,20014,2361,20011,940,55,221,1028>
@@ -61,10 +74,12 @@ target_compile_options(cuda PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>: --extended-lambda>
 )
 
-# all files in this directory
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cu" "*.h" "*.hpp" "*.cpp" "*.inl")
+# Compile sources are owned by internal domain OBJECT targets and receive one
+# final CUDA device-link in the public backend library.
+include(${CMAKE_CURRENT_LIST_DIR}/components.cmake)
 
-target_sources(cuda PRIVATE ${SOURCES})
+file(GLOB_RECURSE CUDA_HEADERS CONFIGURE_DEPENDS "*.h" "*.hpp" "*.inl")
+target_sources(cuda PRIVATE ${CUDA_HEADERS})
 uipc_target_set_relative_source_file(cuda)
 
 # ------------------------------------------------------------------------------

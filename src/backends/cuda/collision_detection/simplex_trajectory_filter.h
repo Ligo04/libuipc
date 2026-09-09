@@ -31,6 +31,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         }
 
         Float d_hat() const noexcept;
+        Float toi_safety_margin() const noexcept;
 
         // Vertex Attributes
 
@@ -129,6 +130,7 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         SimSystemSlot<GlobalSimplicialSurfaceManager> global_simplicial_surface_manager;
         SimSystemSlot<GlobalContactManager> global_contact_manager;
         SimSystemSlot<GlobalBodyManager>    global_body_manager;
+        Float                               toi_safety_margin = 0.1;
 
         cuda_tool::CBufferView<Vector4i> PTs;
         cuda_tool::CBufferView<Vector4i> EEs;
@@ -157,9 +159,9 @@ class SimplexTrajectoryFilter : public TrajectoryFilter
         {
             if(size > buffer.capacity())
             {
-                buffer.reserve(size * reserve_ratio);
+                buffer.reserve_discard(size * reserve_ratio);
             }
-            buffer.resize(size);
+            buffer.resize_discard(size);
         }
     };
 
