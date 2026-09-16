@@ -1,5 +1,5 @@
 [build-system]
-requires = ["nanobind==3.0.1", "numpy", "scikit-build-core>=0.10.0", "setuptools-scm>=8.0.0"]
+requires = ["nanobind==3.0.1", "scikit-build-core>=0.10.0", "setuptools-scm>=8.0.0", "numpy>=1.23", "typing_extensions>=4.6"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -15,11 +15,12 @@ dependencies = [
 ]
 
 authors = [
-    {name = "Zihang Zhu", email = "paradise_craftsman@hotmail.com"},
+    {name = "Kemeng Huang", email = "kmhuang819@gmail.com"},
     {name = "MuGdxy", email = "lxy819469559@gmail.com"}
 ]
 
 maintainers = [
+    {name = "Kemeng Huang", email = "kmhuang819@gmail.com"},
     {name = "MuGdxy", email = "lxy819469559@gmail.com"}
 ]
 
@@ -108,13 +109,8 @@ build-type = "Release"
 source-dir = "."
 
 [tool.scikit-build.cmake.define]
-<<<<<<< ours
-UIPC_CUDA_ARCHITECTURES = "75-real;80-real;86-real;89-real;89-virtual"
-UIPC_BUILD_PYTHON_BINDINGS = "ON"
-=======
 UIPC_CUDA_ARCHITECTURES = "75-real;80-real;86-real;89-real;120-real;89-virtual"
 UIPC_BUILD_PYTHON_BINDINGS = "ON"
->>>>>>> theirs
 UIPC_BUILD_EXAMPLES = "OFF"
 UIPC_BUILD_TESTS = "OFF"
 UIPC_BUILD_BENCHMARKS = "OFF"
