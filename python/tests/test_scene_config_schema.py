@@ -32,7 +32,10 @@ def test_scene_config_schema_matches_public_defaults() -> None:
     conditional = collision["conditionalValues"]
     assert conditional["backend"] == "cuda"
     assert conditional["buildOption"] == "UIPC_WITH_CUDA_LEGACY_COLLISION"
+    assert collision["default"] == "info_stackless_bvh"
     assert collision["enum"][0] == "info_stackless_bvh"
+    assert collision["enum"].count("single_ef_bvh") == 1
+    assert "single_ef_bvh" not in conditional["values"]
     for legacy_method in conditional["values"]:
         assert (legacy_method in collision["enum"]) is conditional["enabled"]
 
@@ -46,6 +49,13 @@ def test_scene_config_schema_matches_public_defaults() -> None:
             "lifecycle",
             "status",
         } <= entry.keys()
+
+
+@pytest.mark.parametrize("method", ["info_stackless_bvh", "single_ef_bvh"])
+def test_scene_config_accepts_modern_collision_methods(method: str) -> None:
+    config = Scene.default_config()
+    config["collision_detection"]["method"] = method
+    Scene(config)
 
 
 @pytest.mark.parametrize(

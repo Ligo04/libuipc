@@ -40,6 +40,7 @@ target_include_directories(cuda PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cuda_tool")
 # the vendored muda headers reference the CUDA driver API header <cuda.h>
 target_include_directories(cuda PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 set_target_properties(cuda PROPERTIES
+    CUDA_RUNTIME_LIBRARY Shared
     # RDC is REQUIRED: affine_body/utils.cu defines UIPC_GENERIC free functions
     # (e.g. q_to_transform) that are called from device code in other TUs;
     # without separable compilation ptxas fails with "Unresolved extern".

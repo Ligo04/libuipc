@@ -601,6 +601,15 @@ namespace
         }
     }
 
+    template <typename NodeCull>
+    __device__ auto prepare_query_node_predicate(NodeCull predicate, IndexT query_id)
+    {
+        if constexpr(requires { predicate.prepare_query(query_id); })
+            return predicate.prepare_query(query_id);
+        else
+            return predicate;
+    }
+
     template <typename NodeCull, typename PairPred>
     __global__ void InfoStacklessBVH_stacklessOther_kernel(
         int                                           Size,
@@ -628,6 +637,8 @@ namespace
             idx = sortedIdx(tid);
             bv  = _box(idx);
         }
+
+        const auto query_node_predicate = prepare_query_node_predicate(node_cull, idx);
 
         // -----------------------------------------------------------------
         // SMem: pre-load per-query bid/cid before the traversal loop.
@@ -662,8 +673,16 @@ namespace
                         st = node.escape;
                         continue;
                     }
-                    if(!node_cull(InfoStacklessBVH::NodePredInfo{
-                           idx, s_qbid[threadIdx.x], s_qcid[threadIdx.x], node.bid, node.cid}))
+                    const InfoStacklessBVH::NodePredInfo node_info{
+                        idx, s_qbid[threadIdx.x], s_qcid[threadIdx.x], node.bid, node.cid};
+                    bool keep_node;
+                    if constexpr(requires {
+                                     query_node_predicate(node_info, node.bound);
+                                 })
+                        keep_node = query_node_predicate(node_info, node.bound);
+                    else
+                        keep_node = query_node_predicate(node_info);
+                    if(!keep_node)
                     {
                         st = node.escape;
                         continue;

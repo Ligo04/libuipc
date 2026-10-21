@@ -147,6 +147,9 @@ class InfoStacklessBVH
                       QueryBuffer&                     qbuffer,
                       bool                             rebuild_query = true);
 
+    // Query NodePred may also accept (NodePredInfo, const AABB&) to prune
+    // subtrees with query geometry. Existing one-argument predicates are unchanged.
+
     // Publish a device-produced count and grow the output if a retry is
     // required. The caller relaunches the same query when this returns true.
     bool prepare_query_result(QueryBuffer& qbuffer, int count);

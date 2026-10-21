@@ -1,0 +1,67 @@
+#pragma once
+#include <collision_detection/info_stackless_bvh.h>
+#include <collision_detection/filters/simplex_candidate_predicates.cuh>
+#include <limits>
+
+namespace uipc::backend::cuda
+{
+class SingleEFBVHQuery
+{
+  public:
+    SingleEFBVHQuery() { m_ef_pairs.m_pairs.resize_discard(0); }
+
+    struct PrimitiveBounds
+    {
+        cuda_tool::CBufferView<AABB>   aabbs;
+        cuda_tool::CBufferView<IndexT> bids;
+        cuda_tool::CBufferView<IndexT> cids;
+    };
+
+    struct QuerySegment
+    {
+        Vector3 from, to;
+        Float   radius;
+    };
+
+    // Unsupported topology returns false without publishing candidate results.
+    bool detect(InfoStacklessBVH&                                 triangle_bvh,
+                const bvh_simplex_detail::PointTrianglePredicate& pt_pred,
+                const bvh_simplex_detail::EdgeEdgePredicate&      ee_pred,
+                const bvh_simplex_detail::NodePredicate&          node_pred,
+                PrimitiveBounds                                   points,
+                PrimitiveBounds                                   edges,
+                PrimitiveBounds                                   triangles,
+                InfoStacklessBVH::QueryBuffer&                    pts,
+                InfoStacklessBVH::QueryBuffer&                    ees);
+
+    SizeT max_chunk_edges = std::numeric_limits<IndexT>::max();
+
+  private:
+    enum class Eligibility
+    {
+        Unchecked,
+        Supported,
+        Unsupported
+    };
+    Eligibility m_eligibility  = Eligibility::Unchecked;
+    const void* m_vertices     = nullptr;
+    const void* m_edges        = nullptr;
+    const void* m_triangles    = nullptr;
+    SizeT       m_vertex_count = 0, m_edge_count = 0, m_triangle_count = 0;
+    SizeT       m_position_count = 0;
+
+    bool prepare_topology(const bvh_simplex_detail::PointTrianglePredicate& pt_pred,
+                          const bvh_simplex_detail::EdgeEdgePredicate& ee_pred);
+
+    cuda_tool::DeviceBuffer<Vector2i>     m_edge_vertices;
+    cuda_tool::DeviceBuffer<Vector3i>     m_triangle_vertices;
+    cuda_tool::DeviceBuffer<Vector2i>     m_owned_vertices;
+    cuda_tool::DeviceBuffer<Vector3i>     m_owned_edges;
+    cuda_tool::DeviceBuffer<AABB>         m_query_boxes, m_leaf_boxes;
+    cuda_tool::DeviceBuffer<QuerySegment> m_query_segments;
+    cuda_tool::DeviceBuffer<IndexT> m_query_bids, m_query_cids, m_leaf_bids, m_leaf_cids;
+    InfoStacklessBVH::QueryBuffer    m_ef_pairs;
+    cuda_tool::DeviceBuffer<uint8_t> m_masks;
+    cuda_tool::DeviceBuffer<U64> m_pt_counts, m_ee_counts, m_pt_offsets, m_ee_offsets;
+};
+}  // namespace uipc::backend::cuda

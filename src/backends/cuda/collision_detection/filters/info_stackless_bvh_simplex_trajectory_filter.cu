@@ -8,6 +8,7 @@
 #include <utils/codim_thickness.h>
 #include <utils/simplex_contact_mask_utils.h>
 #include <uipc/common/zip.h>
+#include <uipc/common/timer.h>
 #include <utils/primitive_d_hat.h>
 #include <array>
 #include <cstdio>
@@ -193,24 +194,6 @@ namespace
         cids(i)  = contact_ids(fI[0]);
     }
 
-    struct InfoStacklessBVHSimplexTrajectoryFilter_detect_node_pred
-    {
-        cuda_tool::CBufferView<IndexT> body_self_collision;
-        cuda_tool::CDense2D<IndexT>    cmts;
-
-        __device__ bool operator()(InfoStacklessBVH::NodePredInfo info) const
-        {
-            constexpr IndexT invalid = static_cast<IndexT>(-1);
-            auto             qbid    = info.query_bid;
-            auto             qcid    = info.query_cid;
-            bool bid_cull = info.node_bid != invalid && qbid != invalid
-                            && qbid == info.node_bid && !body_self_collision(qbid);
-            bool cid_cull = info.node_cid != invalid && qcid != invalid
-                            && !cmts(qcid, info.node_cid);
-            return !(bid_cull || cid_cull);
-        }
-    };
-
     struct InfoStacklessBVHSimplexTrajectoryFilter_detect_AllP_CodimP_pred
     {
         cuda_tool::CBufferView<IndexT>  Vs;
@@ -349,170 +332,6 @@ namespace
             Vector3 dP  = alpha * dxs(codimV);
 
             if(!distance::point_edge_ccd_broadphase(P, E0, E1, dP, dE0, dE1, expand))
-                return false;
-
-            return true;
-        }
-    };
-
-    struct InfoStacklessBVHSimplexTrajectoryFilter_detect_AllE_AllE_pred
-    {
-        cuda_tool::CBufferView<Vector2i> Es;
-        cuda_tool::CBufferView<Vector3>  Ps;
-        cuda_tool::CBufferView<Vector3>  dxs;
-        cuda_tool::CBufferView<Float>    thicknesses;
-        cuda_tool::CBufferView<IndexT>   contact_element_ids;
-        cuda_tool::CDense2D<IndexT>      contact_mask_tabular;
-        cuda_tool::CBufferView<IndexT>   subscene_element_ids;
-        cuda_tool::CDense2D<IndexT>      subscene_mask_tabular;
-        cuda_tool::CBufferView<IndexT>   body_self_collision;
-        cuda_tool::CBufferView<Float>    d_hats;
-        Float                            alpha;
-
-        __device__ bool operator()(InfoStacklessBVH::LeafPredInfo info) const
-        {
-            auto        i  = info.i;
-            auto        j  = info.j;
-            const auto& E0 = Es(i);
-            const auto& E1 = Es(j);
-
-            Vector4i cids = {contact_element_ids(E0[0]),
-                             contact_element_ids(E0[1]),
-                             contact_element_ids(E1[0]),
-                             contact_element_ids(E1[1])};
-
-            Vector4i scids = {subscene_element_ids(E0[0]),
-                              subscene_element_ids(E0[1]),
-                              subscene_element_ids(E1[0]),
-                              subscene_element_ids(E1[1])};
-
-            if(!allow_EE_contact(subscene_mask_tabular, scids))
-                return false;
-            if(!allow_EE_contact(contact_mask_tabular, cids))
-                return false;
-
-            if(E0[0] == E1[0] || E0[0] == E1[1] || E0[1] == E1[0] || E0[1] == E1[1])
-                return false;
-
-            if(info.bid_i == info.bid_j && info.bid_i != static_cast<IndexT>(-1)
-               && !body_self_collision(info.bid_i))
-                return false;
-
-            Vector3 E0_0 = Ps(E0[0]);
-            Vector3 E0_1 = Ps(E0[1]);
-
-            Vector3 E1_0 = Ps(E1[0]);
-            Vector3 E1_1 = Ps(E1[1]);
-
-            Float thickness = EE_thickness(thicknesses(E0[0]),
-                                           thicknesses(E0[1]),
-                                           thicknesses(E1[0]),
-                                           thicknesses(E1[1]));
-
-            Float d_hat =
-                EE_d_hat(d_hats(E0[0]), d_hats(E0[1]), d_hats(E1[0]), d_hats(E1[1]));
-
-            Float expand = d_hat + thickness;
-
-            if(alpha == 0.0)
-            {
-                // DCD detect pass: exact distance test (see PP pred); the
-                // plain EE distance is a correct superset of the mollified
-                // degenerate handling in filter_active
-                Float D2;
-                Vector4i flag = distance::edge_edge_distance_flag(E0_0, E0_1, E1_0, E1_1);
-                distance::edge_edge_distance2(flag, E0_0, E0_1, E1_0, E1_1, D2);
-                return D2 < expand * expand;
-            }
-
-            Vector3 dE0_0 = alpha * dxs(E0[0]);
-            Vector3 dE0_1 = alpha * dxs(E0[1]);
-            Vector3 dE1_0 = alpha * dxs(E1[0]);
-            Vector3 dE1_1 = alpha * dxs(E1[1]);
-
-            if(!distance::edge_edge_ccd_broadphase(
-                   E0_0, E0_1, E1_0, E1_1, dE0_0, dE0_1, dE1_0, dE1_1, expand))
-                return false;
-
-            return true;
-        }
-    };
-
-    struct InfoStacklessBVHSimplexTrajectoryFilter_detect_AllP_AllT_pred
-    {
-        cuda_tool::CBufferView<IndexT>   Vs;
-        cuda_tool::CBufferView<Vector3i> Fs;
-        cuda_tool::CBufferView<Vector3>  Ps;
-        cuda_tool::CBufferView<Vector3>  dxs;
-        cuda_tool::CBufferView<Float>    thicknesses;
-        cuda_tool::CBufferView<IndexT>   contact_element_ids;
-        cuda_tool::CDense2D<IndexT>      contact_mask_tabular;
-        cuda_tool::CBufferView<IndexT>   subscene_element_ids;
-        cuda_tool::CDense2D<IndexT>      subscene_mask_tabular;
-        cuda_tool::CBufferView<IndexT>   body_self_collision;
-        cuda_tool::CBufferView<Float>    d_hats;
-        Float                            alpha;
-
-        __device__ bool operator()(InfoStacklessBVH::LeafPredInfo info) const
-        {
-            auto i = info.i;
-            auto j = info.j;
-            auto V = Vs(i);
-            auto F = Fs(j);
-
-            Vector4i cids = {contact_element_ids(V),
-                             contact_element_ids(F[0]),
-                             contact_element_ids(F[1]),
-                             contact_element_ids(F[2])};
-
-            Vector4i scids = {subscene_element_ids(V),
-                              subscene_element_ids(F[0]),
-                              subscene_element_ids(F[1]),
-                              subscene_element_ids(F[2])};
-
-            if(!allow_PT_contact(subscene_mask_tabular, scids))
-                return false;
-            if(!allow_PT_contact(contact_mask_tabular, cids))
-                return false;
-
-            if(F[0] == V || F[1] == V || F[2] == V)
-                return false;
-
-            if(info.bid_i == info.bid_j && info.bid_i != static_cast<IndexT>(-1)
-               && !body_self_collision(info.bid_i))
-                return false;
-
-            Vector3 P = Ps(V);
-
-            Vector3 F0 = Ps(F[0]);
-            Vector3 F1 = Ps(F[1]);
-            Vector3 F2 = Ps(F[2]);
-
-            Float thickness = PT_thickness(thicknesses(V),
-                                           thicknesses(F[0]),
-                                           thicknesses(F[1]),
-                                           thicknesses(F[2]));
-
-            Float d_hat = PT_d_hat(d_hats(V), d_hats(F[0]), d_hats(F[1]), d_hats(F[2]));
-
-            Float expand = d_hat + thickness;
-
-            if(alpha == 0.0)
-            {
-                // DCD detect pass: exact distance test (see PP pred)
-                Float D2;
-                Vector4i flag = distance::point_triangle_distance_flag(P, F0, F1, F2);
-                distance::point_triangle_distance2(flag, P, F0, F1, F2, D2);
-                return D2 < expand * expand;
-            }
-
-            Vector3 dP = alpha * dxs(V);
-
-            Vector3 dF0 = alpha * dxs(F[0]);
-            Vector3 dF1 = alpha * dxs(F[1]);
-            Vector3 dF2 = alpha * dxs(F[2]);
-
-            if(!distance::point_triangle_ccd_broadphase(P, F0, F1, F2, dP, dF0, dF1, dF2, expand))
                 return false;
 
             return true;
@@ -1199,55 +1018,58 @@ void InfoStacklessBVHSimplexTrajectoryFilter::do_build(BuildInfo&)
         throw SimSystemException("Info stackless BVH unused");
     }
 
-    m_impl.query_counts.resize(4);
-    m_impl.selected_counts.resize(4);
+    m_pipeline.init();
 }
 
 void InfoStacklessBVHSimplexTrajectoryFilter::do_detect(DetectInfo& info)
 {
-    m_impl.detect(info);
+    m_pipeline.detect(info, BVHSimplexPipeline::CandidateMethod::Baseline);
 }
 
 void InfoStacklessBVHSimplexTrajectoryFilter::do_filter_active(FilterActiveInfo& info)
 {
-    m_impl.filter_active(info);
+    m_pipeline.filter_active(info);
 }
 
 void InfoStacklessBVHSimplexTrajectoryFilter::do_filter_toi(FilterTOIInfo& info)
 {
-    m_impl.filter_toi(info);
+    m_pipeline.filter_toi(info);
 }
 
 cuda_tool::CBufferView<Vector2i> InfoStacklessBVHSimplexTrajectoryFilter::candidate_PTs() const noexcept
 {
-    return m_impl.candidate_AllP_AllT_pairs.view();
+    return m_pipeline.candidate_AllP_AllT_pairs.view();
 }
 
 cuda_tool::CBufferView<Vector2i> InfoStacklessBVHSimplexTrajectoryFilter::candidate_EEs() const noexcept
 {
-    return m_impl.candidate_AllE_AllE_pairs.view();
+    return m_pipeline.candidate_AllE_AllE_pairs.view();
 }
 
 cuda_tool::CBufferView<Float> InfoStacklessBVHSimplexTrajectoryFilter::toi_PTs() const noexcept
 {
-    auto pp_size = m_impl.candidate_AllP_CodimP_pairs.size();
-    auto pe_size = m_impl.candidate_CodimP_AllE_pairs.size();
-    auto pt_size = m_impl.candidate_AllP_AllT_pairs.size();
-    return m_impl.tois.view(pp_size + pe_size, pt_size);
+    auto pp_size = m_pipeline.candidate_AllP_CodimP_pairs.size();
+    auto pe_size = m_pipeline.candidate_CodimP_AllE_pairs.size();
+    auto pt_size = m_pipeline.candidate_AllP_AllT_pairs.size();
+    return m_pipeline.tois.view(pp_size + pe_size, pt_size);
 }
 
 cuda_tool::CBufferView<Float> InfoStacklessBVHSimplexTrajectoryFilter::toi_EEs() const noexcept
 {
-    auto pp_size = m_impl.candidate_AllP_CodimP_pairs.size();
-    auto pe_size = m_impl.candidate_CodimP_AllE_pairs.size();
-    auto pt_size = m_impl.candidate_AllP_AllT_pairs.size();
-    auto ee_size = m_impl.candidate_AllE_AllE_pairs.size();
-    return m_impl.tois.view(pp_size + pe_size + pt_size, ee_size);
+    auto pp_size = m_pipeline.candidate_AllP_CodimP_pairs.size();
+    auto pe_size = m_pipeline.candidate_CodimP_AllE_pairs.size();
+    auto pt_size = m_pipeline.candidate_AllP_AllT_pairs.size();
+    auto ee_size = m_pipeline.candidate_AllE_AllE_pairs.size();
+    return m_pipeline.tois.view(pp_size + pe_size + pt_size, ee_size);
 }
 
-void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
+void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
 {
-    auto alpha                = info.alpha();
+    auto  alpha = info.alpha();
+    Timer detect_timer(
+        method == CandidateMethod::Baseline ?
+            (alpha == 0.0 ? "BVH baseline DCD detect" : "BVH baseline CCD detect") :
+            (alpha == 0.0 ? "BVH single EF DCD detect" : "BVH single EF CCD detect"));
     auto Ps                   = info.positions();
     auto dxs                  = info.displacements();
     auto codimVs              = info.codim_vertices();
@@ -1359,11 +1181,8 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
         }
     }
 
-    lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
-    lbvh_T.build(triangle_aabbs, triangle_bids, triangle_cids);
-
-    auto node_pred = InfoStacklessBVHSimplexTrajectoryFilter_detect_node_pred{
-        body_self_collisions, cmts.viewer()};
+    auto node_pred =
+        bvh_simplex_detail::NodePredicate{body_self_collisions, cmts.viewer()};
     auto allp_codimp_pred = InfoStacklessBVHSimplexTrajectoryFilter_detect_AllP_CodimP_pred{
         Vs,
         codimVs,
@@ -1391,31 +1210,53 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
         info.body_self_collision(),
         info.d_hats(),
         alpha};
-    auto alle_alle_pred = InfoStacklessBVHSimplexTrajectoryFilter_detect_AllE_AllE_pred{
-        Es,
-        Ps,
-        dxs,
-        info.thicknesses(),
-        info.contact_element_ids(),
-        info.contact_mask_tabular().viewer(),
-        info.subscene_element_ids(),
-        info.subscene_mask_tabular().viewer(),
-        info.body_self_collision(),
-        info.d_hats(),
-        alpha};
-    auto allp_allt_pred = InfoStacklessBVHSimplexTrajectoryFilter_detect_AllP_AllT_pred{
-        Vs,
-        Fs,
-        Ps,
-        dxs,
-        info.thicknesses(),
-        info.contact_element_ids(),
-        info.contact_mask_tabular().viewer(),
-        info.subscene_element_ids(),
-        info.subscene_mask_tabular().viewer(),
-        info.body_self_collision(),
-        info.d_hats(),
-        alpha};
+    auto alle_alle_pred =
+        bvh_simplex_detail::EdgeEdgePredicate{Es,
+                                              Ps,
+                                              dxs,
+                                              info.thicknesses(),
+                                              info.contact_element_ids(),
+                                              info.contact_mask_tabular().viewer(),
+                                              info.subscene_element_ids(),
+                                              info.subscene_mask_tabular().viewer(),
+                                              info.body_self_collision(),
+                                              info.d_hats(),
+                                              alpha};
+    auto allp_allt_pred =
+        bvh_simplex_detail::PointTrianglePredicate{Vs,
+                                                   Fs,
+                                                   Ps,
+                                                   dxs,
+                                                   info.thicknesses(),
+                                                   info.contact_element_ids(),
+                                                   info.contact_mask_tabular().viewer(),
+                                                   info.subscene_element_ids(),
+                                                   info.subscene_mask_tabular().viewer(),
+                                                   info.body_self_collision(),
+                                                   info.d_hats(),
+                                                   alpha};
+
+    if(method == CandidateMethod::SingleEF && codimVs.size() == 0
+       && single_ef.detect(lbvh_T,
+                           allp_allt_pred,
+                           alle_alle_pred,
+                           node_pred,
+                           {point_aabbs, point_bids, point_cids},
+                           {edge_aabbs, edge_bids, edge_cids},
+                           {triangle_aabbs, triangle_bids, triangle_cids},
+                           candidate_AllP_AllT_pairs,
+                           candidate_AllE_AllE_pairs))
+    {
+        candidate_AllP_CodimP_pairs.m_size = 0;
+        candidate_CodimP_AllE_pairs.m_size = 0;
+        candidate_AllP_CodimP_pairs.m_cpNum.fill(0);
+        candidate_CodimP_AllE_pairs.m_cpNum.fill(0);
+        audit_detect(info, method, true);
+        return;
+    }
+
+    lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
+    lbvh_T.build(triangle_aabbs, triangle_bids, triangle_cids);
 
     auto launch_allp_codimp = [&](bool rebuild_query)
     {
@@ -1480,11 +1321,15 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
         launch_alle_alle();
     if(lbvh_T.prepare_query_result(candidate_AllP_AllT_pairs, host_counts[3]))
         launch_allp_allt(false);
+    audit_detect(info, method, false);
 }
 
-void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveInfo& info)
+void BVHSimplexPipeline::filter_active(FilterActiveInfo& info)
 {
     using namespace cuda_tool;
+
+    if(m_audit_shadow)
+        m_audit_shadow->filter_active(info);
 
     auto positions = info.positions();
 
@@ -1647,6 +1492,9 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveIn
     info.PTs(PTs);
     info.EEs(EEs);
 
+    if(m_audit_shadow)
+        audit_active();
+
     if constexpr(PrintDebugInfo)
     {
         std::vector<Vector2i> PPs_host;
@@ -1692,7 +1540,7 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveIn
     }
 }
 
-void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& info)
+void BVHSimplexPipeline::filter_toi(FilterTOIInfo& info)
 {
     using namespace cuda_tool;
 
@@ -1805,5 +1653,7 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& in
     {
         info.toi().fill(large_enough_toi);
     }
+    if(m_audit_shadow)
+        audit_toi(info);
 }
 }  // namespace uipc::backend::cuda

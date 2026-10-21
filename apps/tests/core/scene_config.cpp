@@ -31,7 +31,11 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
     const auto& methods            = collision.at("enum");
     const auto& conditional_values = collision.at("conditionalValues");
     const bool legacy_collision_built = conditional_values.at("enabled").get<bool>();
+    REQUIRE(collision.at("default") == "info_stackless_bvh");
     REQUIRE(methods.front() == "info_stackless_bvh");
+    REQUIRE(std::ranges::count(methods, Json("single_ef_bvh")) == 1);
+    REQUIRE(std::ranges::find(conditional_values.at("values"), Json("single_ef_bvh"))
+            == conditional_values.at("values").end());
     REQUIRE(conditional_values.at("backend") == "cuda");
     REQUIRE(conditional_values.at("buildOption") == "UIPC_WITH_CUDA_LEGACY_COLLISION");
     for(const auto& legacy_method : conditional_values.at("values"))
@@ -76,6 +80,10 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
             REQUIRE_NOTHROW(Scene{config});
         else
             REQUIRE_THROWS(Scene{config});
+
+        config                                  = Scene::default_config();
+        config["collision_detection"]["method"] = "single_ef_bvh";
+        REQUIRE_NOTHROW(Scene{config});
 
         config                                      = Scene::default_config();
         config["contact"]["adaptive"]["min_kappa"]  = 2.0e9;

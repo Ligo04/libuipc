@@ -1,11 +1,79 @@
 #include <app/app.h>
 #include <uipc/uipc.h>
 #include <uipc/constitution/affine_body_constitution.h>
+#include <uipc/common/timer.h>
 #include <fstream>
 #include <numbers>
+#include <chrono>
+#include <set>
+#include <stdexcept>
 #include <uipc/builtin/constants.h>
 
-int main()
+namespace
+{
+struct Options
+{
+    bool        benchmark = false;
+    bool        timers    = false;
+    uipc::SizeT frames    = 1000;
+    uipc::SizeT warmup    = 0;
+    std::string method    = "info_stackless_bvh";
+    std::string result_json;
+    std::string workspace;
+};
+
+Options parse_options(int argc, char* argv[])
+{
+    Options options;
+    bool    frames_set = false, warmup_set = false;
+    for(int i = 1; i < argc; ++i)
+    {
+        const std::string arg   = argv[i];
+        auto              value = [&]() -> std::string
+        {
+            if(++i >= argc)
+                throw std::runtime_error("Missing value for " + arg);
+            return argv[i];
+        };
+        if(arg == "--benchmark")
+            options.benchmark = true;
+        else if(arg == "--timers")
+            options.timers = true;
+        else if(arg == "--frames")
+        {
+            options.frames = std::stoull(value());
+            frames_set     = true;
+        }
+        else if(arg == "--warmup")
+        {
+            options.warmup = std::stoull(value());
+            warmup_set     = true;
+        }
+        else if(arg == "--method")
+            options.method = value();
+        else if(arg == "--result-json")
+            options.result_json = value();
+        else if(arg == "--workspace")
+            options.workspace = value();
+        else
+            throw std::runtime_error("Unknown argument: " + arg);
+    }
+    if(options.benchmark)
+    {
+        if(!frames_set)
+            options.frames = 300;
+        if(!warmup_set)
+            options.warmup = 30;
+        if(options.result_json.empty())
+            throw std::runtime_error("--benchmark requires --result-json");
+    }
+    if(options.frames == 0 || options.warmup >= options.frames)
+        throw std::runtime_error("Require frames > warmup >= 0");
+    return options;
+}
+}  // namespace
+
+int main(int argc, char* argv[])
 {
     using namespace uipc;
     using namespace uipc::core;
@@ -13,11 +81,19 @@ int main()
     using namespace uipc::constitution;
     namespace fs = std::filesystem;
 
-    logger::set_level(spdlog::level::info);
+    const auto options = parse_options(argc, argv);
+    logger::set_level(options.benchmark ? spdlog::level::warn : spdlog::level::info);
+    if(options.timers)
+        Timer::enable_all();
+    else
+        Timer::disable_all();
 
     std::string tetmesh_dir{AssetDir::tetmesh_path()};
     auto this_output_path = AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE);
     auto this_folder      = AssetDir::folder(UIPC_RELATIVE_SOURCE_FILE);
+    if(!options.workspace.empty())
+        this_output_path = options.workspace;
+    fs::create_directories(this_output_path);
 
 
     Engine engine{"cuda", this_output_path};
@@ -29,10 +105,14 @@ int main()
     config["contact"]["enable"]             = true;
     config["contact"]["d_hat"]              = 0.01;
     config["line_search"]["max_iter"]       = 8;
-    test::Scene::dump_config(config, this_output_path);
+    config["collision_detection"]["method"] = options.method;
+    if(!options.benchmark)
+        test::Scene::dump_config(config, this_output_path);
 
 
-    Scene scene{config};
+    Scene                            scene{config};
+    vector<S<SimplicialComplexSlot>> observed;
+    S<SimplicialComplexSlot>         ball_slot;
     {
         Json wrecking_ball_scene;
         {
@@ -118,7 +198,10 @@ int main()
             auto is_fixed_attr = this_mesh.instances().find<IndexT>(builtin::is_fixed);
             view(*is_fixed_attr)[0] = is_fixed;
 
-            obj.geometries().create(this_mesh);
+            auto [slot, rest] = obj.geometries().create(this_mesh);
+            observed.push_back(slot);
+            if(j["mesh"] == "ball.msh")
+                ball_slot = slot;
         };
 
         //IndexT count = 0;
@@ -173,17 +256,97 @@ int main()
     }
 
     world.init(scene);
+    if(!world.is_valid())
+        throw std::runtime_error("Wrecking ball world initialization failed");
+    world.sync();
     SceneIO sio{scene};
-    sio.write_surface(fmt::format("{}scene_surface{}.obj", this_output_path, 0));
-    world.dump();
-
-    while(world.frame() < 1000)
+    if(!options.benchmark)
     {
+        sio.write_surface(fmt::format("{}scene_surface{}.obj", this_output_path, 0));
+        world.dump();
+    }
+    if(options.timers)
+        Timer::report_as_json();
+
+    Json samples = Json::array();
+    while(world.frame() < options.frames)
+    {
+        const auto expected_frame = world.frame() + 1;
+        const auto start          = std::chrono::steady_clock::now();
         world.advance();
         world.retrieve();
-        world.dump();
-        sio.write_surface(
-            fmt::format("{}scene_surface{}.obj", this_output_path, world.frame()));
-        fmt::println("frame: {}", world.frame());
+        world.sync();
+        const auto stop  = std::chrono::steady_clock::now();
+        const auto stats = engine.frame_stats();
+        if(!world.is_valid() || world.frame() != expected_frame
+           || !stats.at("completed").get<bool>())
+            throw std::runtime_error("Wrecking ball frame did not complete");
+        if(options.benchmark)
+        {
+            Json sample{{"frame", world.frame()},
+                        {"wall_ms",
+                         std::chrono::duration<double, std::milli>(stop - start).count()},
+                        {"stats", stats}};
+            if(options.timers)
+                sample["timers"] = Timer::report_as_json();
+            samples.push_back(std::move(sample));
+            if(world.frame() % 50 == 0)
+                fmt::println("benchmark {} frame {}/{}",
+                             options.method,
+                             world.frame(),
+                             options.frames);
+        }
+        else
+        {
+            world.dump();
+            sio.write_surface(
+                fmt::format("{}scene_surface{}.obj", this_output_path, world.frame()));
+            fmt::println("frame: {}", world.frame());
+        }
+    }
+    if(options.benchmark)
+    {
+        bool finite     = true;
+        Json transforms = Json::array();
+        for(const auto& slot : observed)
+            for(const auto& transform : slot->geometry().transforms().view())
+            {
+                finite = finite && transform.allFinite();
+                transforms.push_back(transform);
+            }
+        if(!finite || !ball_slot)
+            throw std::runtime_error("Invalid final wrecking ball transforms");
+        const auto& transform = ball_slot->geometry().transforms().view()[0];
+        Json        result{{"method", options.method},
+                           {"frames", options.frames},
+                           {"warmup", options.warmup},
+                           {"timers_enabled", options.timers},
+                           {"config", config},
+                           {"frame_samples", std::move(samples)},
+                           {"final_observable",
+                            {{"finite", finite},
+                             {"body_count", observed.size()},
+                             {"ball_translation",
+                              Json::array({transform(0, 3), transform(1, 3), transform(2, 3)})},
+                             {"transforms", std::move(transforms)}}}};
+#if defined(__linux__)
+        result["executable"] = fs::read_symlink("/proc/self/exe").string();
+        std::set<std::string> loaded_modules;
+        std::ifstream         maps{"/proc/self/maps"};
+        for(std::string line; std::getline(maps, line);)
+        {
+            const auto slash = line.find('/');
+            if(slash != std::string::npos && line.find("libuipc", slash) != std::string::npos)
+                loaded_modules.insert(line.substr(slash));
+        }
+        result["loaded_modules"] = loaded_modules;
+#endif
+        const fs::path result_path = options.result_json;
+        if(!result_path.parent_path().empty())
+            fs::create_directories(result_path.parent_path());
+        std::ofstream out{result_path};
+        out << result.dump(2) << '\n';
+        if(!out)
+            throw std::runtime_error("Failed to write benchmark result");
     }
 }

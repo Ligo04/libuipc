@@ -20,7 +20,10 @@ local components = {
         "collision_detection/*.cu",
         "collision_detection/filters/al_vertex_half_plane_trajectory_filter.cu",
         "collision_detection/filters/easy_vertex_half_plane_trajectory_filter.cu",
-        "collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.cu"
+        "collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.cu",
+        "collision_detection/filters/bvh_simplex_pipeline_audit.cu",
+        "collision_detection/filters/single_ef_bvh_simplex_trajectory_filter.cu",
+        "collision_detection/filters/single_ef_bvh_query.cu"
     },
     collision_legacy = {
         "collision_detection/filters/info_stackless_bvh_v0_simplex_trajectory_filter.cu",

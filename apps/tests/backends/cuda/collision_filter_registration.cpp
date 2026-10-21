@@ -7,6 +7,8 @@ std::string_view expected_filter_type(std::string_view method)
 {
     if(method == "info_stackless_bvh")
         return "InfoStacklessBVHSimplexTrajectoryFilter";
+    if(method == "single_ef_bvh")
+        return "SingleEFBVHSimplexTrajectoryFilter";
     if(method == "info_stackless_bvh_v0")
         return "InfoStacklessBVHV0SimplexTrajectoryFilter";
     if(method == "stackless_bvh")
@@ -46,13 +48,17 @@ TEST_CASE("compiled collision filters match the scene schema", "[cuda][collision
         world.init(scene);
         REQUIRE(world.is_valid());
 
-        const auto engine_json = engine.to_json();
-        bool       found       = false;
+        const auto engine_json          = engine.to_json();
+        SizeT      expected_count       = 0;
+        SizeT      simplex_filter_count = 0;
         for(const auto& system : engine_json.at("sim_systems"))
         {
             const auto name = system.at("name").get<std::string>();
-            found |= name.find(expected) != std::string::npos;
+            expected_count += name.find(expected) != std::string::npos;
+            simplex_filter_count +=
+                name.find("SimplexTrajectoryFilter") != std::string::npos;
         }
-        REQUIRE(found);
+        REQUIRE(expected_count == 1);
+        REQUIRE(simplex_filter_count == 1);
     }
 }
