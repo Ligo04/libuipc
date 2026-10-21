@@ -775,6 +775,13 @@ namespace
         }
     };
 
+    __global__ void InfoStacklessBVHSimplexTrajectoryFilter_clear_codim_counts_kernel(
+        cuda_tool::VarView<IndexT> allp_codimp_count, cuda_tool::VarView<IndexT> codimp_alle_count)
+    {
+        *allp_codimp_count = 0;
+        *codimp_alle_count = 0;
+    }
+
     __global__ void InfoStacklessBVHSimplexTrajectoryFilter_collect_query_counts_kernel(
         cuda_tool::CVarView<IndexT>   allp_codimp_count,
         cuda_tool::CVarView<IndexT>   codimp_alle_count,
@@ -1236,23 +1243,28 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
                                                    info.d_hats(),
                                                    alpha};
 
-    if(method == CandidateMethod::SingleEF && codimVs.size() == 0
-       && single_ef.detect(lbvh_T,
-                           allp_allt_pred,
-                           alle_alle_pred,
-                           node_pred,
-                           {point_aabbs, point_bids, point_cids},
-                           {edge_aabbs, edge_bids, edge_cids},
-                           {triangle_aabbs, triangle_bids, triangle_cids},
-                           candidate_AllP_AllT_pairs,
-                           candidate_AllE_AllE_pairs))
+    if(method == CandidateMethod::SingleEF && codimVs.size() == 0)
     {
-        candidate_AllP_CodimP_pairs.m_size = 0;
-        candidate_CodimP_AllE_pairs.m_size = 0;
-        candidate_AllP_CodimP_pairs.m_cpNum.fill(0);
-        candidate_CodimP_AllE_pairs.m_cpNum.fill(0);
-        audit_detect(info, method, true);
-        return;
+        // Clear unused families before the query's final readback, so no
+        // device work needs another host submission after publishing counts.
+        InfoStacklessBVHSimplexTrajectoryFilter_clear_codim_counts_kernel<<<1, 1>>>(
+            candidate_AllP_CodimP_pairs.m_cpNum.view(),
+            candidate_CodimP_AllE_pairs.m_cpNum.view());
+        if(single_ef.detect(lbvh_T,
+                            allp_allt_pred,
+                            alle_alle_pred,
+                            node_pred,
+                            {point_aabbs, point_bids, point_cids},
+                            {edge_aabbs, edge_bids, edge_cids},
+                            {triangle_aabbs, triangle_bids, triangle_cids},
+                            candidate_AllP_AllT_pairs,
+                            candidate_AllE_AllE_pairs))
+        {
+            candidate_AllP_CodimP_pairs.m_size = 0;
+            candidate_CodimP_AllE_pairs.m_size = 0;
+            audit_detect(info, method, true);
+            return;
+        }
     }
 
     lbvh_E.build(edge_aabbs, edge_bids, edge_cids);

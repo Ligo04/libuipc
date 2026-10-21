@@ -407,6 +407,11 @@ TEST_CASE("single EF BVH preserves DCD candidates", "[cuda][single_ef_bvh]")
         REQUIRE(overlaps > 64);
         check_mesh(mesh, 2);
     }
+    SECTION("EF capacity overflow replays the complete query")
+    {
+        Mesh mesh(160);
+        check_mesh(mesh, std::numeric_limits<SizeT>::max());
+    }
     SECTION("contact mask")
     {
         Mesh mesh(4);

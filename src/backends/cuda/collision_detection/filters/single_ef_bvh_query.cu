@@ -37,7 +37,8 @@ namespace
         const auto     grown = static_cast<SizeT>(
             std::min(static_cast<Float>(limit),
                      std::max(static_cast<Float>(required), required * reserve_ratio)));
-        pairs.resize_preserve(grown);
+        // An overflow replays the entire query, so no partial output is retained.
+        pairs.resize_discard(grown);
     }
 
     __global__ void make_query_proxies(SingleEFBVHQuery::PrimitiveBounds points,
@@ -171,6 +172,7 @@ namespace
     };
 
     __global__ void count_candidates(CBufferView<Vector2i> ef,
+                                     CVarView<int>         ef_count,
                                      IndexT                edge_offset,
                                      CBufferView<Vector2i> owned_vertices,
                                      CBufferView<Vector3i> owned_edges,
@@ -191,6 +193,14 @@ namespace
             ee_counts(ef.size()) = 0;
         }
         if(i >= ef.size())
+            return;
+        masks(i)     = 0;
+        pt_counts(i) = 0;
+        ee_counts(i) = 0;
+        // Scan the reusable capacity, zero-padding inactive entries on device.
+        // An overflowing EF query must be replayed before any result is used.
+        const int n = *ef_count;
+        if(n < 0 || static_cast<SizeT>(n) > ef.size() || i >= n)
             return;
         const auto pair = ef(i);
         const auto e = pair[0] + edge_offset, f = pair[1];
@@ -234,28 +244,63 @@ namespace
         ee_counts(i) = ne;
     }
 
+    __global__ void accumulate_chunk_counts(CVarView<int>    ef_count,
+                                            CBufferView<U64> pt_offsets,
+                                            CBufferView<U64> ee_offsets,
+                                            BufferView<U64>  totals,
+                                            BufferView<U64>  chunk_base)
+    {
+        chunk_base(0)      = totals(0);
+        chunk_base(1)      = totals(1);
+        const int n        = *ef_count;
+        const U64 required = n < 0 ? std::numeric_limits<U64>::max() : U64(n);
+        totals(2)          = std::max(totals(2), required);
+        if(n >= 0 && static_cast<SizeT>(n) < pt_offsets.size())
+        {
+            totals(0) += pt_offsets(pt_offsets.size() - 1);
+            totals(1) += ee_offsets(ee_offsets.size() - 1);
+        }
+    }
+
+    __global__ void publish_query_counts(CBufferView<U64> totals,
+                                         SizeT            ef_capacity,
+                                         SizeT            pt_capacity,
+                                         SizeT            ee_capacity,
+                                         VarView<int>     pt_count,
+                                         VarView<int>     ee_count)
+    {
+        constexpr U64 limit = std::numeric_limits<IndexT>::max() - 1;
+        const bool valid = totals(2) <= ef_capacity && totals(0) <= pt_capacity
+                           && totals(1) <= ee_capacity && totals(0) + totals(1) <= limit;
+        *pt_count = valid ? static_cast<int>(totals(0)) : 0;
+        *ee_count = valid ? static_cast<int>(totals(1)) : 0;
+    }
+
     __global__ void fill_candidates(CBufferView<Vector2i> ef,
+                                    CVarView<int>         ef_count,
                                     IndexT                edge_offset,
                                     CBufferView<Vector2i> owned_vertices,
                                     CBufferView<Vector3i> owned_edges,
                                     CBufferView<uint8_t>  masks,
                                     CBufferView<U64>      pt_offsets,
                                     CBufferView<U64>      ee_offsets,
+                                    CBufferView<U64>      chunk_base,
                                     BufferView<Vector2i>  pts,
                                     BufferView<Vector2i>  ees)
     {
         const auto i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i >= ef.size())
+        const int  n = *ef_count;
+        if(n < 0 || static_cast<SizeT>(n) > ef.size() || i >= n)
             return;
         const auto pair = ef(i);
         const auto e = pair[0] + edge_offset, f = pair[1];
-        auto       p = pt_offsets(i), q = ee_offsets(i);
+        auto p = chunk_base(0) + pt_offsets(i), q = chunk_base(1) + ee_offsets(i);
         const auto mask = masks(i);
         for(int slot = 0; slot < 2; ++slot)
-            if(mask & (uint8_t{1} << slot))
+            if((mask & (uint8_t{1} << slot)) && p < pts.size())
                 pts(p++) = Vector2i{owned_vertices(e)[slot], f};
         for(int slot = 0; slot < 3; ++slot)
-            if(mask & (uint8_t{1} << (slot + 2)))
+            if((mask & (uint8_t{1} << (slot + 2))) && q < ees.size())
                 ees(q++) = Vector2i{owned_edges(f)[slot], e};
     }
 }  // namespace
@@ -385,16 +430,25 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
         points, edges, triangles, m_triangle_vertices, m_owned_edges, m_leaf_boxes, m_leaf_bids, m_leaf_cids);
     triangle_bvh.build(m_leaf_boxes, m_leaf_bids, m_leaf_cids);
 
-    SizeT       used_pts = 0, used_ees = 0;
     const SizeT pair_limit = std::numeric_limits<IndexT>::max() - 1;
     const auto  chunk_size =
         std::min({m_edge_count, std::max(SizeT{1}, max_chunk_edges), pair_limit / m_triangle_count});
-    for(SizeT start = 0; start < m_edge_count; start += chunk_size)
+    m_query_counts.resize_discard(3);
+    m_chunk_base.resize_discard(2);
+    for(;;)
     {
-        const auto count  = std::min(chunk_size, m_edge_count - start);
-        auto       launch = [&](bool rebuild_query)
+        const auto capacity =
+            std::min(m_ef_pairs.m_pairs.size(), chunk_size * m_triangle_count);
+        m_masks.resize_discard(capacity);
+        m_pt_counts.resize_discard(capacity + 1);
+        m_ee_counts.resize_discard(capacity + 1);
+        m_pt_offsets.resize_discard(capacity + 1);
+        m_ee_offsets.resize_discard(capacity + 1);
+        m_query_counts.fill(0);
+        for(SizeT start = 0; start < m_edge_count; start += chunk_size)
         {
-            auto run = [&](auto predicate)
+            const auto count = std::min(chunk_size, m_edge_count - start);
+            auto       run   = [&](auto predicate)
             {
                 triangle_bvh.launch_query(m_query_boxes.view(start, count),
                                           m_query_bids.view(start, count),
@@ -402,8 +456,7 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                                           {},
                                           predicate,
                                           AcceptEdgeFace{},
-                                          m_ef_pairs,
-                                          rebuild_query);
+                                          m_ef_pairs);
             };
             // Swept edges are bilinear patches. Use only their full swept AABB,
             // with the original lightweight tag predicate and no static slab.
@@ -415,66 +468,73 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                                           m_owned_vertices,
                                           points.aabbs,
                                           static_cast<IndexT>(start)});
-        };
-        launch(true);
-        const int ef_count = m_ef_pairs.m_cpNum;
-        UIPC_ASSERT(ef_count >= 0, "Single EF query counter overflow");
-        const auto n = static_cast<SizeT>(ef_count);
-        if(n > m_ef_pairs.m_pairs.size())
-        {
-            // Exact logical size keeps the traversal's signed capacity representable.
-            m_ef_pairs.reserve(n);
-            launch(false);
+            count_candidates<<<(capacity + 255) / 256, 256>>>(
+                m_ef_pairs.m_pairs.view(0, capacity),
+                m_ef_pairs.m_cpNum.cview(),
+                static_cast<IndexT>(start),
+                m_owned_vertices,
+                m_owned_edges,
+                points,
+                edges,
+                triangles,
+                pt_pred,
+                ee_pred,
+                node_pred,
+                m_masks,
+                m_pt_counts,
+                m_ee_counts);
+            cuda_tool::DeviceScan().ExclusiveSum(m_pt_counts.data(),
+                                                 m_pt_offsets.data(),
+                                                 static_cast<int>(capacity + 1));
+            cuda_tool::DeviceScan().ExclusiveSum(m_ee_counts.data(),
+                                                 m_ee_offsets.data(),
+                                                 static_cast<int>(capacity + 1));
+            accumulate_chunk_counts<<<1, 1>>>(m_ef_pairs.m_cpNum.cview(),
+                                              m_pt_offsets.view(),
+                                              m_ee_offsets.view(),
+                                              m_query_counts.view(),
+                                              m_chunk_base.view());
+            fill_candidates<<<(capacity + 255) / 256, 256>>>(
+                m_ef_pairs.m_pairs.view(0, capacity),
+                m_ef_pairs.m_cpNum.cview(),
+                static_cast<IndexT>(start),
+                m_owned_vertices,
+                m_owned_edges,
+                m_masks,
+                m_pt_offsets,
+                m_ee_offsets,
+                m_chunk_base,
+                pts.m_pairs.view(),
+                ees.m_pairs.view());
         }
-        m_ef_pairs.m_size = n;
-        if(n == 0)
+        publish_query_counts<<<1, 1>>>(m_query_counts.view(),
+                                       capacity,
+                                       pts.m_pairs.size(),
+                                       ees.m_pairs.size(),
+                                       pts.m_cpNum.view(),
+                                       ees.m_cpNum.view());
+        // The normal path has one readback after every chunk has completed.
+        // Overflow is exceptional: grow reusable storage and replay all chunks.
+        std::array<U64, 3> counts{};
+        m_query_counts.copy_to(counts.data());
+        if(counts[2] > pair_limit)
+            throw std::overflow_error("Single EF query counter exceeds 32-bit indexing");
+        if(counts[2] > capacity)
+        {
+            grow_candidates(m_ef_pairs.m_pairs, counts[2], triangle_bvh.config().reserve_ratio);
             continue;
-        m_masks.resize_discard(n);
-        m_pt_counts.resize_discard(n + 1);
-        m_ee_counts.resize_discard(n + 1);
-        m_pt_offsets.resize_discard(n + 1);
-        m_ee_offsets.resize_discard(n + 1);
-        count_candidates<<<(n + 255) / 256, 256>>>(m_ef_pairs.view(),
-                                                   static_cast<IndexT>(start),
-                                                   m_owned_vertices,
-                                                   m_owned_edges,
-                                                   points,
-                                                   edges,
-                                                   triangles,
-                                                   pt_pred,
-                                                   ee_pred,
-                                                   node_pred,
-                                                   m_masks,
-                                                   m_pt_counts,
-                                                   m_ee_counts);
-        cuda_tool::DeviceScan().ExclusiveSum(
-            m_pt_counts.data(), m_pt_offsets.data(), static_cast<int>(n + 1));
-        cuda_tool::DeviceScan().ExclusiveSum(
-            m_ee_counts.data(), m_ee_offsets.data(), static_cast<int>(n + 1));
-        U64 pt_count = 0, ee_count = 0;
-        m_pt_offsets.view(n, 1).copy_to(&pt_count);
-        m_ee_offsets.view(n, 1).copy_to(&ee_count);
-        const U64 total_pts = used_pts + pt_count, total_ees = used_ees + ee_count;
-        if(total_pts > pair_limit || total_ees > pair_limit || total_pts + total_ees > pair_limit)
+        }
+        if(counts[0] > pair_limit || counts[1] > pair_limit || counts[0] + counts[1] > pair_limit)
             throw std::overflow_error("Single EF candidate count exceeds 32-bit downstream indexing");
-        grow_candidates(pts.m_pairs, total_pts, triangle_bvh.config().reserve_ratio);
-        grow_candidates(ees.m_pairs, total_ees, triangle_bvh.config().reserve_ratio);
-        fill_candidates<<<(n + 255) / 256, 256>>>(m_ef_pairs.view(),
-                                                  static_cast<IndexT>(start),
-                                                  m_owned_vertices,
-                                                  m_owned_edges,
-                                                  m_masks,
-                                                  m_pt_offsets,
-                                                  m_ee_offsets,
-                                                  pts.m_pairs.view(used_pts, pt_count),
-                                                  ees.m_pairs.view(used_ees, ee_count));
-        used_pts = total_pts;
-        used_ees = total_ees;
+        if(counts[0] > pts.m_pairs.size() || counts[1] > ees.m_pairs.size())
+        {
+            grow_candidates(pts.m_pairs, counts[0], triangle_bvh.config().reserve_ratio);
+            grow_candidates(ees.m_pairs, counts[1], triangle_bvh.config().reserve_ratio);
+            continue;
+        }
+        pts.m_size = counts[0];
+        ees.m_size = counts[1];
+        return true;
     }
-    pts.m_size = used_pts;
-    ees.m_size = used_ees;
-    pts.m_cpNum.fill(static_cast<IndexT>(used_pts));
-    ees.m_cpNum.fill(static_cast<IndexT>(used_ees));
-    return true;
 }
 }  // namespace uipc::backend::cuda

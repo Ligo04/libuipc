@@ -8,7 +8,7 @@ namespace uipc::backend::cuda
 class SingleEFBVHQuery
 {
   public:
-    SingleEFBVHQuery() { m_ef_pairs.m_pairs.resize_discard(0); }
+    SingleEFBVHQuery() = default;
 
     struct PrimitiveBounds
     {
@@ -63,5 +63,7 @@ class SingleEFBVHQuery
     InfoStacklessBVH::QueryBuffer    m_ef_pairs;
     cuda_tool::DeviceBuffer<uint8_t> m_masks;
     cuda_tool::DeviceBuffer<U64> m_pt_counts, m_ee_counts, m_pt_offsets, m_ee_offsets;
+    // PT/EE totals and maximum EF count, read together after all chunks finish.
+    cuda_tool::DeviceBuffer<U64> m_query_counts, m_chunk_base;
 };
 }  // namespace uipc::backend::cuda

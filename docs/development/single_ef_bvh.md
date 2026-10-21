@@ -54,15 +54,25 @@ results; there is no per-edge 64-candidate limit. Counts exceeding downstream
 32-bit indexing produce an explicit error rather than a partial result.
 
 PT/EE expansion keeps its GPU count, prefix-scan and fill passes. Each chunk
-writes directly into the final `QueryBuffer`; growth preserves the preceding
-chunks. `m_size` records the valid result count while `m_pairs.size()` retains
+writes directly into the final `QueryBuffer`; GPU counters carry output offsets
+between chunks. `m_size` records the valid result count while `m_pairs.size()` retains
 the writable high-water mark shared by DCD and CCD. Smaller or empty DCD results
 do not shrink that range. Growth follows the BVH reserve ratio and keeps the
 logical write capacity within the downstream 32-bit bound.
 
-This capacity reuse does not remove host synchronization. Each nonempty chunk
-still downloads the EF count and the two scanned PT/EE totals before the host
-arranges the next launches.
+The normal path has one combined readback after all chunks finish. Expansion
+launches over reusable EF capacity and zeros inactive entries using the device
+EF count, so the scan length is known without an intermediate host readback.
+Scan and fill stay on the GPU, including cross-chunk offsets. The scan processes
+padding as well as valid entries; the extra work depends on retained capacity.
+The outer filter clears unused codimensional-family counters with a device
+kernel before the query, avoiding counter uploads after the final readback.
+
+If EF or output capacity is insufficient, writes stay within bounds, the host
+grows the buffers with the BVH reserve ratio, and the entire query is replayed.
+No partial result is returned. Allocation and retry can synchronize on growth;
+the final readback remains necessary for the existing host-sized downstream
+interfaces. This does not make the whole collision pipeline GPU autonomous.
 
 ## Supported scope
 
