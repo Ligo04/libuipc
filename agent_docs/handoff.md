@@ -51,7 +51,9 @@
 >
 > CUDA checks use matching Compute Sanitizer 2026.3.0.0 from CUDA 13.4.92.
 > The official operator binary passes memcheck, racecheck and synccheck with
-> `--report-api-errors explicit` (zero errors/hazards). The older system 12.8
+> `--report-api-errors explicit` (zero errors/hazards). The complete 7-case
+> host target also passes memcheck with the same API policy (zero errors).
+> The older system 12.8
 > tool falsely reports CUB's PTX 9.2 ignore-oob scan instruction. Under the new
 > tool's default `extended` API diagnostics, the host reports 24 duplicate
 > generic cuda_tool/CUB kernel registrations, with no invalid accesses and all
@@ -63,10 +65,27 @@
 > Do not describe this as an unconditional default-mode sanitizer clean run.
 > Evidence: `/tmp/mas-pncg-final-{mas_pncg,mas_pncg_operators,backend_cuda}-20261021.log`,
 > `/tmp/mas-pncg-provider-racefix-20261021-m89z7_lx/*-official.*`,
-> `/tmp/mas-pncg-host-memcheck-cs134-20261021.log` and
+> `/tmp/mas-pncg-host-memcheck-cs134-20261021.log`,
+> `/tmp/mas-pncg-host-memcheck-explicit-cs134-20261021.log` and
 > `/tmp/mas-pncg-duplicate-kernel-probe/`.
-> Python package/trajectory validation is a separate delivery stage. No matched
-> performance or large-scene memory claim is made.
+>
+> Installed-wheel validation uses only this worktree's Python 3.12 venv.
+> XMake packaging succeeds; installed binding and CUDA backend hashes match
+> the freshly built files and wheel entries. Native feature commit is
+> `74576aea42b5792755528dbf29cd04386216e15c`. CUDA backend SHA-256 is
+> `333a8fe738c333a61f8d663df169b499ad07824924cd6ef269c21c563e9af8f1`;
+> local wheel SHA-256 is
+> `ee7c2506d07b92c20a3f7ec1231e9c80e8f9c1f040dae143ae8443328d401e60`.
+> The new public-API target passes 15 CUDA tests: four materials in all three
+> update modes, exactly-once animation and force deactivation, independent frictional
+> slowing and trajectories against full rebuild, and Newton MAS through both
+> fused/ordinary PCG. Existing force/animation regressions pass 28 CUDA cases;
+> the full portable suite passes 180 tests with one optional skip and 99
+> CUDA/example deselections. Logs are
+> `/tmp/mas-pncg-python-{mas-pncg,external-force,portable}-20261021.log`.
+> This is a local CUDA 13.4 package validation, not a portable-wheel release.
+> The complete native sim_case aggregate, CMake build, Windows runtime,
+> matched performance and large-scene memory measurements were not run.
 
 > **PR #502 Eigen 5 header dependency (2026-10-20)**: Linux XMake uses Eigen
 > 5.0.1 and caught the BW formula header relying on callers to include

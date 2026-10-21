@@ -139,6 +139,16 @@ and `pytest -m example python/tests` only in an interactive environment. Wheel C
 runs the portable suite after installing the wheel, in addition to the native
 metadata and `Engine("none")` smoke test.
 
+`python/tests/test_mas_pncg.py` exercises public config selection, all supported
+base material families and update modes, animated external-force clearing,
+plane/friction trajectories against full rebuild and both Newton MAS/PCG
+selectors. Run it against the installed wheel, verifying the loaded extension
+and backend hashes match the build under test:
+
+```bash
+.venv/bin/python -m pytest -q -m "cuda and not example" python/tests/test_mas_pncg.py
+```
+
 ## Performance benchmark registry
 
 `benchmarks/manifest.json` is the root repository's versioned end-to-end
