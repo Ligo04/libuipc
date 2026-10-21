@@ -11,6 +11,8 @@
 #include <diff_sim/global_diff_sim_manager.h>
 #include <newton_tolerance/newton_tolerance_manager.h>
 #include <time_integrator/time_integrator_manager.h>
+#include <nonlinear_system/mas_pncg_solver.h>
+#include <cmath>
 
 namespace uipc::backend::cuda
 {
@@ -67,7 +69,7 @@ void SimEngine::advance()
             m_global_contact_manager->compute_adaptive_parameters();
     };
 
-    auto compute_dytopo_effect = [this]
+    auto compute_dytopo_effect = [this](bool gradient_only = false)
     {
         // compute the dytopo effect gradient and hessian, containing:
         // 1) contact effect from contact pairs
@@ -75,7 +77,9 @@ void SimEngine::advance()
         if(m_global_dytopo_effect_manager)
         {
             Timer timer{"Compute DyTopo Effect"};
-            m_global_dytopo_effect_manager->compute_dytopo_effect();
+            GlobalDyTopoEffectManager::ComputeDyTopoEffectInfo info;
+            info.gradient_only(gradient_only);
+            m_global_dytopo_effect_manager->compute_dytopo_effect(info);
         }
     };
 
@@ -151,7 +155,10 @@ void SimEngine::advance()
         filter_dcd_candidates();
 
         // Compute New Energy => E
-        return m_line_searcher->compute_energy(false);
+        return m_line_searcher->compute_energy(
+            false,
+            m_mas_pncg_solver ? LineSearcher::EnergyCheck::AllowNonfinite :
+                                LineSearcher::EnergyCheck::AssertFinite);
     };
 
     auto compute_animation_substep_ratio = [this](SizeT newton_iter)
@@ -207,6 +214,15 @@ void SimEngine::advance()
         if(ccd_alpha < m_ccd_tol->view()[0])
             return false;
 
+        return true;
+    };
+
+    auto pncg_stationary = [&]()
+    {
+        if(!m_mas_pncg_solver->stationary(animation_reach_target()))
+            return false;
+        if(!std::isfinite(m_line_searcher->compute_energy(true, LineSearcher::EnergyCheck::AllowNonfinite)))
+            throw SimEngineException("MAS-PNCG stationary state has a nonfinite native energy.");
         return true;
     };
 
@@ -281,7 +297,7 @@ void SimEngine::advance()
     // Abort on exception if the runtime check is enabled for debugging
     constexpr bool AbortOnException = uipc::RUNTIME_CHECK;
 
-    auto pipeline = [&]() noexcept(AbortOnException)
+    auto pipeline = [&]()
     {
         Timer timer{"Pipeline"};
 
@@ -335,20 +351,34 @@ void SimEngine::advance()
             compute_adaptive_kappa();
 
             // 4. Nonlinear-Newton Iteration
-            m_newton_tolerance_manager->pre_newton(m_current_frame);
+            if(m_mas_pncg_solver)
+                m_mas_pncg_solver->begin_frame();
+            else
+                m_newton_tolerance_manager->pre_newton(m_current_frame);
 
-            auto newton_max_iter = m_newton_max_iter->view()[0];
-            auto newton_min_iter = m_newton_min_iter->view()[0];
-            beta                 = 1.0;
-            IndexT newton_iter   = 0;
+            auto newton_max_iter            = m_mas_pncg_solver ?
+                                                  m_mas_pncg_solver->max_iter() :
+                                                  m_newton_max_iter->view()[0];
+            auto newton_min_iter            = m_newton_min_iter->view()[0];
+            beta                            = 1.0;
+            IndexT newton_iter              = 0;
+            Float  previous_animation_ratio = -1;
             for(; newton_iter < newton_max_iter; ++newton_iter)
             {
                 Timer timer{"Newton Iteration"};
-                m_newton_iter             = newton_iter;
-                m_frame_newton_iterations = newton_iter + 1;
+                m_newton_iter = newton_iter;
+                if(!m_mas_pncg_solver)
+                    m_frame_newton_iterations = newton_iter + 1;
 
                 // 1) Compute animation substep ratio
                 compute_animation_substep_ratio(newton_iter);
+                if(m_mas_pncg_solver && m_global_animator)
+                {
+                    Float ratio = m_global_animator->substep_ratio();
+                    if(ratio != previous_animation_ratio)
+                        m_mas_pncg_solver->objective_changed();
+                    previous_animation_ratio = ratio;
+                }
 
 
                 // 2) Build Collision Pairs
@@ -360,16 +390,42 @@ void SimEngine::advance()
                 //    - Contact Effect
                 //    - Other DyTopo Effects
                 m_state = SimEngineState::ComputeDyTopoEffect;
-                compute_dytopo_effect();
+                bool rebuild = !m_mas_pncg_solver || m_mas_pncg_solver->needs_base();
+                compute_dytopo_effect(!rebuild);
 
 
                 // 4) Solve Global Linear System => dx = A^-1 * b
                 m_state = SimEngineState::SolveGlobalLinearSystem;
                 {
                     Timer timer{"Solve Global Linear System"};
-                    m_global_linear_system->solve();
-                    m_frame_linear_solver_iterations +=
-                        m_global_linear_system->last_solve_iterations();
+                    if(m_mas_pncg_solver)
+                    {
+                        if(!m_mas_pncg_solver->evaluate(rebuild))
+                        {
+                            m_state = SimEngineState::ComputeDyTopoEffect;
+                            compute_dytopo_effect();
+                            m_state = SimEngineState::SolveGlobalLinearSystem;
+                            m_mas_pncg_solver->evaluate(true);
+                        }
+                        if(pncg_stationary())
+                        {
+                            m_frame_converged = true;
+                            break;
+                        }
+                        if(m_mas_pncg_solver->compute_direction()
+                           == MASPNCGSolver::DirectionStatus::Restart)
+                        {
+                            if(m_mas_pncg_solver->retry())
+                                continue;
+                            throw SimEngineException("MAS-PNCG direction remained invalid after a full restart.");
+                        }
+                    }
+                    else
+                    {
+                        m_global_linear_system->solve();
+                        m_frame_linear_solver_iterations +=
+                            m_global_linear_system->last_solve_iterations();
+                    }
                 }
 
 
@@ -402,7 +458,12 @@ void SimEngine::advance()
                     detect_trajectory_candidates(alpha);
 
                     // Compute Current Energy => E_0
-                    Float E0 = m_line_searcher->compute_energy(true);  // initial energy
+                    Float E0 = m_line_searcher->compute_energy(
+                        true,
+                        m_mas_pncg_solver ? LineSearcher::EnergyCheck::AllowNonfinite :
+                                            LineSearcher::EnergyCheck::AssertFinite);
+                    if(m_mas_pncg_solver && !std::isfinite(E0))
+                        throw SimEngineException("MAS-PNCG has a nonfinite accepted-state energy.");
 
                     // CCD filter
                     alpha = filter_toi(alpha);
@@ -414,7 +475,7 @@ void SimEngine::advance()
                         alpha = cfl_condition(alpha);
 
                     // Line Search Iteration
-                    bool  converged        = convergence_check(newton_iter);
+                    bool converged = !m_mas_pncg_solver && convergence_check(newton_iter);
                     SizeT line_search_iter = 0;
                     Float last_E           = E0;
                     for(; line_search_iter < m_line_searcher->max_iter(); ++line_search_iter)
@@ -436,7 +497,13 @@ void SimEngine::advance()
 
                         // Check Energy Decrease
                         // TODO: maybe better condition like Wolfe condition/Armijo condition in the future
-                        bool energy_decrease = (E <= E0);
+                        bool energy_decrease =
+                            m_mas_pncg_solver ?
+                                std::isfinite(E) && std::isfinite(alpha) && alpha > 0
+                                    && E <= E0
+                                                + 1e-4 * alpha
+                                                      * m_mas_pncg_solver->slope() :
+                                (E <= E0);
 
                         // Check Inversion
                         // TODO: Inversion check if needed
@@ -445,13 +512,32 @@ void SimEngine::advance()
                         bool success = energy_decrease && no_inversion;
                         if(success)
                             break;
+                        if(m_mas_pncg_solver)
+                            m_mas_pncg_solver->rejected_trial(!std::isfinite(E));
 
                         // If not success, then shrink alpha
                         alpha /= 2;
                     }
 
                     // Check Line Search Iteration: report warnings or throw exceptions if needed
-                    check_line_search_iter(line_search_iter, E0, last_E);
+                    if(m_mas_pncg_solver)
+                    {
+                        if(line_search_iter >= m_line_searcher->max_iter())
+                        {
+                            m_frame_hit_line_search_limit = true;
+                            m_global_vertex_manager->step_forward(0);
+                            m_line_searcher->step_forward(0);
+                            filter_dcd_candidates();
+                            if(m_mas_pncg_solver->retry())
+                                continue;
+                            throw SimEngineException(fmt::format("MAS-PNCG exhausted energy backtracking after restart (E0={}, E_last={}); accepted state restored.",
+                                                                 E0,
+                                                                 last_E));
+                        }
+                        m_mas_pncg_solver->accept(alpha);
+                    }
+                    else
+                        check_line_search_iter(line_search_iter, E0, last_E);
 
                     // newton/min_iter is a pure hard floor (default 0 = off);
                     // the semi-implicit Kmin lives in newton/semi_implicit/K_min
@@ -464,6 +550,27 @@ void SimEngine::advance()
                 }
             }
 
+            if(m_mas_pncg_solver && !m_frame_converged)
+            {
+                detect_dcd_candidates();
+                m_state = SimEngineState::ComputeDyTopoEffect;
+                compute_dytopo_effect(true);
+                m_state = SimEngineState::SolveGlobalLinearSystem;
+                if(!m_mas_pncg_solver->evaluate(false))
+                {
+                    m_state = SimEngineState::ComputeDyTopoEffect;
+                    compute_dytopo_effect();
+                    m_state = SimEngineState::SolveGlobalLinearSystem;
+                    m_mas_pncg_solver->evaluate(true);
+                }
+                m_frame_converged = pncg_stationary();
+                if(!m_frame_converged)
+                {
+                    m_frame_hit_newton_limit = true;
+                    throw SimEngineException("MAS-PNCG exhausted its direction budget before independent residual convergence.");
+                }
+            }
+
             // 5. Update Velocity => v = (x - x_0) / dt
             m_state = SimEngineState::UpdateVelocity;
             {
@@ -473,7 +580,8 @@ void SimEngine::advance()
 
             // Check Newton Iteration
             // report warnings or throw exceptions if needed
-            check_newton_iter(newton_iter);
+            if(!m_mas_pncg_solver)
+                check_newton_iter(newton_iter);
             m_frame_completed = true;
         }
 
@@ -482,10 +590,27 @@ void SimEngine::advance()
 
     try
     {
-        pipeline();
+        if(m_mas_pncg_solver)
+            pipeline();
+        else
+        {
+            auto newton_pipeline = [&]() noexcept(AbortOnException)
+            { pipeline(); };
+            newton_pipeline();
+        }
     }
     catch(const SimEngineException& e)
     {
+        if(m_mas_pncg_solver)
+        {
+            if(m_state == SimEngineState::LineSearch)
+            {
+                m_global_vertex_manager->step_forward(0);
+                m_line_searcher->step_forward(0);
+                filter_dcd_candidates();
+            }
+            m_mas_pncg_solver->fail();
+        }
         logger::error("Engine Advance Error: {}", e.what());
         status().push_back(core::EngineStatus::error(e.what()));
     }

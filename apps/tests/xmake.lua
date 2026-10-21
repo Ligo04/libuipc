@@ -15,6 +15,8 @@ includes("geometry")
 includes("sanity_check")
 if has_config("backend_cuda") then
     includes("backends")
+    includes("mas_pncg")
+    includes("mas_pncg_operators")
     includes("sim_case")
     includes("regression")
 end

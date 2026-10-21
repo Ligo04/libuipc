@@ -146,6 +146,50 @@ appropriate geometry instead.
     corrected and tested. This is an identified algorithm/history limitation,
     not a requirement for bitwise repeatability or a change to the solver here.
 
+## Nonlinear solver selection
+
+Select MAS-PNCG before initializing the World with
+`config["nonlinear_system"]["solver"] = "mas_pncg"` in either C++ or Python.
+The default `"newton"` retains the existing Newton path and its configured
+linear solver, including `"fused_pcg"`. MAS-PNCG chooses MAS internally; the
+Newton `linear_system/*` and `newton/*` controls do not configure its iterations.
+This is an outer nonlinear method and is therefore selected separately from
+the Newton linear solver.
+
+The CUDA implementation currently accepts exclusively dynamic FEM coordinates
+(fixed FEM vertices are supported), BDF1 and standard IPC. Its material gate
+accepts ARAP, StableNeoHookean, NeoHookeanShell and
+StrainLimitingBaraffWitkinShell, with stateless DiscreteShellBending as an extra
+constitution. Native normal/friction energies and global CCD are retained.
+ABD, mixed ABD/FEM, plastic internal states, BDF2, AL-IPC and DiffSim are not
+enabled. Configuration combinations are checked at Scene validation and model
+capabilities at backend initialization. These settings are initialization-time
+choices, not hot-reload controls.
+
+| Key | Type | Default | Valid domain / choices | Meaning |
+| --- | --- | --- | --- | --- |
+| `nonlinear_system/solver` | string | `"newton"` | `"newton"`, `"mas_pncg"` | Selects the outer nonlinear solver; default preserves Newton. |
+| `nonlinear_system/mas_pncg/max_iter` | integer | `1024` | `>= 1` | Direction-attempt budget per frame, including restart retries. Exhaustion without convergence fails the frame. |
+| `nonlinear_system/mas_pncg/update_mode` | string | `"incremental"` | `"incremental"`, `"frozen"`, `"full_rebuild"` | Positive contact updates, no updates between restarts, or a new base per attempt. Full rebuild resets history and uses 1D directions. |
+| `nonlinear_system/mas_pncg/top_k` | integer | `8` | `1..8` | Rank cap per Level-0 MAS domain. Global surrogate curvature includes every qualifying update column. |
+| `nonlinear_system/mas_pncg/rotation_deg` | float, deg | `25` | `0 < value <= 90` | Rotation threshold for sign-equivalent normalized geometric normals. Per-vertex normalized feature weights must also agree within `1e-3` to use a stiffness difference; otherwise add the full current column. |
+| `nonlinear_system/mas_pncg/restart_threshold` | float, dimensionless | `0.3` | `0 < value < 1` | Restarts when the loss-of-orthogonality ratio exceeds this value. |
+| `nonlinear_system/mas_pncg/max_base_age` | integer | `32` | `>= 0` | Rebuild after this many accepted steps; `0` disables the age bound. |
+| `nonlinear_system/mas_pncg/gradient_rtol` | float, dimensionless | `1e-5` | `0 < value < 1` | Relative fixed-kinetic gradient tolerance, globally and per free vertex. References reset per frame/objective change, not a numerical restart. |
+| `nonlinear_system/mas_pncg/gradient_atol` | float, dimensionless | `1e-8` | `> 0` | Absolute residual tolerance scaled by dynamic mass and rest extent; zero extent uses 1 m. Each vertex uses its owning mesh extent. |
+| `nonlinear_system/mas_pncg/velocity_tol` | float, m/s | `0.05` | `> 0` | The maximum world displacement from the current fixed-kinetic correction `-M^-1*g` must be at most this value times `dt`. |
+| `nonlinear_system/mas_pncg/ccd_mode` | string | `"global"` | constant `"global"` | Conservative CCD on the actual direction. Localized CCD is not exposed. |
+
+Every trial requires finite native energy and Armijo decrease, including in
+non-strict mode. `line_search/max_iter` remains the per-direction backtracking
+budget. An exhausted step restores the accepted state and permits one restart
+retry. A failed frame does not commit velocity/history. Its World becomes
+invalid; create a fresh Engine/World from a valid scene or checkpoint, because
+public `World::recover()` does not accept an invalid World.
+Already-stationary states require finite energy and the
+independent residual checks; they do not accept a dummy step. See
+[MAS-PNCG](scene_configs/mas_pncg.md) for operator and diagnostic details.
+
 ## Newton solve
 
 | Key | Type | Default | Valid domain / choices | Meaning |
@@ -170,7 +214,7 @@ termination logic and tuning guidance.
 | --- | --- | --- | --- | --- |
 | `linear_system/tol_rate` | float | `1e-3` | `(0, 1)` | Relative PCG residual tolerance. Smaller is more accurate and usually more expensive. |
 | `linear_system/solver` | string | `"fused_pcg"` | `"fused_pcg"`, `"linear_pcg"` | Global iterative solver. `fused_pcg` is the optimized default; `linear_pcg` supports detailed PCG vector dumps. |
-| `linear_system/fem_preconditioner` | string | `"diag"` | `"diag"`, `"mas"` | FEM local preconditioner. MAS auto-partitions every non-empty FEM geometry into fixed-size clusters and is intended for stiff/ill-conditioned FEM scenes. |
+| `linear_system/fem_preconditioner` | string | `"diag"` | `"diag"`, `"mas"` | Newton FEM local preconditioner. MAS auto-partitions every non-empty FEM geometry into fixed-size clusters and is intended for stiff/ill-conditioned FEM scenes. MAS-PNCG always selects MAS, independently of this Newton setting. |
 | `linear_system/use_cuda_graph` | integer mode | `1` | `0`, `1`, `2` | Fused-PCG launch mode: `0` plain launches; `1` host-checked block replay; `2` full-GPU while-loop graph. Mode 2 requires CUDA 12.4+ and falls back when unsupported. Non-IPC pipelines currently force graphs off. |
 | `linear_system/check_interval` | integer | `5` | `>= 1` | Number of fused-PCG iterations between host convergence checks in modes 0/1. Larger values reduce checks but make exit granularity coarser. |
 
@@ -178,7 +222,7 @@ termination logic and tuning guidance.
 
 | Key | Type | Default | Valid domain / choices | Meaning |
 | --- | --- | --- | --- | --- |
-| `line_search/max_iter` | integer | `8` | `>= 1` | Maximum backtracking iterations per Newton step. |
+| `line_search/max_iter` | integer | `8` | `>= 1` | Maximum energy backtracking trials per direction in Newton or MAS-PNCG. |
 | `line_search/report_energy` | flag | `0` | `0`, `1` | Logs the energy contribution of every line-search reporter. Useful for diagnosis, noisy for normal runs. |
 
 ## Contact and friction

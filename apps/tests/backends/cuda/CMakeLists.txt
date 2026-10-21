@@ -13,6 +13,8 @@ add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>
                     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
 
 file(GLOB_RECURSE SOURCE CONFIGURE_DEPENDS "*.cpp" "*.h" "*.cu" ".inl")
+# These kernels run in a standalone executable without the backend DLL.
+list(REMOVE_ITEM SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mas_pncg_math.cu")
 uipc_add_test(backend_cuda ${SOURCE})
 target_link_libraries(backend_cuda PRIVATE uipc::backend::cuda)
 target_compile_options(backend_cuda PRIVATE

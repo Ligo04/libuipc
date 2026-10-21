@@ -78,6 +78,8 @@ definitions together. The repository contract guards this boundary.
 | `geometry/` | ~20 mesh algorithm tests (extract_surface, compute_volume, label_*, urdf_io, etc.) |
 | `core/` | engine, scene, object, contact_model, scene_io, serializer, etc. |
 | `backends/cuda/` | CUDA backend-specific tests |
+| `mas_pncg/` | Pure C++ World/Scene runtime tests loading the CUDA backend |
+| `mas_pncg_operators/` | Standalone CUDA MAS provider tests and the MAS-PNCG math/operator source from `backends/cuda/` |
 | `sanity_check/` | Built-in checkers (surface distance/intersection, half-plane distance) |
 | `regression/` | Regression tests |
 | `sim_case/` | **95 simulation source files**: `abd_*` (affine body/joints), `fem_*`, `fem_mas_*` (linear systems), `*_stitch`, `discrete_shell_bending*`, joint series (revolute/prismatic/spherical/fixed + limit/driving/external force). Numeric IDs are not contiguous/unique: 45 and 84 each occur twice, and 62 is absent. |
@@ -90,6 +92,20 @@ the mixed sanity-check target remains available, but compiles its CUDA sections
 only when that backend exists, preserving its none-backend coverage in lean
 builds. In that configuration CTest relabels it `fast;cpu`; CUDA builds retain
 its `gpu` label because the same executable exercises both backends.
+
+MAS-PNCG tests separate the CUDA operator executable from the host-only World
+executable. `mas_pncg_operators` compiles the production MAS engine directly and
+does not link the CUDA backend; `mas_pncg` loads that backend through public
+Scene/World APIs and contains no CUDA source. Do not combine these targets:
+XMake's CUDA test device-link can collect backend objects from dependencies,
+duplicating their kernel registration in an executable that also calls the
+shared backend. Both build systems keep the same test boundary.
+
+```bash
+xmake build mas_pncg mas_pncg_operators
+xmake run mas_pncg
+xmake run mas_pncg_operators
+```
 
 The `fem_mas_*` cases (53-61, 81 + the stitch regression) activate MAS via
 `config["linear_system"]["fem_preconditioner"] = "mas"` — not via

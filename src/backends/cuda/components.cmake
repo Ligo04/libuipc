@@ -43,6 +43,7 @@ file(GLOB_RECURSE UIPC_CUDA_RUNTIME_DOMAIN_SOURCES CONFIGURE_DEPENDS
     "joint_dof_system/*.cu" "joint_dof_system/*.cpp"
     "line_search/*.cu" "line_search/*.cpp"
     "newton_tolerance/*.cu" "newton_tolerance/*.cpp"
+    "nonlinear_system/*.cu" "nonlinear_system/*.cpp"
     "pipeline/*.cu" "pipeline/*.cpp"
     "sanity_check/*.cu" "sanity_check/*.cpp"
     "time_integrator/*.cu" "time_integrator/*.cpp"

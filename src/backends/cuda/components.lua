@@ -10,6 +10,7 @@ local components = {
         "joint_dof_system/**.cu",
         "line_search/**.cu",
         "newton_tolerance/**.cu",
+        "nonlinear_system/**.cu",
         "pipeline/**.cu",
         "sanity_check/**.cu",
         "time_integrator/**.cu",

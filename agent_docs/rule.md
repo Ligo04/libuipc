@@ -149,6 +149,10 @@ record it here in the same commit.**
 
 ## Task-scoped (recorded for context, not general policy)
 
+- 2026-10-21 MAS-PNCG integration: implement in a separate worktree and expose
+  solver selection through Scene config, analogous to the existing fused-PCG
+  selector. Keep the default Newton configuration unchanged.
+
 - 2026-10-03 audit follow-up: prioritize the fourth proposed stage, a matching
   source/runtime performance baseline followed by measured optimizations. Defer
   the first three audit-remediation stages; do not fold their correctness,

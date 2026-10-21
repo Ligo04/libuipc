@@ -1,5 +1,73 @@
 # Handoff — Current State of the Repo
 
+> **Optional native MAS-PNCG (2026-10-21)**: developed in the isolated managed
+> worktree on `codex/mas-pncg`, based on `c283e98a`; the original checkout and
+> its unrelated sample/packaging edits are preserved. Select with
+> `config["nonlinear_system"]["solver"]="mas_pncg"`. Newton remains the default
+> and `linear_system/solver` retains its fused/ordinary PCG choices. MAS-PNCG
+> automatically selects FEM MAS and never executes PCG.
+>
+> The shared IPC driver owns frame lifecycle, native energy and global CCD;
+> a dedicated nonlinear module owns immutable double Level-0 MAS/base-Hessian
+> snapshots, frozen float coarse solves, semantic baseline-relative normal
+> updates, local top-K Woodbury corrections and untruncated global 2D curvature.
+> Implicit local residuals detect cancellation and verify direct local fallbacks.
+> Normal/feature identity preserves native occurrence multiplicity. Compatible
+> contact-system queries are required because registered IPC implementations
+> derive from the abstract export interfaces. Every trial needs finite native
+> energy and Armijo decrease; the optional energy policy keeps Newton's default
+> assertion behavior while allowing PNCG backtracking to reject nonfinite trials.
+>
+> The initial gate accepts dynamic positive-mass FEM, optional fixed vertices,
+> base UIDs 9/10/11/819 and stateless bending UID 17, under BDF1/standard IPC.
+> ABD/mixed bodies, quasi-static free vertices, BDF2, AL-IPC, DiffSim, plastic
+> histories and localized CCD remain separate extensions. Global/per-vertex
+> kinetic residuals and a physical correction bound control stopping. Failed
+> frames do not commit velocity/history; an invalid World requires a fresh
+> Engine/World from a valid scene or checkpoint. The recovery hook resets caches
+> during ordinary valid-World checkpoint recovery only.
+>
+> New host-only `mas_pncg` and standalone CUDA `mas_pncg_operators` targets avoid
+> XMake duplicating backend device code in an executable that calls the backend
+> DLL. CMake/XMake source ownership, test boundaries and CUDA flags match.
+>
+> Native validation: Linux Release XMake, CUDA 13.4.92, RTX 5090. The complete
+> host runtime target passes 7 cases / 1300 assertions, including analytical
+> free flight in all three modes, all-fixed stationarity, actual incremental
+> plane/friction columns, cloth self-contact with fixed vertices/bending,
+> unsupported ABD/mixed/quasi-static initialization and budget/numerical/energy
+> failures. Both early coarse-direction failure and 16 nonfinite-energy trials
+> preserve native position/velocity state. The standalone operators pass
+> 8 cases / 258 assertions, including 33/257-node reversed chains and
+> 4/17/257-node disconnected pairs with padded domains. Dense fine inverses and
+> analytical coarse/legacy-MAS corrections cover multiple banks and levels.
+> Explicit masked warp barriers fix confirmed shared-data dependencies in the
+> original MAS hierarchy/restriction; separate capture flags fix its new
+> validation handoff. Parallel atomic accumulation is retained.
+> Core/common/geometry pass 87 cases / 4631 assertions; the existing CUDA
+> backend target passes 27 cases / 805 assertions. Repository contracts pass
+> 66 tests; prose MkDocs builds with only existing generated-API and
+> external-agent-doc link warnings. CMake parity was reviewed, not built.
+>
+> CUDA checks use matching Compute Sanitizer 2026.3.0.0 from CUDA 13.4.92.
+> The official operator binary passes memcheck, racecheck and synccheck with
+> `--report-api-errors explicit` (zero errors/hazards). The older system 12.8
+> tool falsely reports CUB's PTX 9.2 ignore-oob scan instruction. Under the new
+> tool's default `extended` API diagnostics, the host reports 24 duplicate
+> generic cuda_tool/CUB kernel registrations, with no invalid accesses and all
+> 1300 assertions passing. Independent standard-NVCC multi-TU/shared-library
+> and unity controls reproduce and isolate these diagnostics; no PNCG-specific
+> kernel is reported. `explicit` preserves checks for directly returned CUDA
+> API errors; it excludes extended driver log diagnostics, as described in
+> [the NVIDIA manual](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#cuda-api-error-checking).
+> Do not describe this as an unconditional default-mode sanitizer clean run.
+> Evidence: `/tmp/mas-pncg-final-{mas_pncg,mas_pncg_operators,backend_cuda}-20261021.log`,
+> `/tmp/mas-pncg-provider-racefix-20261021-m89z7_lx/*-official.*`,
+> `/tmp/mas-pncg-host-memcheck-cs134-20261021.log` and
+> `/tmp/mas-pncg-duplicate-kernel-probe/`.
+> Python package/trajectory validation is a separate delivery stage. No matched
+> performance or large-scene memory claim is made.
+
 > **PR #502 Eigen 5 header dependency (2026-10-20)**: Linux XMake uses Eigen
 > 5.0.1 and caught the BW formula header relying on callers to include
 > `Eigen/Geometry` before using `Vector3::cross`. Add that direct dependency

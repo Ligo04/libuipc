@@ -1,6 +1,6 @@
 #pragma once
 #include <type_define.h>
-#include <cuda_tool/cuda_tool.h>
+#include <cuda_tool/linear_system.h>
 #include <uipc/common/span.h>
 #include <filesystem>
 #include <string_view>
@@ -15,11 +15,13 @@ namespace uipc::backend::cuda
  *
  * Key parameters:
  * - BANKSIZE = 16: each cluster has at most 16 nodes (48 DOFs).
- * - Mixed precision (matches StiffGIPC):
+ * - The legacy PCG path uses mixed precision (matches StiffGIPC):
  *     - Hessian assembly and Gauss-Jordan inversion run in double.
  *     - The inverted per-cluster preconditioner, multi-level residual and
  *       solution buffers are stored in float for memory / atomic bandwidth.
  *     - Only the final apply output is cast back to double.
+ * - The nonlinear capture keeps separate double Level-0 matrices/inverses
+ *   and frozen float coarse inverses; it does not change PCG storage.
  */
 class MASPreconditionerEngine
 {
@@ -45,6 +47,24 @@ class MASPreconditionerEngine
 
     using ClusterMatrixSym = ClusterMatrixSymT<double>;  // Hessian assembly
     using ClusterMatrixSymF = ClusterMatrixSymT<float>;  // Inverted preconditioner
+
+    static constexpr SizeT invalid_epoch = ~SizeT{0};
+
+    struct FrozenLevel0View
+    {
+        // Views remain valid until the next capture or hierarchy initialization.
+        // A -1 part_to_real entry is padding, not a physical zero-curvature DOF.
+        cuda_tool::CBufferView<ClusterMatrixSym> base_matrices;
+        cuda_tool::CBufferView<ClusterMatrixSym> base_inverses;
+        cuda_tool::CBufferView<int>              part_to_real;
+        cuda_tool::CBufferView<int>              real_to_part;
+        int                                      domain_count         = 0;
+        int                                      real_vertex_count    = 0;
+        int                                      partition_slot_count = 0;
+        SizeT                                    epoch = invalid_epoch;
+
+        bool valid() const { return epoch != invalid_epoch; }
+    };
 
     // Level traversal table per node
     struct LevelTable
@@ -90,6 +110,14 @@ class MASPreconditionerEngine
                cuda_tool::DenseVectorView<Float>  z,
                cuda_tool::CVarView<IndexT>        converged,
                cudaStream_t                       stream = nullptr);
+
+    // Capture on the default stream after base assembly. A false result
+    // invalidates the previous capture; a successful return is host-complete.
+    bool             capture_nonlinear_base(SizeT epoch);
+    FrozenLevel0View nonlinear_base(SizeT expected_epoch) const;
+    void             apply_frozen_coarse(SizeT                              epoch,
+                                         cuda_tool::CDenseVectorView<Float> r,
+                                         cuda_tool::DenseVectorView<Float>  z);
 
     bool is_initialized() const { return m_initialized; }
 
@@ -201,5 +229,15 @@ class MASPreconditionerEngine
     // ---- GPU buffers: multi-level residual / solution (float, matches GIPC) ----
     cuda_tool::DeviceBuffer<Eigen::Vector3f> multi_level_R;
     cuda_tool::DeviceBuffer<float3>          multi_level_Z;
+
+    bool                                       nonlinear_base_valid = false;
+    SizeT                                      nonlinear_epoch = invalid_epoch;
+    int                                        nonlinear_domain_count = 0;
+    cuda_tool::DeviceBuffer<ClusterMatrixSym>  nonlinear_base_matrices;
+    cuda_tool::DeviceBuffer<ClusterMatrixSym>  nonlinear_base_inverses;
+    cuda_tool::DeviceBuffer<ClusterMatrixSymF> nonlinear_coarse_inverses;
+    cuda_tool::DeviceBuffer<int>               nonlinear_part_to_real;
+    cuda_tool::DeviceBuffer<int>               nonlinear_real_to_part;
+    cuda_tool::DeviceBuffer<IndexT>            nonlinear_status;
 };
 }  // namespace uipc::backend::cuda

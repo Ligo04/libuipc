@@ -3,6 +3,8 @@ target("backend_cuda")
     add_rules("uipc_test")
     add_deps("cuda")
     add_files("**.cu", "**.cpp")
+    -- These kernels run in a standalone executable without the backend DLL.
+    remove_files("mas_pncg_math.cu")
     if has_config("dev") then
         add_rules("clangd")
     end

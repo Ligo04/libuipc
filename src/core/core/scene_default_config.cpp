@@ -83,7 +83,7 @@ static SceneConfigContract make_scene_config_contract()
     add("newton/max_iter",
         IndexT{1024},
         "integer",
-        "Maximum nonlinear iterations per frame.",
+        "Maximum Newton iterations per frame.",
         {"src/backends/cuda/engine"},
         Json{{"minimum", 1}});
     add("newton/min_iter",
@@ -143,6 +143,75 @@ static SceneConfigContract make_scene_config_contract()
         {"src/backends/cuda/engine"},
         Json{{"minimum", 0}});
 
+    add("nonlinear_system/solver",
+        std::string{"newton"},
+        "string",
+        "Select Newton with a linear solver or native MAS-PNCG.",
+        {"src/backends/cuda/nonlinear_system", "src/backends/cuda/engine"},
+        Json{{"enum", Json::array({"newton", "mas_pncg"})}});
+    add("nonlinear_system/mas_pncg/max_iter",
+        IndexT{1024},
+        "integer",
+        "Maximum direction attempts including restart retries.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"minimum", 1}});
+    add("nonlinear_system/mas_pncg/update_mode",
+        std::string{"incremental"},
+        "string",
+        "Incremental contact correction, frozen base, or per-attempt full rebuild.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"enum", Json::array({"incremental", "frozen", "full_rebuild"})}});
+    add("nonlinear_system/mas_pncg/top_k",
+        IndexT{8},
+        "integer",
+        "Maximum local correction rank per MAS domain.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"minimum", 1}, {"maximum", 8}});
+    add("nonlinear_system/mas_pncg/rotation_deg",
+        Float{25.0},
+        "number",
+        "Geometric normal rotation threshold for a full positive contact update.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"exclusiveMinimum", 0.0}, {"maximum", 90.0}},
+        "deg");
+    add("nonlinear_system/mas_pncg/restart_threshold",
+        Float{0.3},
+        "number",
+        "Loss-of-orthogonality restart ratio.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"exclusiveMinimum", 0.0}, {"exclusiveMaximum", 1.0}});
+    add("nonlinear_system/mas_pncg/max_base_age",
+        IndexT{32},
+        "integer",
+        "Accepted steps before rebuilding; zero disables the age bound.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"minimum", 0}});
+    add("nonlinear_system/mas_pncg/gradient_rtol",
+        Float{1.0e-5},
+        "number",
+        "Relative fixed-kinetic gradient tolerance, global and per vertex.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"exclusiveMinimum", 0.0}, {"exclusiveMaximum", 1.0}});
+    add("nonlinear_system/mas_pncg/gradient_atol",
+        Float{1.0e-8},
+        "number",
+        "Absolute gradient tolerance scaled by local rest extent and mass.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"exclusiveMinimum", 0.0}});
+    add("nonlinear_system/mas_pncg/velocity_tol",
+        Float{0.05},
+        "number",
+        "Maximum fixed-kinetic correction divided by dt.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"exclusiveMinimum", 0.0}},
+        "m/s");
+    add("nonlinear_system/mas_pncg/ccd_mode",
+        std::string{"global"},
+        "string",
+        "Conservative global CCD on the actual direction.",
+        {"src/backends/cuda/engine"},
+        Json{{"const", "global"}});
+
     add("linear_system/tol_rate",
         Float{1e-3},
         "number",
@@ -158,7 +227,7 @@ static SceneConfigContract make_scene_config_contract()
     add("linear_system/fem_preconditioner",
         std::string{"diag"},
         "string",
-        "Select diagonal block-Jacobi or Multi-Level Additive Schwarz for FEM.",
+        "Newton FEM preconditioner: diagonal block-Jacobi or MAS. MAS-PNCG always uses MAS.",
         {"src/backends/cuda/finite_element"},
         Json{{"enum", Json::array({"diag", "mas"})}});
     add("linear_system/use_cuda_graph",
@@ -177,7 +246,7 @@ static SceneConfigContract make_scene_config_contract()
     add("line_search/max_iter",
         IndexT{8},
         "integer",
-        "Maximum backtracking iterations per Newton step.",
+        "Maximum energy backtracking trials per nonlinear direction.",
         {"src/backends/cuda/line_search"},
         Json{{"minimum", 1}});
     add("line_search/report_energy",
@@ -535,6 +604,15 @@ void validate_scene_config(const geometry::AttributeCollection& config)
 
     auto number = [&](std::string_view name)
     { return config.find(name)->to_json(0).get<double>(); };
+
+    if(config.find<std::string>("nonlinear_system/solver")->view()[0] == "mas_pncg")
+    {
+        UIPC_ASSERT_THROW(config.find<std::string>("contact/constitution")->view()[0] == "ipc",
+                          "MAS-PNCG requires contact/constitution=ipc.");
+        UIPC_ASSERT_THROW(config.find<std::string>("integrator/type")->view()[0] == "bdf1",
+                          "MAS-PNCG currently requires integrator/type=bdf1.");
+        UIPC_ASSERT_THROW(number("diff_sim/enable") == 0, "MAS-PNCG does not support DiffSim.");
+    }
 
     UIPC_ASSERT_THROW(number("newton/min_iter") <= number("newton/max_iter"),
                       "Invalid scene config: newton/min_iter must not exceed "

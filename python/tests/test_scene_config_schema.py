@@ -15,7 +15,10 @@ def test_scene_config_schema_matches_public_defaults() -> None:
 
     assert schema["schemaVersion"] == 1
     assert schema["strictUnknownKeys"] is True
-    assert len(entries) == 48
+    assert len(entries) == 59
+    assert entries["nonlinear_system/solver"]["default"] == "newton"
+    assert entries["nonlinear_system/solver"]["enum"] == ["newton", "mas_pncg"]
+    assert entries["nonlinear_system/mas_pncg/ccd_mode"]["const"] == "global"
     assert entries["dt"]["default"] == pytest.approx(0.01)
     assert entries["dt"]["exclusiveMinimum"] == 0.0
     assert entries["gravity"]["componentCount"] == 3
@@ -71,3 +74,30 @@ def test_config_schema_cli_selects_one_key(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["default"] == pytest.approx(0.01)
     assert payload["unit"] == "s"
+
+
+def test_mas_pncg_selection_preserves_linear_solver_choice() -> None:
+    config = Scene.default_config()
+    config["nonlinear_system"]["solver"] = "mas_pncg"
+    scene = Scene(config)
+    assert scene.config().find("nonlinear_system/solver") is not None
+    scene.validate_config()
+    assert config["linear_system"]["solver"] == "fused_pcg"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda c: c["integrator"].__setitem__("type", "bdf2"),
+        lambda c: c["contact"].__setitem__("constitution", "al-ipc"),
+        lambda c: c["diff_sim"].__setitem__("enable", 1),
+        lambda c: c["nonlinear_system"]["mas_pncg"].__setitem__("top_k", 9),
+        lambda c: c["nonlinear_system"]["mas_pncg"].__setitem__("ccd_mode", "localized"),
+    ],
+)
+def test_mas_pncg_rejects_unsupported_config(mutate) -> None:
+    config = Scene.default_config()
+    config["nonlinear_system"]["solver"] = "mas_pncg"
+    mutate(config)
+    with pytest.raises(UIPCException):
+        Scene(config)

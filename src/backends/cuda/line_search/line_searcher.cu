@@ -56,7 +56,7 @@ void LineSearcher::step_forward(Float alpha)
     }
 }
 
-Float LineSearcher::compute_energy(bool is_initial)
+Float LineSearcher::compute_energy(bool is_initial, EnergyCheck check)
 {
     Timer timer{"Compute Energy"};
 
@@ -86,19 +86,21 @@ Float LineSearcher::compute_energy(bool is_initial)
 
     m_device_energy_values.copy_to(m_energy_values.data());
 
-    auto reporter_energies = span{m_energy_values}.first(reporter_count);
-    for(auto&& [energy, reporter] : zip(reporter_energies, reporter_view))
+    auto  reporter_energies = span{m_energy_values}.first(reporter_count);
+    Float total_energy      = m_energy_values.back();
+    if(check == EnergyCheck::AssertFinite)
     {
-        UIPC_ASSERT(!std::isnan(energy) && std::isfinite(energy),
-                    "Energy [{}] is {}",
-                    reporter->name(),
-                    energy);
+        for(auto&& [energy, reporter] : zip(reporter_energies, reporter_view))
+        {
+            UIPC_ASSERT(!std::isnan(energy) && std::isfinite(energy),
+                        "Energy [{}] is {}",
+                        reporter->name(),
+                        energy);
+        }
+        UIPC_ASSERT(!std::isnan(total_energy) && std::isfinite(total_energy),
+                    "Total line-search energy is {}",
+                    total_energy);
     }
-
-    Float total_energy = m_energy_values.back();
-    UIPC_ASSERT(!std::isnan(total_energy) && std::isfinite(total_energy),
-                "Total line-search energy is {}",
-                total_energy);
 
     if(m_report_energy)
     {

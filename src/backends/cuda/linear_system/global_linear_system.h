@@ -359,6 +359,12 @@ class GlobalLinearSystem : public SimSystem
     SizeT last_solve_iterations() const noexcept;
     void  compute_gradient(ComputeGradientInfo& info);
 
+    bool             rebuild_nonlinear_base();
+    void             evaluate_nonlinear_gradient();
+    CBCOOMatrixView  nonlinear_matrix() const;
+    CDenseVectorView nonlinear_gradient() const;
+    void             scatter_nonlinear_direction(CDenseVectorView direction);
+
     cuda_tool::LinearSystemContext& ctx() noexcept { return m_impl.ctx; }
 
   protected:

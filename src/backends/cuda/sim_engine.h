@@ -25,6 +25,7 @@ class AffineBodyDynamics;
 class FiniteElementMethod;
 class InterAffineBodyConstitutionManager;
 class NewtonToleranceManager;
+class MASPNCGSolver;
 
 
 class SimEngine final : public backend::SimEngine
@@ -100,6 +101,7 @@ class SimEngine final : public backend::SimEngine
     LineSearcher*           m_line_searcher            = nullptr;
     GlobalLinearSystem*     m_global_linear_system     = nullptr;
     NewtonToleranceManager* m_newton_tolerance_manager = nullptr;
+    MASPNCGSolver*          m_mas_pncg_solver          = nullptr;
 
     GlobalAnimator*             m_global_animator               = nullptr;
     GlobalExternalForceManager* m_global_external_force_manager = nullptr;

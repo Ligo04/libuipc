@@ -27,6 +27,52 @@ void GlobalLinearSystem::compute_gradient(ComputeGradientInfo& info)
     m_impl.compute_gradient(info);
 }
 
+namespace
+{
+    __global__ void nonlinear_solution_sign_kernel(cuda_tool::CDenseVectorView<Float> direction,
+                                                   cuda_tool::DenseVectorView<Float> solution)
+    {
+        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if(i < direction.size())
+            solution(i) = -direction(i);
+    }
+}  // namespace
+
+bool GlobalLinearSystem::rebuild_nonlinear_base()
+{
+    m_impl.build_linear_system();
+    return !m_impl.empty_system;
+}
+
+void GlobalLinearSystem::evaluate_nonlinear_gradient()
+{
+    ComputeGradientInfo info;
+    info.buffer_view(m_impl.b.view());
+    m_impl.compute_gradient(info);
+}
+
+auto GlobalLinearSystem::nonlinear_matrix() const -> CBCOOMatrixView
+{
+    return m_impl.bcoo_A.cview();
+}
+
+auto GlobalLinearSystem::nonlinear_gradient() const -> CDenseVectorView
+{
+    return m_impl.b.cview();
+}
+
+void GlobalLinearSystem::scatter_nonlinear_direction(CDenseVectorView direction)
+{
+    auto n = direction.size();
+    if(n > 0)
+    {
+        auto k = nonlinear_solution_sign_kernel;
+        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
+            direction, m_impl.x.view());
+    }
+    m_impl.distribute_solution();
+}
+
 void GlobalLinearSystem::do_build()
 {
     auto dump_linear_system_attr =
@@ -572,8 +618,10 @@ void GlobalLinearSystem::Impl::compute_gradient(ComputeGradientInfo& info)
     for(auto&& [i, diag_subsystem] : enumerate(diag_subsystem_view))
     {
         DiagInfo diag_info{this};
-        diag_info.m_index           = diag_subsystem->m_index;
-        diag_info.m_gradients       = info.m_gradients;
+        diag_info.m_index = diag_subsystem->m_index;
+        diag_info.m_gradients =
+            info.m_gradients.subview(diag_dof_offsets_counts.offsets()[i],
+                                     diag_dof_offsets_counts.counts()[i]);
         diag_info.m_hessians        = TripletMatrixView{};
         diag_info.m_gradient_only   = true;
         diag_info.m_component_flags = info.m_flags;

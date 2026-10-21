@@ -12,7 +12,11 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
 
     REQUIRE(schema.at("schemaVersion") == 1);
     REQUIRE(schema.at("strictUnknownKeys") == true);
-    REQUIRE(entries.size() == 48);
+    REQUIRE(entries.size() == 59);
+    REQUIRE(entries.at("nonlinear_system/solver").at("default") == "newton");
+    REQUIRE(entries.at("nonlinear_system/solver").at("enum")
+            == Json::array({"newton", "mas_pncg"}));
+    REQUIRE(entries.at("nonlinear_system/mas_pncg/ccd_mode").at("const") == "global");
     REQUIRE(entries.at("dt").at("default").get<Float>() == Catch::Approx(0.01));
     REQUIRE(entries.at("dt").at("unit") == "s");
     REQUIRE(entries.at("gravity").at("componentCount") == 3);
@@ -90,6 +94,27 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
         REQUIRE(dt);
         view(*dt)[0] = -1.0;
         REQUIRE_THROWS(scene.validate_config());
+    }
+
+    SECTION("MAS-PNCG is selected through config")
+    {
+        auto config                          = Scene::default_config();
+        config["nonlinear_system"]["solver"] = "mas_pncg";
+        REQUIRE_NOTHROW(Scene{config});
+        config["integrator"]["type"] = "bdf2";
+        REQUIRE_THROWS(Scene{config});
+        config["integrator"]["type"]      = "bdf1";
+        config["contact"]["constitution"] = "al-ipc";
+        REQUIRE_THROWS(Scene{config});
+        config["contact"]["constitution"] = "ipc";
+        config["diff_sim"]["enable"]      = 1;
+        REQUIRE_THROWS(Scene{config});
+        config["diff_sim"]["enable"]                    = 0;
+        config["nonlinear_system"]["mas_pncg"]["top_k"] = 9;
+        REQUIRE_THROWS(Scene{config});
+        config["nonlinear_system"]["mas_pncg"]["top_k"]    = 8;
+        config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = "localized";
+        REQUIRE_THROWS(Scene{config});
     }
 }
 

@@ -3,6 +3,7 @@
 #include <line_search/line_searcher.h>
 #include <contact_system/contact_coeff.h>
 #include <implicit_geometry/half_plane_vertex_reporter.h>
+#include <contact_system/ipc_normal_surrogate.h>
 
 namespace uipc::backend::cuda
 {
@@ -108,10 +109,15 @@ class VertexHalfPlaneNormalContact : public ContactReporter
     cuda_tool::CDoubletVectorView<Float, 3> gradients() const noexcept;
     cuda_tool::CTripletMatrixView<Float, 3> hessians() const noexcept;
 
+    SizeT normal_surrogate_count() const;
+    void export_normal_surrogates(cuda_tool::BufferView<IPCNormalSurrogate> output);
+
   protected:
     virtual void do_build(BuildInfo& info)           = 0;
     virtual void do_compute_energy(EnergyInfo& info) = 0;
     virtual void do_assemble(ContactInfo& info)      = 0;
+    virtual void do_export_normal_surrogates(BaseInfo& info,
+                                             cuda_tool::BufferView<IPCNormalSurrogate> output);
 
   private:
     virtual void do_report_energy_extent(GlobalContactManager::EnergyExtentInfo& info) override final;

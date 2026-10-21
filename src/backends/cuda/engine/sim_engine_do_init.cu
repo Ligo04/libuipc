@@ -19,6 +19,7 @@
 #include <active_set_system/global_active_set_manager.h>
 #include <pipeline/ipc_pipeline_flag.h>
 #include <pipeline/al_ipc_pipeline_flag.h>
+#include <nonlinear_system/mas_pncg_solver.h>
 
 namespace uipc::backend::cuda
 {
@@ -36,6 +37,10 @@ void SimEngine::build()
     m_line_searcher            = &require<LineSearcher>();
     m_global_linear_system     = &require<GlobalLinearSystem>();
     m_newton_tolerance_manager = &require<NewtonToleranceManager>();
+    m_mas_pncg_solver          = find<MASPNCGSolver>();
+    if(world().scene().config().find<std::string>("nonlinear_system/solver")->view()[0] == "mas_pncg"
+       && !m_mas_pncg_solver)
+        throw SimEngineException("Selected MAS-PNCG could not initialize its FEM solver/provider.");
 
     m_global_simplicial_surface_manager = find<GlobalSimplicialSurfaceManager>();
     m_global_dytopo_effect_manager  = find<GlobalDyTopoEffectManager>();

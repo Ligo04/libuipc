@@ -77,7 +77,10 @@ class FEMDiagPreconditioner : public LocalPreconditioner
 
         // MAS is selected via config; defer to FEMMASPreconditioner when on.
         auto precond = world().scene().config().find<std::string>("linear_system/fem_preconditioner");
-        if(precond && precond->view()[0] == "mas")
+        auto nonlinear =
+            world().scene().config().find<std::string>("nonlinear_system/solver");
+        if((precond && precond->view()[0] == "mas")
+           || (nonlinear && nonlinear->view()[0] == "mas_pncg"))
         {
             throw SimSystemException(
                 "FEMDiagPreconditioner: linear_system/fem_preconditioner == \"mas\", "

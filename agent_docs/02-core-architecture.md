@@ -67,6 +67,9 @@ Holds `S<internal::Scene>`, `W<internal::Engine>` (weak, to prevent circular ref
 Configuration is stored in an `AttributeCollection` (resize(1)). Key entries:
 - `dt=0.01`, `gravity`, `cfl/enable`
 - `integrator/type="bdf1"`
+- `nonlinear_system/solver="newton"` selects the outer optimizer. `"mas_pncg"`
+  enables the optional FEM MAS-PNCG module, with its own iteration/residual
+  controls under `nonlinear_system/mas_pncg/*`, automatic MAS, and no PCG solve.
 - `newton/*` (max_iter, velocity_tol use unit literals such as `0.05_m/1.0_s`; on the standard IPC path, `semi_implicit/{enable,beta_tol,K_min}` = Stiff-GIPC-style early exit, enabled by default with `beta_tol=1e-3` and `K_min=6`: from iteration `K_min` on, β←(1-α)β per iteration, exit when β≤beta_tol. AL-IPC consumes `enable` and `K_min` to delay attenuation of its separate cumulative safe-path weight, then compares that weight with `contact/al-ipc/toi_threshold`; `beta_tol` remains IPC-only. `newton/min_iter` is a pure hard floor, default 0 = no forced minimum — normal convergence may exit at any iteration)
 - `linear_system/*`: `solver="fused_pcg"`; `fem_preconditioner` = `"diag"` (default) | `"mas"` (MAS, auto-partitions all FEM geometries internally, fixed cluster size 16); `use_cuda_graph` (0/1/2, PCG graph replay); `check_interval` (host convergence check cadence)
 - `line_search/*`
@@ -74,7 +77,7 @@ Configuration is stored in an `AttributeCollection` (resize(1)). Key entries:
 - `collision_detection/*` (`method`: `info_stackless_bvh` default; the V0, stackless, and linear-BVH selectors are schema-visible only when the matching legacy CUDA component was built), `sanity_check/*`, `diff_sim/enable`
 
 **Config contract**: a single `make_scene_config_contract()` declaration creates
-both the typed `AttributeCollection` defaults and the metadata for all 48 keys.
+both the typed `AttributeCollection` defaults and the metadata for all 59 keys.
 `Scene::default_config()` and `Scene::config_schema()` consume that same result,
 so a default cannot be added or changed independently of its public schema.
 `Scene::config_schema()` returns defaults, JSON/storage types, units, hard

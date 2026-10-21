@@ -1,5 +1,16 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
+MAS-PNCG initial native implementation (2026-10-21): select through
+`nonlinear_system/solver="mas_pncg"`; Newton/fused-PCG defaults are unchanged.
+The FEM implementation provides immutable MAS/base snapshots, baseline-relative
+normal updates, frozen coarse solves, 1D/2D directions, global CCD, mandatory
+Armijo decrease and independent residuals. Its explicit capability gate excludes
+ABD/mixed coordinates, quasi-static free vertices, BDF2, AL-IPC, DiffSim and
+plastic histories. These are extension work, not silent fallbacks. Localized
+CCD, native ABD pullback and matched large-scene performance/memory measurements
+remain open. No universal speedup or default change is claimed. See handoff
+for actual test coverage and environment.
+
 Directional Baraff-Witkin stretch added (2026-10-20): the new three-modulus
 overload independently controls Ka/Kb while retaining old APIs, defaults and
 serialized shared-stretch fallback. Energy, gradient and projected Hessian

@@ -4,6 +4,11 @@ This page explains how the nonlinear and linear stopping criteria fit
 together. See [Scene Configuration Reference](../scene_config.md) for the
 complete key table and defaults.
 
+These controls apply to `nonlinear_system/solver="newton"`, the default.
+Select `"mas_pncg"` through the same Scene config to use
+[MAS-PNCG](mas_pncg.md) with its independent residual criteria and automatic MAS
+preconditioner. `linear_system/solver` continues to choose PCG inside Newton.
+
 The ordinary and IPC semi-implicit criteria below describe the standard `ipc`
 pipeline. `al-ipc` shares the tolerance check inside its fixed-active-set inner
 solve and consumes `semi_implicit/enable` plus `K_min`, but has a separate

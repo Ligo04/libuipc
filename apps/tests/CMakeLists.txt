@@ -30,7 +30,8 @@ function(uipc_add_test name)
 
     set(is_gpu_test OFF)
     if(UIPC_WITH_CUDA_BACKEND
-       AND (name STREQUAL "backend_cuda" OR name STREQUAL "sim_case"
+       AND (name STREQUAL "backend_cuda" OR name STREQUAL "mas_pncg"
+            OR name STREQUAL "mas_pncg_operators" OR name STREQUAL "sim_case"
             OR name STREQUAL "regression" OR name STREQUAL "sanity_check"))
         set(is_gpu_test ON)
     endif()
@@ -54,6 +55,8 @@ add_subdirectory(sanity_check)
 
 if(UIPC_WITH_CUDA_BACKEND)
     add_subdirectory(backends)
+    add_subdirectory(mas_pncg)
+    add_subdirectory(mas_pncg_operators)
     add_subdirectory(sim_case)
     add_subdirectory(regression)
 endif()

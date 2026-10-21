@@ -167,6 +167,29 @@ cuda_tool::CTripletMatrixView<Float, 3> VertexHalfPlaneNormalContact::hessians()
 {
     return m_impl.hessians;
 }
+
+SizeT VertexHalfPlaneNormalContact::normal_surrogate_count() const
+{
+    return PHs().size();
+}
+
+void VertexHalfPlaneNormalContact::export_normal_surrogates(cuda_tool::BufferView<IPCNormalSurrogate> output)
+{
+    UIPC_ASSERT(output.size() == normal_surrogate_count(),
+                "Normal surrogate count mismatch: expected {}, got {}",
+                normal_surrogate_count(),
+                output.size());
+    if(output.size() == 0)
+        return;
+    BaseInfo info{&m_impl};
+    do_export_normal_surrogates(info, output);
+}
+
+void VertexHalfPlaneNormalContact::do_export_normal_surrogates(BaseInfo&,
+                                                               cuda_tool::BufferView<IPCNormalSurrogate>)
+{
+    throw SimSystemException{"This normal contact model does not export IPC normal surrogates"};
+}
 }  // namespace uipc::backend::cuda
 
 #include <contact_system/contact_exporter.h>

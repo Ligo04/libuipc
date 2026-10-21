@@ -4,13 +4,13 @@ Directory: `src/backends/cuda/` (compiled as the runtime-loadable shared library
 
 ## Internal Build Components
 
-The backend remains one DLL and performs one final CUDA device-link. Its 198
+The backend remains one DLL and performs one final CUDA device-link. Its 203
 compiled `.cu/.cpp` files are owned by seven primary logical components plus
 one optional legacy-collision component:
 
 | Logical component | CMake OBJECT target | Owned domains |
 |---|---|---|
-| `runtime` | `cuda_runtime_objects` | Root/engine, global geometry, animation, time integration, pipeline, diagnostics, and orchestration |
+| `runtime` | `cuda_runtime_objects` | Root/engine, nonlinear solvers, global geometry, animation, time integration, pipeline, diagnostics, and orchestration |
 | `affine_body` | `cuda_affine_body_objects` | ABD state, constitutions, constraints, joints, and subsystem assembly |
 | `collision` | `cuda_collision_objects` | Default broad phase and current trajectory filters |
 | `collision_legacy` | `cuda_collision_legacy_objects` | Optional V0, stackless, and linear-BVH simplex trajectory filters |
@@ -39,7 +39,7 @@ the same single device-link that Ninja and XMake already perform.
 `UIPC_WITH_CUDA_LEGACY_COLLISION` (CMake) /
 `cuda_legacy_collision` (XMake) defaults to ON for compatibility. Turning it
 off omits the three legacy filter translation units and their static
-registrations, leaving 195 compiled backend sources. Core receives the same
+registrations, leaving 200 compiled backend sources. Core receives the same
 build capability and removes those selectors from `Scene::config_schema()`, so
 configuration cannot advertise a filter missing from the backend DLL. The
 `wrecking_ball` example now follows the default filter and is included only in
@@ -64,6 +64,7 @@ legacy component.
 | `joint_dof_system/` | Joint DOF system |
 | `coupling_system/` | Multi-body coupling |
 | `linear_system/` | Linear solves: GlobalLinearSystem, fused PCG, SpMV, preconditioners |
+| `nonlinear_system/` | Optional FEM MAS-PNCG direction, contact updates, independent residuals, and restart state |
 | `line_search/` | Line-search energy evaluation |
 | `newton_tolerance/` | Newton convergence criteria |
 | `time_integrator/` | Time integration and velocity update (BDF1, etc.) |
@@ -335,6 +336,59 @@ instead, giving lightweight gradient variants without changing the full
 Hessian launch topology. Resource counts alone are therefore insufficient:
 validate launch restructuring with both kernel profiles and the enclosing
 stage timer.
+
+## Optional MAS-PNCG nonlinear solver
+
+`nonlinear_system/solver="mas_pncg"` selects `MASPNCGSolver`; `"newton"` remains
+the default. The IPC driver retains frame preparation, force/animation updates,
+friction recording, global feasibility/CCD and state commit. The new solver
+owns only its nonlinear numerical state. It is not an `IterativeSolver`, and
+does not execute PCG or consume Newton convergence settings. Selection enables
+`FEMMASPreconditioner` even when the Newton FEM setting remains `"diag"`.
+
+`GlobalLinearSystem` provides narrow native assembly, gradient, sparse-view and
+signed-direction-scatter operations. A restart deep-copies its symmetric BCOO
+Hessian, captures MAS matrices/inverses and semantic normal-contact metadata,
+and resets conjugate history. The provider stores a double Level-0 matrix and
+inverse for every 16-vertex domain and validated frozen float coarse inverses.
+These copies add memory to the existing MAS hierarchy and sparse system.
+Hierarchy construction and residual restriction use explicit 16-lane warp
+synchronization for shared-memory handoffs, including padding lanes. The
+capture uses separate shared validation flags between stages. These dependency
+fixes also apply to the existing Newton MAS provider; atomic accumulation
+remains parallel.
+
+Ordinary iterations request gradient-only DyTopo derivatives. Positive contact
+updates are reconstructed relative to the immutable base, preserving duplicate
+native occurrences. Semantic keys include stencil roles, vertices, feature
+flags and plane identity. Normal rotation and barycentric weights are checked
+separately. Local domains select up to eight columns and evaluate the complete
+double Woodbury action plus frozen coarse contribution. Implicit local residual
+checks detect cancellation and verify a direct local-solve fallback. Global
+curvature products retain every update column, independently of local top-K.
+Mollified EE contacts trigger a full native derivative/base rebuild.
+
+The curvature-based 1D/2D direction must descend, then pass native global CCD
+and finite-energy Armijo backtracking. Rejected trials restore the accepted
+configuration before the single restart retry. Exhausted direction/energy
+budgets leave the frame incomplete and do not commit velocity/history. Fixed
+kinetic global and per-vertex residuals control convergence; a tiny MAS step
+cannot declare success. Already-stationary states require finite energy and
+do not insert a dummy step.
+The optional energy-check policy lets MAS-PNCG reject nonfinite trial energies
+without triggering the default Newton assertion. Accepted-state energies must
+still be finite. A failed public World is invalid and cannot use `recover()`;
+create a fresh Engine/World from a valid scene or checkpoint. The solver's
+recovery hook resets numeric caches during ordinary valid-World checkpoint
+recovery only.
+
+The enforced initial capability set is BDF1, standard IPC, positive-mass dynamic
+FEM coordinates with optional fixed vertices, base UIDs 9/10/11/819 and extra
+UID 17. ABD/mixed coordinates, BDF2, AL-IPC, DiffSim and plastic constitutive
+histories require separate extensions. `incremental`, `frozen` and
+`full_rebuild` are diagnostic update controls; localized CCD is not exposed.
+See [the public config reference](../docs/specification/scene_configs/mas_pncg.md)
+and the dedicated host-runtime/operator test targets in doc 07.
 
 ## FusedPCG CUDA graph modes (linear_system/use_cuda_graph, default 1)
 

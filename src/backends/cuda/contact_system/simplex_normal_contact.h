@@ -3,6 +3,7 @@
 #include <line_search/line_searcher.h>
 #include <contact_system/contact_coeff.h>
 #include <collision_detection/simplex_trajectory_filter.h>
+#include <contact_system/ipc_normal_surrogate.h>
 
 namespace uipc::backend::cuda
 {
@@ -185,10 +186,15 @@ class SimplexNormalContact : public ContactReporter
     cuda_tool::CDoubletVectorView<Float, 3> PP_gradients() const;
     cuda_tool::CTripletMatrixView<Float, 3> PP_hessians() const;
 
+    SizeT normal_surrogate_count() const;
+    void export_normal_surrogates(cuda_tool::BufferView<IPCNormalSurrogate> output);
+
   protected:
     virtual void do_build(BuildInfo& info)           = 0;
     virtual void do_compute_energy(EnergyInfo& info) = 0;
     virtual void do_assemble(ContactInfo& info)      = 0;
+    virtual void do_export_normal_surrogates(BaseInfo& info,
+                                             cuda_tool::BufferView<IPCNormalSurrogate> output);
 
   private:
     virtual void do_report_energy_extent(GlobalContactManager::EnergyExtentInfo& info) override final;

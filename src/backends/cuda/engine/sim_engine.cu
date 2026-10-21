@@ -1,4 +1,5 @@
 #include <sim_engine.h>
+#include <nonlinear_system/mas_pncg_solver.h>
 #include <uipc/common/log.h>
 #include <cuda_tool/cuda_tool.h>
 #include <kernel_cout.h>
@@ -161,6 +162,9 @@ Json SimEngine::do_frame_stats() const
     stats["last_line_search_alpha"]   = m_frame_last_line_search_alpha;
     stats["last_ccd_toi"]             = m_frame_last_ccd_toi;
     stats["last_cfl_alpha"]           = m_frame_last_cfl_alpha;
+    stats["nonlinear_solver"] = m_mas_pncg_solver ? "mas_pncg" : "newton";
+    if(m_mas_pncg_solver)
+        stats.update(m_mas_pncg_solver->frame_stats());
     return stats;
 }
 
@@ -272,6 +276,8 @@ void SimEngine::do_apply_recover(RecoverInfo& info)
 {
     // If success, set the current frame to the recovered frame
     m_current_frame = info.frame();
+    if(m_mas_pncg_solver)
+        m_mas_pncg_solver->recover();
 }
 
 void SimEngine::do_clear_recover(RecoverInfo& info)

@@ -22,6 +22,7 @@
     - Scene Configuration
         - [Full Reference](specification/scene_config.md)
         - [Newton & Linear Solvers](specification/scene_configs/newton.md)
+        - [MAS-PNCG](specification/scene_configs/mas_pncg.md)
         - [Contact & Collision](specification/scene_configs/contact.md)
     - [Constitution UID](specification/constitution_uid.md)
     - [Constitutions](specification/constitutions/index.md)
