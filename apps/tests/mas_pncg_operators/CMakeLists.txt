@@ -1,6 +1,7 @@
 # Compile one copy of the provider device code and avoid linking the CUDA backend DLL.
 uipc_add_test(mas_pncg_operators
     preconditioner.cu
+    fused.cu
     ../backends/cuda/mas_pncg_math.cu
     ${PROJECT_SOURCE_DIR}/src/backends/cuda/finite_element/mas_preconditioner_engine.cu)
 target_include_directories(mas_pncg_operators PRIVATE

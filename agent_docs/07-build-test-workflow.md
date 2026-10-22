@@ -107,6 +107,34 @@ xmake run mas_pncg
 xmake run mas_pncg_operators
 ```
 
+MAS-PNCG has independent execution switches; neither invokes the Newton PCG
+solver. The defaults enable fused kernels and CUDA Graph replay:
+
+```python
+config["nonlinear_system"]["solver"] = "mas_pncg"
+config["nonlinear_system"]["mas_pncg"]["use_fused_kernels"] = 1
+config["nonlinear_system"]["mas_pncg"]["use_cuda_graph"] = 1
+```
+
+Use `(0, 0)` for the original reference operations, `(1, 0)` for fused kernels
+without graphs, and `(1, 1)` for graph replay. `use_cuda_graph` is inactive when
+fusion is disabled. These switches preserve the nonlinear tolerance, restart,
+global CCD, energy acceptance, and local direct-solve rules. The direct 2x2
+subspace solve runs on device in fused mode. `Engine.frame_stats()` reports
+`fused_kernels`, `cuda_graph_enabled`, and per-frame `cuda_graph_captures`,
+`cuda_graph_replays`, and `cuda_graph_fallbacks`; verify actual replays before
+calling a run graph-enabled. A failed capture falls back to the same uncaptured
+kernels. This does not capture the entire nonlinear iteration or remove all
+host/device synchronization.
+
+The operator tests include independent CPU residual/direction oracles, graph
+replay after producer updates, allocation/shape/scalar invalidation, and the
+one-dimensional fallback when historical curvature overflows. The Python
+contact test also compares complete 45-frame trajectories across execution
+modes. Select CUDA tests explicitly with `pytest -m cuda`; the default pytest
+selection excludes them. Confirm the loaded package and native hashes when
+testing a newly built backend rather than an installed wheel.
+
 The `fem_mas_*` cases (53-61, 81 + the stitch regression) activate MAS via
 `config["linear_system"]["fem_preconditioner"] = "mas"` — not via
 `mesh_partition()` calls (2026-08-24 switch redesign; 58_hybrid_mix still

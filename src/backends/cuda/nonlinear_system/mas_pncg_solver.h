@@ -4,6 +4,7 @@
 #include <contact_system/ipc_normal_surrogate.h>
 #include <finite_element/mas_preconditioner_engine.h>
 #include <linear_system/spmv.h>
+#include <memory>
 
 namespace uipc::backend::cuda
 {
@@ -14,11 +15,16 @@ class FEMMASPreconditioner;
 class FiniteElementVertexReporter;
 class SimplexNormalContact;
 class VertexHalfPlaneNormalContact;
+namespace pncg
+{
+    class FusedOperations;
+}
 
 class MASPNCGSolver final : public SimSystem
 {
   public:
     using SimSystem::SimSystem;
+    ~MASPNCGSolver() override;
     enum class DirectionStatus
     {
         Ready,
@@ -57,32 +63,36 @@ class MASPNCGSolver final : public SimSystem
     SimplexNormalContact*         m_simplex   = nullptr;
     VertexHalfPlaneNormalContact* m_planes    = nullptr;
 
-    IndexT      m_max_iter          = 1024;
-    IndexT      m_top_k             = 8;
-    IndexT      m_max_age           = 32;
-    Float       m_cos_rotation      = 0;
-    Float       m_restart_threshold = 0.3;
-    Float       m_rtol              = 1e-5;
-    Float       m_atol              = 1e-8;
-    Float       m_velocity_tol      = 0.05;
-    std::string m_update_mode;
-    bool        m_need_base          = true;
-    bool        m_have_history       = false;
-    bool        m_reference_ready    = false;
-    bool        m_retry_used         = false;
-    bool        m_failed             = false;
-    SizeT       m_epoch              = 0;
-    IndexT      m_age                = 0;
-    Float       m_slope              = 0;
-    Float       m_initial_residual   = 0;
-    Float       m_residual           = 0;
-    Float       m_local_ratio        = 0;
-    Float       m_kinetic_correction = 0;
-    Float       m_scale              = 1;
-    Float       m_dt                 = 0.01;
-    IndexT      m_vertex_offset      = 0;
-    IndexT      m_dof_offset         = 0;
-    Json        m_stats;
+    IndexT                                 m_max_iter          = 1024;
+    IndexT                                 m_top_k             = 8;
+    IndexT                                 m_max_age           = 32;
+    Float                                  m_cos_rotation      = 0;
+    Float                                  m_restart_threshold = 0.3;
+    Float                                  m_rtol              = 1e-5;
+    Float                                  m_atol              = 1e-8;
+    Float                                  m_velocity_tol      = 0.05;
+    std::string                            m_update_mode;
+    bool                                   m_use_fused = true;
+    bool                                   m_use_graph = true;
+    std::unique_ptr<pncg::FusedOperations> m_fused;
+    SizeT  m_frame_captures = 0, m_frame_replays = 0, m_frame_fallbacks = 0;
+    bool   m_need_base          = true;
+    bool   m_have_history       = false;
+    bool   m_reference_ready    = false;
+    bool   m_retry_used         = false;
+    bool   m_failed             = false;
+    SizeT  m_epoch              = 0;
+    IndexT m_age                = 0;
+    Float  m_slope              = 0;
+    Float  m_initial_residual   = 0;
+    Float  m_residual           = 0;
+    Float  m_local_ratio        = 0;
+    Float  m_kinetic_correction = 0;
+    Float  m_scale              = 1;
+    Float  m_dt                 = 0.01;
+    IndexT m_vertex_offset      = 0;
+    IndexT m_dof_offset         = 0;
+    Json   m_stats;
 
     cuda_tool::DeviceBCOOMatrix<Float, 3> m_base;
     cuda_tool::DeviceDenseVector<Float>   m_z, m_old_z, m_p, m_direction;

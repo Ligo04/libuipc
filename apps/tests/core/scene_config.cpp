@@ -12,7 +12,7 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
 
     REQUIRE(schema.at("schemaVersion") == 1);
     REQUIRE(schema.at("strictUnknownKeys") == true);
-    REQUIRE(entries.size() == 59);
+    REQUIRE(entries.size() == 61);
     REQUIRE(entries.at("nonlinear_system/solver").at("default") == "newton");
     REQUIRE(entries.at("nonlinear_system/solver").at("enum")
             == Json::array({"newton", "mas_pncg"}));

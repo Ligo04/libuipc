@@ -167,6 +167,18 @@ static SceneConfigContract make_scene_config_contract()
         "Maximum local correction rank per MAS domain.",
         {"src/backends/cuda/nonlinear_system"},
         Json{{"minimum", 1}, {"maximum", 8}});
+    add("nonlinear_system/mas_pncg/use_fused_kernels",
+        IndexT{1},
+        "integer",
+        "Fuse residuals, direction reductions, direct subspace solve and history updates; zero retains the reference kernels.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"minimum", 0}, {"maximum", 1}});
+    add("nonlinear_system/mas_pncg/use_cuda_graph",
+        IndexT{1},
+        "integer",
+        "Replay fused residual and direction kernels with CUDA graphs; inactive when use_fused_kernels is zero.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"minimum", 0}, {"maximum", 1}});
     add("nonlinear_system/mas_pncg/rotation_deg",
         Float{25.0},
         "number",

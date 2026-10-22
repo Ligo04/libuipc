@@ -106,6 +106,13 @@ class GraphCapture
         return Result::Ok;
     }
 
+    // Enqueue on the caller's stream, preserving dependencies with the work
+    // already queued there. The caller owns completion/error checks.
+    cudaError_t launch(cudaStream_t stream = nullptr)
+    {
+        return cudaGraphLaunch(m_exec, stream);
+    }
+
     // Replay the captured graph on an internal blocking stream and wait for
     // completion. (A blocking stream does NOT wait for legacy-default-stream
     // work — make sure any async H2D feeding the graph has completed, e.g. by

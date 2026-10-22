@@ -12,7 +12,11 @@ struct PNCGSubspaceResult
     bool   valid        = false;
 };
 
-inline PNCGSubspaceResult solve_pncg_subspace(double a, double b, double c, double gz, double gp, bool history)
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+    inline PNCGSubspaceResult
+    solve_pncg_subspace(double a, double b, double c, double gz, double gp, bool history)
 {
     PNCGSubspaceResult result;
     if(!std::isfinite(a) || !std::isfinite(gz) || a <= 0 || gz <= 0)

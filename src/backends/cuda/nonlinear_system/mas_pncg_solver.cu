@@ -1,6 +1,7 @@
 #include <nonlinear_system/mas_pncg_solver.h>
 #include <nonlinear_system/mas_pncg_math.h>
 #include <nonlinear_system/mas_pncg_kernels.h>
+#include <nonlinear_system/mas_pncg_fused.h>
 #include <linear_system/global_linear_system.h>
 #include <finite_element/fem_linear_subsystem.h>
 #include <finite_element/fem_mas_preconditioner.h>
@@ -17,6 +18,7 @@
 namespace uipc::backend::cuda
 {
 REGISTER_SIM_SYSTEM(MASPNCGSolver);
+MASPNCGSolver::~MASPNCGSolver() = default;
 
 namespace
 {
@@ -63,6 +65,10 @@ void MASPNCGSolver::do_build()
                               * std::acos(-1.0) / 180.0);
     m_update_mode =
         config.find<std::string>("nonlinear_system/mas_pncg/update_mode")->view()[0];
+    m_use_fused = index("nonlinear_system/mas_pncg/use_fused_kernels") != 0;
+    m_use_graph = m_use_fused && index("nonlinear_system/mas_pncg/use_cuda_graph") != 0;
+    if(m_use_fused)
+        m_fused = std::make_unique<pncg::FusedOperations>();
     on_init_scene([this] { validate_capabilities(); });
     logger::info("Nonlinear solver: MAS-PNCG ({}, FEM MAS, global CCD, Armijo acceptance); Newton/PCG settings are inactive.",
                  m_update_mode);
@@ -72,27 +78,33 @@ void MASPNCGSolver::begin_frame()
 {
     if(m_failed)
         throw SimEngineException("MAS-PNCG cannot advance an incomplete frame; create a fresh Engine/World from a valid state.");
-    m_stats           = {{"nonlinear_solver", "mas_pncg"},
-                         {"update_mode", m_update_mode},
-                         {"nonlinear_iterations", 0},
-                         {"accepted_steps", 0},
-                         {"base_rebuilds", 0},
-                         {"base_age", 0},
-                         {"restarts", 0},
-                         {"one_d_steps", 0},
-                         {"two_d_steps", 0},
-                         {"truncated_columns", 0},
-                         {"direct_local_fallbacks", 0},
-                         {"contact_rebuild_fallbacks", 0},
-                         {"normal_contacts", 0},
-                         {"contact_update_columns", 0},
-                         {"rejected_trials", 0},
-                         {"nonfinite_trials", 0},
-                         {"ccd_mode", "global"},
-                         {"gradient_initial", 0.0},
-                         {"gradient_final", 0.0},
-                         {"max_local_residual_ratio", 0.0}};
-    m_need_base       = true;
+    m_stats     = {{"nonlinear_solver", "mas_pncg"},
+                   {"update_mode", m_update_mode},
+                   {"nonlinear_iterations", 0},
+                   {"accepted_steps", 0},
+                   {"base_rebuilds", 0},
+                   {"base_age", 0},
+                   {"restarts", 0},
+                   {"one_d_steps", 0},
+                   {"two_d_steps", 0},
+                   {"truncated_columns", 0},
+                   {"direct_local_fallbacks", 0},
+                   {"contact_rebuild_fallbacks", 0},
+                   {"normal_contacts", 0},
+                   {"contact_update_columns", 0},
+                   {"rejected_trials", 0},
+                   {"nonfinite_trials", 0},
+                   {"ccd_mode", "global"},
+                   {"gradient_initial", 0.0},
+                   {"gradient_final", 0.0},
+                   {"max_local_residual_ratio", 0.0}};
+    m_need_base = true;
+    if(m_fused)
+    {
+        m_frame_captures  = m_fused->graph_captures();
+        m_frame_replays   = m_fused->graph_replays();
+        m_frame_fallbacks = m_fused->graph_fallbacks();
+    }
     m_have_history    = false;
     m_reference_ready = false;
     m_retry_used      = false;
@@ -321,25 +333,45 @@ void MASPNCGSolver::update_residual()
         m_residual = m_local_ratio = m_kinetic_correction = 0;
         return;
     }
-    auto k = pncg::residual_kernel;
-    k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
-        m_system->nonlinear_gradient(),
-        m_fem->masses(),
-        m_fem->is_fixed(),
-        m_lengths.cview(),
-        m_eta0.view(),
-        m_residual_terms.view(),
-        m_ratios.view(),
-        m_corrections.view(),
-        m_atol,
-        m_rtol,
-        !m_reference_ready);
-    cuda_tool::DeviceReduce().Sum(m_residual_terms.data(), m_sum.data(), n);
-    m_residual = std::sqrt(static_cast<Float>(m_sum));
-    cuda_tool::DeviceReduce().Max(m_ratios.data(), m_max.data(), n);
-    m_local_ratio = m_max;
-    cuda_tool::DeviceReduce().Max(m_corrections.data(), m_max.data(), n);
-    m_kinetic_correction = m_max;
+    if(m_use_fused)
+    {
+        const auto sums      = m_fused->residual(m_system->nonlinear_gradient(),
+                                            m_fem->masses(),
+                                            m_fem->is_fixed(),
+                                            m_lengths.cview(),
+                                            m_eta0.view(),
+                                            m_atol,
+                                            m_rtol,
+                                            !m_reference_ready,
+                                            m_use_graph);
+        m_residual           = std::sqrt(sums.sum);
+        m_local_ratio        = sums.ratio;
+        m_kinetic_correction = sums.correction;
+        if(sums.invalid)
+            throw SimEngineException("MAS-PNCG encountered a nonfinite independent residual.");
+    }
+    else
+    {
+        auto k = pncg::residual_kernel;
+        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
+            m_system->nonlinear_gradient(),
+            m_fem->masses(),
+            m_fem->is_fixed(),
+            m_lengths.cview(),
+            m_eta0.view(),
+            m_residual_terms.view(),
+            m_ratios.view(),
+            m_corrections.view(),
+            m_atol,
+            m_rtol,
+            !m_reference_ready);
+        cuda_tool::DeviceReduce().Sum(m_residual_terms.data(), m_sum.data(), n);
+        m_residual = std::sqrt(static_cast<Float>(m_sum));
+        cuda_tool::DeviceReduce().Max(m_ratios.data(), m_max.data(), n);
+        m_local_ratio = m_max;
+        cuda_tool::DeviceReduce().Max(m_corrections.data(), m_max.data(), n);
+        m_kinetic_correction = m_max;
+    }
     if(!std::isfinite(m_residual) || !std::isfinite(m_local_ratio)
        || !std::isfinite(m_kinetic_correction))
         throw SimEngineException("MAS-PNCG encountered a nonfinite independent residual.");
@@ -423,7 +455,32 @@ MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
     increment(m_stats, "nonlinear_iterations");
     if(!apply_preconditioner())
         return DirectionStatus::Restart;
-    auto  g  = m_system->nonlinear_gradient();
+    auto g = m_system->nonlinear_gradient();
+    if(m_use_fused)
+    {
+        m_spmv.rbk_sym_spmv(1, m_base.cview(), m_z.cview(), 0, m_hz.view());
+        if(m_have_history)
+            m_spmv.rbk_sym_spmv(1, m_base.cview(), m_p.cview(), 0, m_hp.view());
+        const auto result = m_fused->direction(g,
+                                               m_z.cview(),
+                                               m_old_z.cview(),
+                                               m_p.cview(),
+                                               m_hz.cview(),
+                                               m_hp.cview(),
+                                               m_updates.cview(),
+                                               m_vertex_offset,
+                                               m_have_history,
+                                               m_restart_threshold,
+                                               m_direction.view(),
+                                               m_use_graph);
+        if(!result.valid)
+            return DirectionStatus::Restart;
+        m_slope = result.slope;
+        m_system->scatter_nonlinear_direction(m_direction.cview());
+        increment(m_stats, result.used_history ? "two_d_steps" : "one_d_steps");
+        increment(m_stats, "contact_update_columns", result.update_columns);
+        return DirectionStatus::Ready;
+    }
     Float gz = m_system->ctx().dot(g, m_z.cview());
     if(!std::isfinite(gz) || gz <= 0)
         return DirectionStatus::Restart;
@@ -496,13 +553,18 @@ bool MASPNCGSolver::retry()
 void MASPNCGSolver::accept(Float fraction)
 {
     int n = m_direction.size();
-    if(n)
+    if(m_use_fused)
+        m_fused->accept(m_direction.cview(), m_z.cview(), m_p.view(), m_old_z.view(), fraction);
+    else
     {
-        auto k = pncg::scale_kernel;
-        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
-            m_direction.cview(), m_p.view(), fraction);
+        if(n)
+        {
+            auto k = pncg::scale_kernel;
+            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
+                m_direction.cview(), m_p.view(), fraction);
+        }
+        m_old_z = m_z;
     }
-    m_old_z        = m_z;
     m_have_history = true;
     m_retry_used   = false;
     ++m_age;
@@ -533,8 +595,16 @@ void MASPNCGSolver::recover()
 
 Json MASPNCGSolver::frame_stats() const
 {
-    return m_stats.is_object() ?
-               m_stats :
-               Json{{"nonlinear_solver", "mas_pncg"}, {"nonlinear_iterations", 0}};
+    Json stats                  = m_stats.is_object() ? m_stats :
+                                                        Json{{"nonlinear_solver", "mas_pncg"},
+                                                             {"nonlinear_iterations", 0}};
+    stats["fused_kernels"]      = m_use_fused;
+    stats["cuda_graph_enabled"] = m_use_graph;
+    stats["cuda_graph_captures"] =
+        m_fused ? m_fused->graph_captures() - m_frame_captures : 0;
+    stats["cuda_graph_replays"] = m_fused ? m_fused->graph_replays() - m_frame_replays : 0;
+    stats["cuda_graph_fallbacks"] =
+        m_fused ? m_fused->graph_fallbacks() - m_frame_fallbacks : 0;
+    return stats;
 }
 }  // namespace uipc::backend::cuda

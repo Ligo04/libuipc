@@ -102,13 +102,18 @@ def test_mas_pncg_config_and_animated_force_clear(tmp_path, update_mode, materia
 
 @pytest.mark.cuda
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
-def test_mas_pncg_contact_update_modes_match_the_full_rebuild_reference(tmp_path):
+def test_mas_pncg_contact_update_and_execution_modes_match_reference(tmp_path):
     trajectories = {}
-    for mode in ("full_rebuild", "frozen", "incremental"):
+    cases = [(mode, 1, 1) for mode in ("full_rebuild", "frozen", "incremental")]
+    cases += [("incremental", 0, 0), ("incremental", 1, 0)]
+    for mode, fused, graph in cases:
+        case = f"{mode}-{fused}-{graph}"
         config = Scene.default_config()
         config["nonlinear_system"]["solver"] = "mas_pncg"
         config["nonlinear_system"]["mas_pncg"]["update_mode"] = mode
-        engine = Engine("cuda", str(tmp_path / mode))
+        config["nonlinear_system"]["mas_pncg"]["use_fused_kernels"] = fused
+        config["nonlinear_system"]["mas_pncg"]["use_cuda_graph"] = graph
+        engine = Engine("cuda", str(tmp_path / case))
         world = World(engine)
         scene = Scene(config)
         scene.contact_tabular().default_model(0.3, 1e6)
@@ -132,6 +137,11 @@ def test_mas_pncg_contact_update_modes_match_the_full_rebuild_reference(tmp_path
             stats = engine.frame_stats()
             assert world.is_valid(), stats
             assert stats["completed"] and stats["converged"]
+            assert stats["linear_solver_iterations"] == 0
+            assert stats["fused_kernels"] == bool(fused)
+            assert stats["cuda_graph_enabled"] == bool(graph)
+            assert (stats["cuda_graph_replays"] > 0) == bool(graph)
+            assert stats["cuda_graph_fallbacks"] == 0
             assert stats["max_local_residual_ratio"] <= 1
             columns += stats["contact_update_columns"]
             world.retrieve()
@@ -143,10 +153,15 @@ def test_mas_pncg_contact_update_modes_match_the_full_rebuild_reference(tmp_path
         horizontal_displacement = (positions - vertices)[:, 0].mean()
         assert 0 < horizontal_displacement < 0.75 * 0.05 * 0.01 * 45
         assert (columns > 0) == (mode == "incremental")
-        trajectories[mode] = np.stack(frames)
+        trajectories[case] = np.stack(frames)
     for mode in ("frozen", "incremental"):
         np.testing.assert_allclose(
-            trajectories[mode], trajectories["full_rebuild"], atol=1e-5, rtol=0
+            trajectories[f"{mode}-1-1"], trajectories["full_rebuild-1-1"], atol=1e-5, rtol=0
+        )
+    for fused, graph in ((0, 0), (1, 0)):
+        np.testing.assert_allclose(
+            trajectories[f"incremental-{fused}-{graph}"],
+            trajectories["incremental-1-1"], atol=1e-9, rtol=0,
         )
 
 
