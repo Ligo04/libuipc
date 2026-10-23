@@ -256,19 +256,26 @@ SizeT SimplexNormalContact::normal_surrogate_count() const
     return PTs().size() + EEs().size() + PEs().size() + PPs().size();
 }
 
-void SimplexNormalContact::export_normal_surrogates(cuda_tool::BufferView<IPCNormalSurrogate> output)
+void SimplexNormalContact::export_normal_surrogates(cuda_tool::BufferView<IPCNormalSurrogate> output,
+                                                    cuda_tool::BufferView<IPCContactCurvature> ee_curvatures)
 {
     UIPC_ASSERT(output.size() == normal_surrogate_count(),
                 "Normal surrogate count mismatch: expected {}, got {}",
                 normal_surrogate_count(),
                 output.size());
+    UIPC_ASSERT(ee_curvatures.size() == EEs().size(),
+                "EE curvature count mismatch: expected {}, got {}",
+                EEs().size(),
+                ee_curvatures.size());
     if(output.size() == 0)
         return;
     BaseInfo info{&m_impl};
-    do_export_normal_surrogates(info, output);
+    do_export_normal_surrogates(info, output, ee_curvatures);
 }
 
-void SimplexNormalContact::do_export_normal_surrogates(BaseInfo&, cuda_tool::BufferView<IPCNormalSurrogate>)
+void SimplexNormalContact::do_export_normal_surrogates(BaseInfo&,
+                                                       cuda_tool::BufferView<IPCNormalSurrogate>,
+                                                       cuda_tool::BufferView<IPCContactCurvature>)
 {
     throw SimSystemException{"This normal contact model does not export IPC normal surrogates"};
 }

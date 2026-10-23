@@ -135,6 +135,18 @@ modes. Select CUDA tests explicitly with `pytest -m cuda`; the default pytest
 selection excludes them. Confirm the loaded package and native hashes when
 testing a newly built backend rather than an installed wheel.
 
+EE contacts use the native mollified energy gradient and complete PSD Hessian.
+The PNCG exporter keeps packed EE Hessians separately from the rank-one contact
+descriptors. Incremental updates factor the positive spectral part of the
+current-minus-restart EE Hessian into up to 12 columns. EE matching uses the
+canonical edge stencil across closest-feature and mollifier transitions. The
+global direction uses all columns; the existing per-domain top-k limit and
+local direct solves still apply to the preconditioner. Frame stats include
+`ee_curvature_contacts`, `mollified_contacts` and `peak_mollified_contacts`.
+The operator suite checks actual EE derivatives by finite differences and the
+PSD increment against a CPU matrix oracle. The Python near-parallel EE scene
+requires real mollifier activation and compares all three execution modes.
+
 The `fem_mas_*` cases (53-61, 81 + the stitch regression) activate MAS via
 `config["linear_system"]["fem_preconditioner"] = "mas"` — not via
 `mesh_partition()` calls (2026-08-24 switch redesign; 58_hybrid_mix still

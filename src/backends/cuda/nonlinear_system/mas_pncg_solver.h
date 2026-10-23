@@ -1,7 +1,7 @@
 #pragma once
 #include <sim_system.h>
 #include <cuda_tool/cuda_tool.h>
-#include <contact_system/ipc_normal_surrogate.h>
+#include <contact_system/ipc_contact_curvature.h>
 #include <finite_element/mas_preconditioner_engine.h>
 #include <linear_system/spmv.h>
 #include <memory>
@@ -102,6 +102,7 @@ class MASPNCGSolver final : public SimSystem
     cuda_tool::DeviceBuffer<Float>        m_ratios, m_corrections;
     cuda_tool::DeviceVar<Float>           m_sum, m_max;
     cuda_tool::DeviceBuffer<IPCNormalSurrogate> m_current, m_baseline, m_updates;
+    cuda_tool::DeviceBuffer<IPCContactCurvature> m_curvatures, m_base_curvatures;
     cuda_tool::DeviceBuffer<unsigned long long> m_hash_in, m_hash, m_base_hash;
     cuda_tool::DeviceBuffer<IndexT> m_order_in, m_order, m_base_order;
     cuda_tool::DeviceBuffer<unsigned long long> m_domain_in, m_domains;
@@ -109,5 +110,6 @@ class MASPNCGSolver final : public SimSystem
     cuda_tool::DeviceBuffer<Vector3>            m_projections;
     cuda_tool::DeviceVar<Vector3>               m_projection_sum;
     cuda_tool::DeviceVar<IndexT> m_error, m_truncated, m_direct_fallbacks, m_update_count;
+    cuda_tool::DeviceVar<IndexT> m_mollified_count;
 };
 }  // namespace uipc::backend::cuda

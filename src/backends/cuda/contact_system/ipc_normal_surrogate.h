@@ -13,7 +13,10 @@ struct IPCNormalSurrogate
     Vector4i feature  = Vector4i::Constant(-1);
     Vector3 q[4] = {Vector3::Zero(), Vector3::Zero(), Vector3::Zero(), Vector3::Zero()};
     Float stiffness = 0.0;
-    // 0: invalid geometry/curvature, 1: supported, 2: unsupported mollifier.
+    // EE records reference a complete PSD Hessian in a separate compact buffer.
+    IndexT curvature_index = -1;
+    IndexT mollified       = 0;
+    // 0: invalid geometry/curvature, 1: supported, 2: unsupported export.
     IndexT valid = 0;
 };
 }  // namespace uipc::backend::cuda

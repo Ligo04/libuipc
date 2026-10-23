@@ -91,6 +91,9 @@ void MASPNCGSolver::begin_frame()
                    {"direct_local_fallbacks", 0},
                    {"contact_rebuild_fallbacks", 0},
                    {"normal_contacts", 0},
+                   {"ee_curvature_contacts", 0},
+                   {"mollified_contacts", 0},
+                   {"peak_mollified_contacts", 0},
                    {"contact_update_columns", 0},
                    {"rejected_trials", 0},
                    {"nonfinite_trials", 0},
@@ -208,24 +211,37 @@ void MASPNCGSolver::export_contacts()
 {
     SizeT simplex_count = m_simplex ? m_simplex->normal_surrogate_count() : 0;
     SizeT plane_count   = m_planes ? m_planes->normal_surrogate_count() : 0;
-    if(simplex_count + plane_count > std::numeric_limits<IndexT>::max() / 4)
+    SizeT ee_count      = m_simplex ? m_simplex->EEs().size() : 0;
+    SizeT max_columns   = std::numeric_limits<IndexT>::max() / 4;
+    if(ee_count > max_columns / 12 || simplex_count + plane_count > max_columns - 11 * ee_count)
         throw SimEngineException("MAS-PNCG contact count exceeds supported CUDA index range.");
     resize_output(m_current, simplex_count + plane_count);
-    m_stats["normal_contacts"] = m_current.size();
+    resize_output(m_curvatures, ee_count);
+    m_stats["normal_contacts"]       = m_current.size();
+    m_stats["ee_curvature_contacts"] = ee_count;
     if(simplex_count)
-        m_simplex->export_normal_surrogates(m_current.view().subview(0, simplex_count));
+        m_simplex->export_normal_surrogates(m_current.view().subview(0, simplex_count),
+                                            m_curvatures.view());
     if(plane_count)
         m_planes->export_normal_surrogates(m_current.view().subview(simplex_count, plane_count));
-    m_error = 0;
-    int n   = m_current.size();
+    m_error           = 0;
+    m_mollified_count = 0;
+    int n             = m_current.size();
     if(n)
     {
         auto k = pncg::validate_contacts_kernel;
         k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
-            m_current.cview(), m_error.view());
+            m_current.cview(),
+            m_error.view(),
+            m_curvatures.cview(),
+            m_mollified_count.view());
     }
     if(static_cast<IndexT>(m_error))
         throw SimEngineException("MAS-PNCG contact export rejected invalid geometry or nonfinite curvature.");
+    const IndexT mollified        = m_mollified_count;
+    m_stats["mollified_contacts"] = mollified;
+    m_stats["peak_mollified_contacts"] =
+        std::max(m_stats["peak_mollified_contacts"].get<IndexT>(), mollified);
     sort_contacts();
 }
 
@@ -248,9 +264,11 @@ void MASPNCGSolver::sort_contacts()
 void MASPNCGSolver::capture_contacts()
 {
     resize_output(m_baseline, m_current.size());
+    resize_output(m_base_curvatures, m_curvatures.size());
     resize_output(m_base_hash, m_hash.size());
     resize_output(m_base_order, m_order.size());
     m_baseline.view().copy_from(m_current.cview());
+    m_base_curvatures.view().copy_from(m_curvatures.cview());
     m_base_hash.view().copy_from(m_hash.cview());
     m_base_order.view().copy_from(m_order.cview());
     m_updates.resize_discard(0);
@@ -258,7 +276,7 @@ void MASPNCGSolver::capture_contacts()
 
 bool MASPNCGSolver::build_updates()
 {
-    resize_output(m_updates, m_current.size());
+    resize_output(m_updates, m_current.size() + 11 * m_curvatures.size());
     m_error        = 0;
     m_update_count = 0;
     int n          = m_current.size();
@@ -277,7 +295,9 @@ bool MASPNCGSolver::build_updates()
             m_cos_rotation,
             m_updates.view(),
             m_error.view(),
-            m_update_count.view());
+            m_update_count.view(),
+            m_curvatures.cview(),
+            m_base_curvatures.cview());
     }
     IndexT error = m_error;
     if(error >= 3)

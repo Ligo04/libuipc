@@ -167,6 +167,73 @@ def test_mas_pncg_contact_update_and_execution_modes_match_reference(tmp_path):
 
 @pytest.mark.cuda
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
+def test_mas_pncg_mollified_edge_contacts_preserve_incremental_history(tmp_path):
+    trajectories = {}
+    fixed_vertices = np.array([[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, -0.3, 0.0]])
+    moving_vertices = np.array([[-0.5, 0.2, 0.01], [0.5, 0.2, -0.01], [0.0, 0.5, 0.0]])
+    for fused, graph in ((0, 0), (1, 0), (1, 1)):
+        config = Scene.default_config()
+        config["gravity"] = [0.0, 0.0, 0.0]
+        config["contact"]["d_hat"] = 0.3
+        config["contact"]["d_hat_relative"] = 0.0
+        config["nonlinear_system"]["solver"] = "mas_pncg"
+        config["nonlinear_system"]["mas_pncg"]["use_fused_kernels"] = fused
+        config["nonlinear_system"]["mas_pncg"]["use_cuda_graph"] = graph
+        scene = Scene(config)
+        scene.contact_tabular().default_model(0.0, 100.0)
+        engine = Engine("cuda", str(tmp_path / f"ee-{fused}-{graph}"))
+        world = World(engine)
+        slots = []
+        for fixed, vertices in ((True, fixed_vertices), (False, moving_vertices)):
+            mesh = trimesh(vertices, np.array([[0, 1, 2]], dtype=np.int32))
+            label_surface(mesh)
+            NeoHookeanShell().apply_to(
+                mesh,
+                ElasticModuli2D.youngs_poisson(1e4, 0.3),
+                mass_density=1000.0,
+                thickness=0.001,
+            )
+            view(mesh.vertices().find(builtin.is_fixed))[:] = int(fixed)
+            if not fixed:
+                view(mesh.vertices().find(builtin.velocity))[:] = [[0.0], [-0.01], [0.0]]
+            slot, _ = scene.objects().create(f"triangle-{fixed}").geometries().create(mesh)
+            slots.append(slot)
+        world.init(scene)
+        assert world.is_valid()
+        frames = []
+        mollified = columns = history = 0
+        for _ in range(4):
+            world.advance()
+            stats = engine.frame_stats()
+            assert world.is_valid(), stats
+            assert stats["completed"] and stats["converged"], stats
+            assert stats["max_local_residual_ratio"] <= 1
+            assert stats["contact_rebuild_fallbacks"] == 0
+            assert stats["linear_solver_iterations"] == 0
+            assert stats["cuda_graph_fallbacks"] == 0
+            assert (stats["cuda_graph_replays"] > 0) == bool(graph)
+            mollified += stats["peak_mollified_contacts"]
+            columns += stats["contact_update_columns"]
+            history += stats["two_d_steps"]
+            world.retrieve()
+            np.testing.assert_array_equal(
+                np.array(slots[0].geometry().positions().view()).reshape(-1, 3),
+                fixed_vertices,
+            )
+            positions = np.array(slots[1].geometry().positions().view()).reshape(-1, 3)
+            assert np.isfinite(positions).all()
+            assert positions[:, 1].min() > 0
+            frames.append(positions)
+        assert mollified > 0
+        assert columns > 0
+        assert history > 0
+        trajectories[(fused, graph)] = np.stack(frames)
+    for mode in ((1, 0), (1, 1)):
+        np.testing.assert_allclose(trajectories[mode], trajectories[(0, 0)], atol=1e-9, rtol=0)
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
 @pytest.mark.parametrize("linear_solver", ["fused_pcg", "linear_pcg"])
 def test_mas_pncg_keeps_newton_mas_selection_available(tmp_path, linear_solver):
     config = Scene.default_config()

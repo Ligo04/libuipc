@@ -2,6 +2,7 @@
 uipc_add_test(mas_pncg_operators
     preconditioner.cu
     fused.cu
+    mollified_ee.cu
     ../backends/cuda/mas_pncg_math.cu
     ${PROJECT_SOURCE_DIR}/src/backends/cuda/finite_element/mas_preconditioner_engine.cu)
 target_include_directories(mas_pncg_operators PRIVATE

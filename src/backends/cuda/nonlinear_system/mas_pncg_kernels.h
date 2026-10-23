@@ -1,7 +1,9 @@
 #pragma once
-#include <contact_system/ipc_normal_surrogate.h>
+#include <contact_system/ipc_contact_curvature.h>
 #include <finite_element/mas_preconditioner_engine.h>
 #include <cuda_tool/cub.h>
+#include <cuda_tool/eigen/evd.h>
+#include <limits>
 
 namespace uipc::backend::cuda::pncg
 {
@@ -17,7 +19,7 @@ __device__ inline bool same_contact(const IPCNormalSurrogate& a, const IPCNormal
     if(a.kind != b.kind || a.plane != b.plane || a.count != b.count)
         return false;
     for(int i = 0; i < 4; ++i)
-        if(a.vertices[i] != b.vertices[i] || a.feature[i] != b.feature[i])
+        if(a.vertices[i] != b.vertices[i] || (a.kind != 1 && a.feature[i] != b.feature[i]))
             return false;
     return true;
 }
@@ -36,7 +38,8 @@ static __global__ void contact_hash_kernel(CBufferView<IPCNormalSurrogate> conta
     for(int j = 0; j < 4; ++j)
     {
         h = (h ^ static_cast<unsigned int>(c.vertices[j])) * 1099511628211ull;
-        h = (h ^ static_cast<unsigned int>(c.feature[j])) * 1099511628211ull;
+        if(c.kind != 1)
+            h = (h ^ static_cast<unsigned int>(c.feature[j])) * 1099511628211ull;
     }
     hashes(i) = h;
     order(i)  = i;
@@ -57,7 +60,9 @@ __device__ inline int lower_bound(CBufferView<unsigned long long> keys, unsigned
 }
 
 static __global__ void validate_contacts_kernel(CBufferView<IPCNormalSurrogate> contacts,
-                                                VarView<IndexT> error)
+                                                VarView<IndexT> error,
+                                                CBufferView<IPCContactCurvature> curvatures,
+                                                VarView<IndexT> mollified_count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i >= contacts.size())
@@ -69,22 +74,131 @@ static __global__ void validate_contacts_kernel(CBufferView<IPCNormalSurrogate> 
                  && isfinite(c.stiffness) && c.stiffness >= 0;
     for(int j = 0; j < c.count && j < 4; ++j)
         valid &= c.vertices[j] >= 0 && c.q[j].allFinite();
+    if(c.curvature_index >= 0)
+    {
+        valid &= c.kind == 1 && c.count == 4 && c.curvature_index < curvatures.size();
+        if(valid)
+            for(Float value : curvatures(c.curvature_index).upper)
+                valid &= isfinite(value);
+    }
+    if(valid && c.mollified)
+        atomicAdd(mollified_count.data(), 1);
     if(!valid)
         atomicMax(error.data(), 3);
 }
 
-static __global__ void contact_updates_kernel(CBufferView<IPCNormalSurrogate> current,
-                                              CBufferView<unsigned long long> keys,
-                                              CBufferView<IndexT> order,
-                                              CBufferView<IPCNormalSurrogate> baseline,
-                                              CBufferView<unsigned long long> base_keys,
-                                              CBufferView<IndexT> base_order,
-                                              CBufferView<IndexT> fixed,
-                                              int                 vertex_offset,
-                                              Float               cosine,
-                                              BufferView<IPCNormalSurrogate> updates,
-                                              VarView<IndexT> error,
-                                              VarView<IndexT> column_count)
+__device__ inline void full_curvature_update(const IPCNormalSurrogate& current,
+                                             const IPCNormalSurrogate* baseline,
+                                             int contact_index,
+                                             int contact_count,
+                                             CBufferView<IPCContactCurvature> curvatures,
+                                             CBufferView<IPCContactCurvature> base_curvatures,
+                                             CBufferView<IndexT> fixed,
+                                             int                 vertex_offset,
+                                             BufferView<IPCNormalSurrogate> updates,
+                                             VarView<IndexT> error,
+                                             VarView<IndexT> column_count)
+{
+    const int index = current.curvature_index;
+    if(current.kind != 1 || current.count != 4 || index < 0
+       || index >= curvatures.size()
+       || contact_count + 11 * (index + 1) > updates.size())
+    {
+        atomicMax(error.data(), 3);
+        return;
+    }
+    IPCNormalSurrogate column = current;
+    column.curvature_index    = -1;
+    column.stiffness          = 0;
+    column.valid              = 0;
+    for(auto& q : column.q)
+        q.setZero();
+    for(int k = 0; k < 12; ++k)
+        updates(k == 0 ? contact_index : contact_count + 11 * index + k - 1) = column;
+    for(int j = 0; j < 4; ++j)
+        if(current.vertices[j] < vertex_offset
+           || current.vertices[j] - vertex_offset >= fixed.size())
+        {
+            atomicMax(error.data(), 3);
+            return;
+        }
+
+    Matrix12x12 delta     = curvatures(index).matrix();
+    Float       magnitude = delta.cwiseAbs().maxCoeff();
+    if(baseline)
+    {
+        if(baseline->curvature_index < 0
+           || baseline->curvature_index >= base_curvatures.size())
+        {
+            atomicMax(error.data(), 3);
+            return;
+        }
+        const Matrix12x12 old = base_curvatures(baseline->curvature_index).matrix();
+        magnitude = fmax(magnitude, old.cwiseAbs().maxCoeff());
+        delta -= old;
+    }
+    if(!delta.allFinite() || !isfinite(magnitude))
+    {
+        atomicMax(error.data(), 3);
+        return;
+    }
+    const Float scale = delta.cwiseAbs().maxCoeff();
+    if(scale == 0)
+        return;
+
+    // Form an epoch-relative PSD increment, rather than matching eigenvectors.
+    // This remains well-defined through repeated eigenvalues and EE feature changes.
+    Vector12    values;
+    Matrix12x12 vectors;
+    cuda_tool::eigen::evd<Float, 12>((delta / scale).eval(), values, vectors);
+    if(!values.allFinite() || !vectors.allFinite())
+    {
+        atomicMax(error.data(), 3);
+        return;
+    }
+    const Float tolerance = 64 * std::numeric_limits<Float>::epsilon() * magnitude;
+    for(int k = 0; k < 12; ++k)
+    {
+        const Float value = fmax(Float{0}, values(k)) * scale;
+        if(!isfinite(value))
+        {
+            atomicMax(error.data(), 3);
+            return;
+        }
+        if(value <= tolerance)
+            continue;
+        column.stiffness = value;
+        Float norm       = 0;
+        for(int j = 0; j < 4; ++j)
+        {
+            const int v = current.vertices[j] - vertex_offset;
+            column.q[j] = fixed(v) ?
+                              Vector3::Zero() :
+                              (sqrt(value) * vectors.block<3, 1>(3 * j, k)).eval();
+            norm += column.q[j].squaredNorm();
+        }
+        column.valid = norm > 0;
+        updates(k == 0 ? contact_index : contact_count + 11 * index + k - 1) = column;
+        if(column.valid)
+            atomicAdd(column_count.data(), 1);
+    }
+}
+
+static __global__ void contact_updates_kernel(
+    CBufferView<IPCNormalSurrogate>  current,
+    CBufferView<unsigned long long>  keys,
+    CBufferView<IndexT>              order,
+    CBufferView<IPCNormalSurrogate>  baseline,
+    CBufferView<unsigned long long>  base_keys,
+    CBufferView<IndexT>              base_order,
+    CBufferView<IndexT>              fixed,
+    int                              vertex_offset,
+    Float                            cosine,
+    BufferView<IPCNormalSurrogate>   updates,
+    VarView<IndexT>                  error,
+    VarView<IndexT>                  column_count,
+    CBufferView<IPCContactCurvature> curvatures      = {},
+    CBufferView<IPCContactCurvature> base_curvatures = {})
 {
     int sorted = blockIdx.x * blockDim.x + threadIdx.x;
     if(sorted >= current.size())
@@ -112,6 +226,21 @@ static __global__ void contact_updates_kernel(CBufferView<IPCNormalSurrogate> cu
             found = base_order(j);
             break;
         }
+    if(c.curvature_index >= 0)
+    {
+        full_curvature_update(c,
+                              found >= 0 ? &baseline(found) : nullptr,
+                              index,
+                              current.size(),
+                              curvatures,
+                              base_curvatures,
+                              fixed,
+                              vertex_offset,
+                              updates,
+                              error,
+                              column_count);
+        return;
+    }
     Float increment = c.stiffness;
     if(found >= 0)
     {

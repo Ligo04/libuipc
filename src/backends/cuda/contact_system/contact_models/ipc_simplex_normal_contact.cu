@@ -1,4 +1,5 @@
 #include <contact_system/simplex_normal_contact.h>
+#include <contact_system/ipc_ee_curvature.h>
 #include <contact_system/contact_models/codim_ipc_simplex_normal_contact_function.h>
 #include <utils/distance/distance_flagged.h>
 #include <utils/codim_thickness.h>
@@ -54,69 +55,24 @@ namespace
         s.valid     = 1;
     }
 
-    __device__ void swap_surrogate_slots(IPCNormalSurrogate& s, int a, int b)
-    {
-        IndexT vertex  = s.vertices[a];
-        s.vertices[a]  = s.vertices[b];
-        s.vertices[b]  = vertex;
-        IndexT feature = s.feature[a];
-        s.feature[a]   = s.feature[b];
-        s.feature[b]   = feature;
-        Vector3 q      = s.q[a];
-        s.q[a]         = s.q[b];
-        s.q[b]         = q;
-    }
-
-    __device__ void canonicalize_surrogate(IPCNormalSurrogate& s)
-    {
-        if(s.kind == 0)
-        {
-            for(int a = 1; a < 3; ++a)
-                for(int b = a + 1; b < 4; ++b)
-                    if(s.vertices[a] > s.vertices[b])
-                        swap_surrogate_slots(s, a, b);
-        }
-        else if(s.kind == 1)
-        {
-            if(s.vertices[0] > s.vertices[1])
-                swap_surrogate_slots(s, 0, 1);
-            if(s.vertices[2] > s.vertices[3])
-                swap_surrogate_slots(s, 2, 3);
-            if(s.vertices[0] > s.vertices[2]
-               || (s.vertices[0] == s.vertices[2] && s.vertices[1] > s.vertices[3]))
-            {
-                swap_surrogate_slots(s, 0, 2);
-                swap_surrogate_slots(s, 1, 3);
-            }
-        }
-        else if(s.kind == 2)
-        {
-            if(s.vertices[1] > s.vertices[2])
-                swap_surrogate_slots(s, 1, 2);
-        }
-        else if(s.kind == 3 && s.vertices[0] > s.vertices[1])
-        {
-            swap_surrogate_slots(s, 0, 1);
-        }
-    }
-
     __global__ void export_normal_surrogates_kernel(
-        cuda_tool::BufferView<IPCNormalSurrogate> output,
-        cuda_tool::CDense2D<ContactCoeff>         table,
-        cuda_tool::CBufferView<IndexT>            contact_ids,
-        cuda_tool::CBufferView<Vector3>           Ps,
-        cuda_tool::CBufferView<Vector3>           rest_Ps,
-        cuda_tool::CBufferView<Float>             thicknesses,
-        cuda_tool::CBufferView<Float>             d_hats,
-        Float                                     dt,
-        cuda_tool::CBufferView<Vector4i>          PTs,
-        cuda_tool::CBufferView<Vector4i>          EEs,
-        cuda_tool::CBufferView<Vector3i>          PEs,
-        cuda_tool::CBufferView<Vector2i>          PPs,
-        IndexT                                    ee_offset,
-        IndexT                                    pe_offset,
-        IndexT                                    pp_offset,
-        int                                       n)
+        cuda_tool::BufferView<IPCNormalSurrogate>  output,
+        cuda_tool::BufferView<IPCContactCurvature> ee_curvatures,
+        cuda_tool::CDense2D<ContactCoeff>          table,
+        cuda_tool::CBufferView<IndexT>             contact_ids,
+        cuda_tool::CBufferView<Vector3>            Ps,
+        cuda_tool::CBufferView<Vector3>            rest_Ps,
+        cuda_tool::CBufferView<Float>              thicknesses,
+        cuda_tool::CBufferView<Float>              d_hats,
+        Float                                      dt,
+        cuda_tool::CBufferView<Vector4i>           PTs,
+        cuda_tool::CBufferView<Vector4i>           EEs,
+        cuda_tool::CBufferView<Vector3i>           PEs,
+        cuda_tool::CBufferView<Vector2i>           PPs,
+        IndexT                                     ee_offset,
+        IndexT                                     pe_offset,
+        IndexT                                     pp_offset,
+        int                                        n)
     {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if(i >= n)
@@ -162,57 +118,36 @@ namespace
         }
         else if(i < pe_offset)
         {
-            s.kind              = 1;
-            s.count             = 4;
-            Vector4i EE         = EEs(i - ee_offset);
-            s.vertices          = EE;
-            const auto& A0      = Ps(EE[0]);
-            const auto& A1      = Ps(EE[1]);
-            const auto& B0      = Ps(EE[2]);
-            const auto& B1      = Ps(EE[3]);
-            const auto& rest_A0 = rest_Ps(EE[0]);
-            const auto& rest_A1 = rest_Ps(EE[1]);
-            const auto& rest_B0 = rest_Ps(EE[2]);
-            const auto& rest_B1 = rest_Ps(EE[3]);
-            if(finite_position(A0) && finite_position(A1) && finite_position(B0)
-               && finite_position(B1) && finite_position(rest_A0) && finite_position(rest_A1)
-               && finite_position(rest_B0) && finite_position(rest_B1))
-            {
-                Vector4i cids      = {contact_ids(EE[0]),
-                                      contact_ids(EE[1]),
-                                      contact_ids(EE[2]),
-                                      contact_ids(EE[3])};
-                Float    kt2       = EE_kappa(table, cids) * dt * dt;
-                Float    thickness = EE_thickness(thicknesses(EE[0]),
-                                               thicknesses(EE[1]),
-                                               thicknesses(EE[2]),
-                                               thicknesses(EE[3]));
-                Float    d_hat =
-                    EE_d_hat(d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3]));
-                Vector4i flag = distance::edge_edge_distance_flag(A0, A1, B0, B1);
-                s.feature = flag;
-                Float D;
-                distance::edge_edge_distance2(flag, A0, A1, B0, B1, D);
-                Float eps_x;
-                distance::edge_edge_mollifier_threshold(
-                    rest_A0, rest_A1, rest_B0, rest_B1, static_cast<Float>(1e-3), eps_x);
-                Float cross_norm2;
-                distance::edge_edge_cross_norm2(A0, A1, B0, B1, cross_norm2);
-                if(valid_surrogate_distance(D, thickness, d_hat, kt2)
-                   && isfinite(eps_x) && isfinite(cross_norm2))
-                {
-                    if(cross_norm2 < eps_x)
-                    {
-                        s.valid = 2;
-                    }
-                    else
-                    {
-                        Vector12 grad_D;
-                        distance::edge_edge_distance2_gradient(flag, A0, A1, B0, B1, grad_D);
-                        set_normal_surrogate(s, D, grad_D, kt2, d_hat, thickness);
-                    }
-                }
-            }
+            IndexT   ee_index  = i - ee_offset;
+            Vector4i EE        = EEs(ee_index);
+            s.vertices         = EE;
+            s.curvature_index  = ee_index;
+            Vector4i cids      = {contact_ids(EE[0]),
+                                  contact_ids(EE[1]),
+                                  contact_ids(EE[2]),
+                                  contact_ids(EE[3])};
+            Float    kt2       = EE_kappa(table, cids) * dt * dt;
+            Float    thickness = EE_thickness(thicknesses(EE[0]),
+                                           thicknesses(EE[1]),
+                                           thicknesses(EE[2]),
+                                           thicknesses(EE[3]));
+            Float    d_hat =
+                EE_d_hat(d_hats(EE[0]), d_hats(EE[1]), d_hats(EE[2]), d_hats(EE[3]));
+            ipc_surrogate::export_edge_edge_curvature(s,
+                                                      ee_curvatures(ee_index),
+                                                      kt2,
+                                                      d_hat,
+                                                      thickness,
+                                                      rest_Ps(EE[0]),
+                                                      rest_Ps(EE[1]),
+                                                      rest_Ps(EE[2]),
+                                                      rest_Ps(EE[3]),
+                                                      Ps(EE[0]),
+                                                      Ps(EE[1]),
+                                                      Ps(EE[2]),
+                                                      Ps(EE[3]));
+            output(i) = s;
+            return;
         }
         else if(i < pp_offset)
         {
@@ -268,7 +203,7 @@ namespace
                 }
             }
         }
-        canonicalize_surrogate(s);
+        ipc_surrogate::canonicalize(s);
         output(i) = s;
     }
 
@@ -712,7 +647,8 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
     }
 
     virtual void do_export_normal_surrogates(BaseInfo& info,
-                                             cuda_tool::BufferView<IPCNormalSurrogate> output) override
+                                             cuda_tool::BufferView<IPCNormalSurrogate> output,
+                                             cuda_tool::BufferView<IPCContactCurvature> ee_curvatures) override
     {
         IndexT ee_offset = static_cast<IndexT>(info.PTs().size());
         IndexT pe_offset = ee_offset + static_cast<IndexT>(info.EEs().size());
@@ -721,6 +657,7 @@ class IPCSimplexNormalContact final : public SimplexNormalContact
         auto   kernel    = export_normal_surrogates_kernel;
         kernel<<<cuda_tool::best_grid_dim(total, kernel), cuda_tool::best_block_dim(kernel), 0, nullptr>>>(
             output.viewer(),
+            ee_curvatures.viewer(),
             info.contact_tabular().viewer(),
             info.contact_element_ids().viewer(),
             info.positions().viewer(),
