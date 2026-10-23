@@ -21,6 +21,8 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
 
 namespace uipc::backend::cuda
 {
@@ -69,6 +71,8 @@ void MASPNCGSolver::do_build()
     m_velocity_tol = value("nonlinear_system/mas_pncg/velocity_tol");
     m_iteration_policy =
         config.find<std::string>("nonlinear_system/mas_pncg/iteration_policy")->view()[0];
+    m_energy_guard =
+        config.find<std::string>("nonlinear_system/mas_pncg/energy_guard")->view()[0];
     m_ccd_mode =
         config.find<std::string>("nonlinear_system/mas_pncg/ccd_mode")->view()[0];
     if(uses_local_ccd())
@@ -106,6 +110,8 @@ void MASPNCGSolver::begin_frame()
     m_stats     = {{"nonlinear_solver", "mas_pncg"},
                    {"update_mode", m_update_mode},
                    {"iteration_policy", m_iteration_policy},
+                   {"energy_guard", m_energy_guard},
+                   {"energy_guard_backtracks", 0},
                    {"convergence_criterion", "not_converged"},
                    {"independent_residual_converged", false},
                    {"preconditioned_gradient_norm", 0.0},
@@ -118,6 +124,8 @@ void MASPNCGSolver::begin_frame()
                    {"nonlinear_iterations", 0},
                    {"accepted_steps", 0},
                    {"base_rebuilds", 0},
+                   {"coarse_direct_recoveries", 0},
+                   {"coarse_direct_active", false},
                    {"base_age", 0},
                    {"restarts", 0},
                    {"one_d_steps", 0},
@@ -138,8 +146,13 @@ void MASPNCGSolver::begin_frame()
                    {"local_ccd_pair_fallbacks", 0},
                    {"local_ccd_clamped_vertices", 0},
                    {"local_ccd_non_descent_steps", 0},
+                   {"local_ccd_non_descent_steps_semantics", "proposal_before_descent_guard"},
+                   {"local_ccd_descent_fallbacks", 0},
+                   {"local_ccd_accepted_non_descent_steps", 0},
                    {"local_ccd_min_fraction", 1.0},
                    {"local_ccd_last_max_fraction", 1.0},
+                   {"local_ccd_last_raw_slope", 0.0},
+                   {"local_ccd_last_proposal_slope", 0.0},
                    {"local_ccd_last_actual_slope", 0.0},
                    {"local_ccd_global_guard_reductions", 0},
                    {"local_ccd_min_global_guard_fraction", 1.0},
@@ -234,8 +247,9 @@ bool MASPNCGSolver::uses_local_ccd() const noexcept
 
 void MASPNCGSolver::limit_local_ccd()
 {
-    Timer      timer{"MAS-PNCG Local Conservative CCD"};
-    const auto base = m_mas->nonlinear_base(m_epoch);
+    Timer       timer{"MAS-PNCG Local Conservative CCD"};
+    const Float raw_slope = m_slope;
+    const auto  base      = m_mas->nonlinear_base(m_epoch);
     UIPC_ASSERT(base.valid(), "Local CCD requires a current MAS partition snapshot.");
     resize_output(m_domain_fractions, base.domain_count + base.real_vertex_count);
     m_domain_fractions.fill(1);
@@ -324,16 +338,39 @@ void MASPNCGSolver::limit_local_ccd()
     m_stats["local_ccd_last_max_fraction"] = max_fraction;
     if(counts[2] || !std::isfinite(min_fraction) || min_fraction <= 0)
         throw SimEngineException("MAS-PNCG local CCD has no positive finite candidate step.");
-    // Preserve raw m_direction for Algorithm 1's history. All actual motion
-    // consumers receive the separate trial through the normal FEM scatter.
-    m_slope = m_system->ctx().dot(m_system->nonlinear_gradient(),
-                                  m_trial_direction.cview());
-    if(!std::isfinite(m_slope))
+    const Float proposal_slope =
+        m_system->ctx().dot(m_system->nonlinear_gradient(), m_trial_direction.cview());
+    if(!std::isfinite(raw_slope) || !std::isfinite(proposal_slope))
         throw SimEngineException("MAS-PNCG local CCD produced a nonfinite directional derivative.");
-    m_stats["local_ccd_last_actual_slope"] = m_slope;
-    if(m_slope >= 0)
+    const auto selected = pncg::select_local_ccd_direction(
+        m_direction.cview(), raw_slope, m_trial_direction.cview(), proposal_slope);
+    if(!selected.valid)
+        throw SimEngineException("MAS-PNCG local CCD requires a descending raw direction.");
+    m_slope                                  = selected.slope;
+    m_stats["local_ccd_last_raw_slope"]      = raw_slope;
+    m_stats["local_ccd_last_proposal_slope"] = proposal_slope;
+    m_stats["local_ccd_last_actual_slope"]   = m_slope;
+    if(proposal_slope >= 0)
         increment(m_stats, "local_ccd_non_descent_steps");
-    m_system->scatter_nonlinear_direction(m_trial_direction.cview());
+    if(selected.fallback)
+        increment(m_stats, "local_ccd_descent_fallbacks");
+    if(std::getenv("UIPC_MAS_PNCG_TRACE"))
+    {
+        std::fprintf(stderr,
+                     "[PNCG-LOCAL-CCD] frame=%zu iter=%zu raw_slope=%.17g proposal_slope=%.17g actual_slope=%.17g descent_fallback=%d min_fraction=%.17g max_fraction=%.17g\n",
+                     engine().frame(),
+                     engine().newton_iter(),
+                     raw_slope,
+                     proposal_slope,
+                     m_slope,
+                     int(selected.fallback),
+                     min_fraction,
+                     max_fraction);
+        std::fflush(stderr);
+    }
+    // Preserve raw m_direction for Algorithm 1's history. The selected view
+    // reaches feasible-step and native global CCD through normal FEM scatter.
+    m_system->scatter_nonlinear_direction(selected.direction);
 }
 
 void MASPNCGSolver::record_local_ccd_guard(Float fraction)
@@ -517,6 +554,22 @@ bool MASPNCGSolver::evaluate(bool rebuild)
                                                  diagnostic.value,
                                                  diagnostic.threshold));
         }
+        m_stats["coarse_direct_active"] = m_mas->nonlinear_coarse_direct_active();
+        if(m_mas->nonlinear_coarse_direct_active())
+        {
+            increment(m_stats, "coarse_direct_recoveries");
+            const auto& diagnostic = m_mas->nonlinear_coarse_recovery_diagnostic();
+            m_stats["last_coarse_inverse_failure"] = {
+                {"stage", diagnostic.stage_name()},
+                {"reason", diagnostic.reason_name()},
+                {"epoch", diagnostic.epoch},
+                {"level", diagnostic.level},
+                {"domain", diagnostic.domain},
+                {"row", diagnostic.row},
+                {"column", diagnostic.column},
+                {"value", diagnostic.value},
+                {"threshold", diagnostic.threshold}};
+        }
         export_contacts();
         capture_contacts();
         m_have_history = false;
@@ -644,13 +697,26 @@ bool MASPNCGSolver::stationary(bool targets_reached)
     return false;
 }
 
-bool MASPNCGSolver::accepts_energy(Float initial, Float trial, Float fraction) const
+bool MASPNCGSolver::accepts_energy(Float initial, Float trial, Float fraction)
 {
-    if(!std::isfinite(initial) || !std::isfinite(trial)
-       || !std::isfinite(fraction) || fraction <= 0)
-        return false;
-    return m_iteration_policy == "paper" ? fraction <= 1 :
-                                           trial <= initial + 1e-4 * fraction * m_slope;
+    const auto policy = m_iteration_policy != "paper" ? PNCGEnergyPolicy::StrictArmijo :
+                        m_energy_guard == "monotone" ? PNCGEnergyPolicy::PaperMonotone :
+                                                       PNCGEnergyPolicy::PaperFinite;
+    const bool accepted = accepts_pncg_energy(initial, trial, fraction, m_slope, policy);
+    if(std::getenv("UIPC_MAS_PNCG_TRACE"))
+    {
+        std::fprintf(stderr,
+                     "[PNCG-ENERGY] frame=%zu iter=%zu initial=%.17g trial=%.17g fraction=%.17g accepted=%d guard=%s\n",
+                     engine().frame(),
+                     engine().newton_iter(),
+                     initial,
+                     trial,
+                     fraction,
+                     int(accepted),
+                     m_energy_guard.c_str());
+        std::fflush(stderr);
+    }
+    return accepted;
 }
 
 void MASPNCGSolver::record_energy(Float initial, Float trial)
@@ -726,6 +792,34 @@ MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
     if(!apply_preconditioner())
         return DirectionStatus::Restart;
     auto g = m_system->nonlinear_gradient();
+    auto trace_direction =
+        [&](Float a, Float b, Float c, Float gz, Float gp, Float mu, Float nu, bool history)
+    {
+        if(!std::getenv("UIPC_MAS_PNCG_TRACE"))
+            return;
+        const Float norm = std::sqrt(m_system->ctx().dot(m_direction, m_direction));
+        const Float curvature = mu * mu * a - 2 * mu * nu * b + nu * nu * c;
+        std::fprintf(stderr,
+                     "[PNCG-DIRECTION] frame=%zu iter=%zu fresh=%d age=%d history=%d a=%.17g b=%.17g c=%.17g gz=%.17g gp=%.17g mu=%.17g nu=%.17g norm=%.17g slope=%.17g curvature=%.17g z_residual=%.17g p_residual=%.17g\n",
+                     engine().frame(),
+                     engine().newton_iter(),
+                     int(m_started_with_rebuild),
+                     m_age,
+                     int(history),
+                     a,
+                     b,
+                     c,
+                     gz,
+                     gp,
+                     mu,
+                     nu,
+                     norm,
+                     m_slope,
+                     curvature,
+                     gz - mu * a + nu * b,
+                     gp - mu * b + nu * c);
+        std::fflush(stderr);
+    };
     if(m_use_fused)
     {
         m_spmv.rbk_sym_spmv(1, m_base.cview(), m_z.cview(), 0, m_hz.view());
@@ -747,6 +841,14 @@ MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
         if(!result.valid)
             return DirectionStatus::Restart;
         m_slope = result.slope;
+        trace_direction(result.a,
+                        result.b,
+                        result.c,
+                        result.gz,
+                        result.gp,
+                        result.mu,
+                        result.nu,
+                        result.used_history);
         if(m_iteration_policy == "paper")
         {
             if(!std::isfinite(result.preconditioned_norm)
@@ -823,6 +925,7 @@ MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
             m_z.cview(), m_p.cview(), m_direction.view(), solution.mu, solution.nu);
     }
     m_slope = m_system->ctx().dot(g, m_direction.cview());
+    trace_direction(a, b, c, gz, gp, solution.mu, solution.nu, solution.used_history);
     if(!std::isfinite(m_slope) || m_slope >= 0)
         return DirectionStatus::Restart;
     m_system->scatter_nonlinear_direction(m_direction.cview());
@@ -864,6 +967,8 @@ void MASPNCGSolver::accept(Float fraction)
     ++m_age;
     m_stats["base_age"] = m_age;
     increment(m_stats, "accepted_steps");
+    if(uses_local_ccd() && m_slope >= 0)
+        increment(m_stats, "local_ccd_accepted_non_descent_steps");
     if(paper)
     {
         // Algorithm 1 tests the pre-step norm only on a fresh-rebuild iteration.
@@ -890,6 +995,8 @@ void MASPNCGSolver::rejected_trial(bool nonfinite)
     increment(m_stats, "rejected_trials");
     if(nonfinite)
         increment(m_stats, "nonfinite_trials");
+    else if(m_iteration_policy == "paper" && m_energy_guard == "monotone")
+        increment(m_stats, "energy_guard_backtracks");
 }
 
 void MASPNCGSolver::recover()

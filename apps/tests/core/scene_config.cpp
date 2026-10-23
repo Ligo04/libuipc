@@ -45,6 +45,9 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
     REQUIRE(entries.at("nonlinear_system/mas_pncg/iteration_policy").at("default") == "strict");
     REQUIRE(entries.at("nonlinear_system/mas_pncg/iteration_policy").at("enum")
             == Json::array({"strict", "paper"}));
+    REQUIRE(entries.at("nonlinear_system/mas_pncg/energy_guard").at("default") == "none");
+    REQUIRE(entries.at("nonlinear_system/mas_pncg/energy_guard").at("enum")
+            == Json::array({"none", "monotone"}));
     const auto& preconditioned_tol =
         entries.at("nonlinear_system/mas_pncg/preconditioned_gradient_tol");
     REQUIRE(preconditioned_tol.at("default").get<Float>() == Catch::Approx(1.0e-5));
@@ -155,9 +158,9 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
 
     SECTION("Local conservative CCD requires the paper policy")
     {
-        auto config = Scene::default_config();
+        auto config                          = Scene::default_config();
         config["nonlinear_system"]["solver"] = "mas_pncg";
-        auto& pncg = config["nonlinear_system"]["mas_pncg"];
+        auto& pncg       = config["nonlinear_system"]["mas_pncg"];
         pncg["ccd_mode"] = "local_conservative";
         REQUIRE_THROWS(Scene{config});
         pncg["iteration_policy"] = "paper";
@@ -213,6 +216,29 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
             view(*attribute)[0] = value;
             REQUIRE_THROWS(scene.validate_config());
         }
+    }
+
+    SECTION("MAS-PNCG energy guard is opt-in and validates its enum")
+    {
+        for(auto policy : {"strict", "paper"})
+            for(auto guard : {"none", "monotone"})
+            {
+                CAPTURE(policy, guard);
+                auto config                          = Scene::default_config();
+                config["nonlinear_system"]["solver"] = "mas_pncg";
+                auto& pncg = config["nonlinear_system"]["mas_pncg"];
+                pncg["iteration_policy"] = policy;
+                pncg["energy_guard"]     = guard;
+                Scene scene{config};
+                REQUIRE(scene.config()
+                            .find<std::string>("nonlinear_system/mas_pncg/energy_guard")
+                            ->view()[0]
+                        == guard);
+                REQUIRE_NOTHROW(scene.validate_config());
+            }
+        auto config = Scene::default_config();
+        config["nonlinear_system"]["mas_pncg"]["energy_guard"] = "armijo";
+        REQUIRE_THROWS(Scene{config});
     }
 }
 

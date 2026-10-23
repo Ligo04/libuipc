@@ -35,6 +35,9 @@ def test_scene_config_schema_matches_public_defaults() -> None:
     policy = entries["nonlinear_system/mas_pncg/iteration_policy"]
     assert policy["default"] == "strict"
     assert policy["enum"] == ["strict", "paper"]
+    energy_guard = entries["nonlinear_system/mas_pncg/energy_guard"]
+    assert energy_guard["default"] == "none"
+    assert energy_guard["enum"] == ["none", "monotone"]
     tolerance = entries["nonlinear_system/mas_pncg/preconditioned_gradient_tol"]
     assert tolerance["default"] == pytest.approx(1e-5)
     assert tolerance["exclusiveMinimum"] == 0
@@ -120,6 +123,7 @@ def test_mas_pncg_selection_preserves_linear_solver_choice(policy, linear_solver
         lambda c: c["diff_sim"].__setitem__("enable", 1),
         lambda c: c["nonlinear_system"]["mas_pncg"].__setitem__("top_k", 9),
         lambda c: c["nonlinear_system"]["mas_pncg"].__setitem__("ccd_mode", "localized"),
+        lambda c: c["nonlinear_system"]["mas_pncg"].__setitem__("energy_guard", "armijo"),
         lambda c: c["nonlinear_system"]["mas_pncg"].__setitem__(
             "iteration_policy", "unknown"
         ),
@@ -169,3 +173,15 @@ def test_mas_pncg_local_ccd_requires_paper_policy(policy) -> None:
             Scene(config)
     else:
         Scene(config).validate_config()
+
+
+@pytest.mark.parametrize("policy", ["strict", "paper"])
+@pytest.mark.parametrize("guard", ["none", "monotone"])
+def test_mas_pncg_energy_guard_is_independent_of_iteration_policy(policy, guard) -> None:
+    config = Scene.default_config()
+    config["nonlinear_system"]["solver"] = "mas_pncg"
+    config["nonlinear_system"]["mas_pncg"]["iteration_policy"] = policy
+    config["nonlinear_system"]["mas_pncg"]["energy_guard"] = guard
+    scene = Scene(config)
+    scene.validate_config()
+    assert scene.config().find("nonlinear_system/mas_pncg/energy_guard").view()[0] == guard

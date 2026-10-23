@@ -8,6 +8,7 @@
 #include <uipc/common/json.h>
 #include <fstream>
 #include <vector>
+#include <cstdlib>
 
 namespace uipc::backend::cuda
 {
@@ -788,8 +789,9 @@ namespace
         }
     }
 
+    template <typename Scalar>
     __global__ void MASPreconditionerEngine_invert_cluster_matrices_kernel(
-        cuda_tool::BufferView<ClusterMatrixSymF> cluster_inv,
+        cuda_tool::BufferView<MASPreconditionerEngine::ClusterMatrixSymT<Scalar>> cluster_inv,
         cuda_tool::CBufferView<ClusterMatrixSym> cluster_hess,
         int                                      total_threads)
     {
@@ -866,7 +868,7 @@ namespace
             {
                 int si = sym_index(node_row, node_col);
                 cluster_inv(mat_id).M[si](row % 3, col % 3) =
-                    static_cast<float>(s_mat(row, col));
+                    static_cast<Scalar>(s_mat(row, col));
             }
         }
     }
@@ -1348,6 +1350,136 @@ namespace
                     diagnostic.level = level;
             MASPreconditionerEngine_factor_spd48(matrix, 1e-6, diagnostic);
         }
+    }
+
+    __global__ void MASPreconditionerEngine_factor_coarse_kernel(
+        cuda_tool::CBufferView<ClusterMatrixSym> source,
+        cuda_tool::CBufferView<Int2>             level_sizes,
+        cuda_tool::BufferView<double>            factors,
+        cuda_tool::BufferView<CaptureDiagnostic> diagnostics,
+        int                                      first_cluster,
+        int                                      level_count)
+    {
+        constexpr int     N      = BANKSIZE * 3;
+        int               domain = first_cluster + blockIdx.x;
+        __shared__ double factor[N * N];
+        __shared__ int    active_end;
+        __shared__ bool   valid;
+        auto&             diagnostic = diagnostics(blockIdx.x);
+        if(threadIdx.x == 0)
+        {
+            diagnostic        = {};
+            diagnostic.stage  = CaptureStage::Coarse;
+            diagnostic.domain = domain;
+            active_end        = 0;
+            for(int level = 1; level < level_count; ++level)
+                if(domain * BANKSIZE >= level_sizes(level).y
+                   && domain * BANKSIZE < level_sizes(level + 1).y)
+                {
+                    diagnostic.level = level;
+                    active_end = level_sizes(level).y + level_sizes(level).x;
+                }
+        }
+        __syncthreads();
+        for(int i = threadIdx.x; i < N * N; i += blockDim.x)
+        {
+            int row = i / N;
+            int col = i % N;
+            // Only unused hierarchy slots receive the legacy identity padding.
+            // A zero diagonal of a real aggregate must still fail SPD validation.
+            bool padded = domain * BANKSIZE + row / 3 >= active_end
+                          || domain * BANKSIZE + col / 3 >= active_end;
+            factor[i] =
+                padded ?
+                    (row == col ? 1.0 : 0.0) :
+                col / 3 >= row / 3 ?
+                    source(domain).M[sym_index(row / 3, col / 3)](row % 3, col % 3) :
+                    source(domain).M[sym_index(col / 3, row / 3)](col % 3, row % 3);
+        }
+        __syncthreads();
+        if(threadIdx.x == 0)
+            valid = MASPreconditionerEngine_factor_spd48(factor, 1e-10, diagnostic);
+        __syncthreads();
+        if(valid)
+            for(int i = threadIdx.x; i < N * N; i += blockDim.x)
+                factors(blockIdx.x * N * N + i) = factor[i];
+    }
+
+    __global__ void MASPreconditionerEngine_restrict_coarse_double_kernel(
+        cuda_tool::CDenseVectorView<Float>     r,
+        cuda_tool::BufferView<Eigen::Vector3d> residuals,
+        cuda_tool::CBufferView<LevelTable>     tables,
+        cuda_tool::CBufferView<int>            real_to_part,
+        int                                    level_num,
+        int                                    n)
+    {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if(i >= n || real_to_part(i) < 0)
+            return;
+        // The table is indexed by real vertex and contains global aggregate
+        // slots. This is the exact transpose of injection prolongation below.
+        auto table = tables(i);
+        auto value = r.segment<3>(3 * i);
+        for(int level = 1; level < level_num; ++level)
+            for(int component = 0; component < 3; ++component)
+                atomicAdd(&residuals(table.index[level - 1])[component], value(component));
+    }
+
+    __global__ void MASPreconditionerEngine_solve_coarse_double_kernel(
+        cuda_tool::CBufferView<double>          factors,
+        cuda_tool::CBufferView<Eigen::Vector3d> residuals,
+        cuda_tool::BufferView<Eigen::Vector3d>  solutions,
+        int                                     first_cluster)
+    {
+        constexpr int     N       = BANKSIZE * 3;
+        int               cluster = first_cluster + blockIdx.x;
+        __shared__ double solution[N];
+        if(threadIdx.x < N)
+            solution[threadIdx.x] =
+                residuals(cluster * BANKSIZE + threadIdx.x / 3)[threadIdx.x % 3];
+        __syncthreads();
+        if(threadIdx.x == 0)
+        {
+            const double* factor = factors.data() + blockIdx.x * N * N;
+            for(int row = 0; row < N; ++row)
+            {
+                double value = solution[row];
+                for(int col = 0; col < row; ++col)
+                    value -= factor[row * N + col] * solution[col];
+                solution[row] = value / factor[row * N + row];
+            }
+            for(int row = N - 1; row >= 0; --row)
+            {
+                double value = solution[row];
+                for(int col = row + 1; col < N; ++col)
+                    value -= factor[col * N + row] * solution[col];
+                solution[row] = value / factor[row * N + row];
+            }
+        }
+        __syncthreads();
+        if(threadIdx.x < N)
+            solutions(cluster * BANKSIZE + threadIdx.x / 3)[threadIdx.x % 3] =
+                solution[threadIdx.x];
+    }
+
+    __global__ void MASPreconditionerEngine_collect_coarse_double_kernel(
+        cuda_tool::DenseVectorView<Float>       z,
+        cuda_tool::CBufferView<Eigen::Vector3d> solutions,
+        cuda_tool::CBufferView<LevelTable>      tables,
+        cuda_tool::CBufferView<int>             real_to_part,
+        int                                     level_num,
+        int                                     n)
+    {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if(i >= n || real_to_part(i) < 0)
+            return;
+        auto            table  = tables(i);
+        Eigen::Vector3d result = Eigen::Vector3d::Zero();
+        for(int level = 1; level < level_num; ++level)
+            result += solutions(table.index[level - 1]);
+        auto out = z.segment<3>(3 * i);
+        for(int component = 0; component < 3; ++component)
+            out(component) = result[component];
     }
 
     __global__ void MASPreconditionerEngine_validate_mapping_kernel(
@@ -2025,10 +2157,13 @@ void MASPreconditionerEngine::apply(cuda_tool::CDenseVectorView<Float> r,
 
 bool MASPreconditionerEngine::capture_nonlinear_base(SizeT epoch)
 {
-    nonlinear_base_valid       = false;
-    nonlinear_epoch            = invalid_epoch;
-    nonlinear_diagnostic       = {};
-    nonlinear_diagnostic.epoch = epoch;
+    nonlinear_base_valid            = false;
+    nonlinear_epoch                 = invalid_epoch;
+    nonlinear_diagnostic            = {};
+    nonlinear_diagnostic.epoch      = epoch;
+    nonlinear_coarse_direct         = false;
+    nonlinear_coarse_recovery       = {};
+    nonlinear_coarse_recovery.epoch = epoch;
     auto fail = [&](CaptureStage stage, CaptureReason reason, double value = 0.0, double threshold = 0.0)
     {
         nonlinear_diagnostic.stage     = stage;
@@ -2055,6 +2190,11 @@ bool MASPreconditionerEngine::capture_nonlinear_base(SizeT epoch)
         return fail(CaptureStage::Coarse,
                     CaptureReason::InvalidMatrixSize,
                     cluster_inverses.size(),
+                    cluster_count);
+    if(cluster_count > cluster_hessians.size())
+        return fail(CaptureStage::Coarse,
+                    CaptureReason::InvalidMatrixSize,
+                    cluster_hessians.size(),
                     cluster_count);
     if(part_to_real.size() < m_total_map_nodes)
         return fail(CaptureStage::Level0,
@@ -2118,7 +2258,88 @@ bool MASPreconditionerEngine::capture_nonlinear_base(SizeT epoch)
     nonlinear_selected_diagnostic.cview().copy_to(&nonlinear_diagnostic);
     CUDA_TOOL_CHECK(cudaStreamSynchronize(nullptr));
     if(nonlinear_diagnostic.failed())
-        return false;
+    {
+        const char* directory = std::getenv("UIPC_MAS_PNCG_CAPTURE_DIR");
+        const int   domain    = nonlinear_diagnostic.domain;
+        if(directory && nonlinear_diagnostic.stage == CaptureStage::Coarse
+           && domain >= 0 && domain < cluster_count)
+        {
+            ClusterMatrixSym  source, inverse64;
+            ClusterMatrixSymF inverse32;
+            cluster_hessians.cview(domain, 1).copy_to(&source);
+            nonlinear_coarse_inverses.cview(domain, 1).copy_to(&inverse32);
+            cuda_tool::DeviceBuffer<ClusterMatrixSym> precise;
+            precise.resize_discard(1);
+            MASPreconditionerEngine_invert_cluster_matrices_kernel<<<1, 96>>>(
+                precise.view(), cluster_hessians.cview(domain, 1), BANKSIZE * 3);
+            precise.cview().copy_to(&inverse64);
+            CUDA_TOOL_CHECK(cudaStreamSynchronize(nullptr));
+            auto dense_json = [](const auto& matrix)
+            {
+                Json rows = Json::array();
+                for(int i = 0; i < BANKSIZE * 3; ++i)
+                {
+                    Json row = Json::array();
+                    for(int j = 0; j < BANKSIZE * 3; ++j)
+                        row.push_back(
+                            j / 3 >= i / 3 ?
+                                matrix.M[sym_index(i / 3, j / 3)](i % 3, j % 3) :
+                                matrix.M[sym_index(j / 3, i / 3)](j % 3, i % 3));
+                    rows.push_back(std::move(row));
+                }
+                return rows;
+            };
+            Json       snapshot = {{"epoch", epoch},
+                                   {"domain", domain},
+                                   {"level", nonlinear_diagnostic.level},
+                                   {"reason", nonlinear_diagnostic.reason_name()},
+                                   {"pivot", nonlinear_diagnostic.value},
+                                   {"threshold", nonlinear_diagnostic.threshold},
+                                   {"zero_diagonal_replacement", 1.0},
+                                   {"matrix", dense_json(source)},
+                                   {"inverse_float", dense_json(inverse32)},
+                                   {"inverse_double_recomputed", dense_json(inverse64)}};
+            const auto path =
+                std::filesystem::path(directory)
+                / fmt::format("coarse-failure-epoch{}-domain{}.json", epoch, domain);
+            std::ofstream(path) << snapshot.dump(2) << '\n';
+        }
+        if(nonlinear_diagnostic.stage != CaptureStage::Coarse || coarse_count <= 0
+           || domain < first_coarse || domain >= cluster_count)
+            return false;
+
+        // An otherwise valid source Hessian can have an indefinite stored
+        // inverse after Gauss-Jordan elimination or float conversion. Recover
+        // the complete coarse epoch from the original double matrices instead
+        // of accepting that inverse or relaxing its positive-pivot threshold.
+        nonlinear_coarse_recovery   = nonlinear_diagnostic;
+        constexpr SizeT matrix_size = BANKSIZE * 3 * BANKSIZE * 3;
+        nonlinear_coarse_factors.resize_discard(coarse_count * matrix_size);
+        nonlinear_coarse_R.resize_discard(m_total_num_clusters);
+        nonlinear_coarse_Z.resize_discard(m_total_num_clusters);
+        MASPreconditionerEngine_factor_coarse_kernel<<<coarse_count, 64>>>(
+            cluster_hessians.cview(),
+            level_sizes.cview(),
+            nonlinear_coarse_factors.view(),
+            nonlinear_diagnostics.view(domain_count, coarse_count),
+            first_coarse,
+            m_level_num);
+        MASPreconditionerEngine_select_diagnostic_kernel<<<1, 1>>>(
+            nonlinear_diagnostics.cview(),
+            nonlinear_real_to_part.cview(),
+            nonlinear_part_to_real.cview(),
+            nonlinear_mapping_failure.cview(),
+            nonlinear_selected_diagnostic.view(),
+            nonlinear_status.view(),
+            epoch);
+        CUDA_TOOL_CHECK(cudaGetLastError());
+        nonlinear_selected_diagnostic.cview().copy_to(&nonlinear_diagnostic);
+        CUDA_TOOL_CHECK(cudaStreamSynchronize(nullptr));
+        if(nonlinear_diagnostic.failed())
+            return false;
+        nonlinear_coarse_direct = true;
+        ++nonlinear_coarse_direct_captures;
+    }
 
     nonlinear_domain_count = domain_count;
     nonlinear_epoch        = epoch;
@@ -2154,6 +2375,36 @@ void MASPreconditionerEngine::apply_frozen_coarse(SizeT epoch,
     UIPC_ASSERT(r.buffer_view().data() != z.buffer_view().data(),
                 "MAS frozen application requires distinct input and output buffers");
     z.buffer_view().fill(Float{0});
+    int first_coarse =
+        bank_align(std::max(bank_align(m_total_map_nodes), m_total_nodes)) / BANKSIZE;
+    int coarse_count = m_total_num_clusters / BANKSIZE - first_coarse;
+    if(nonlinear_coarse_direct)
+    {
+        nonlinear_coarse_R.view().fill(Eigen::Vector3d::Zero());
+        auto restrict_kernel = MASPreconditionerEngine_restrict_coarse_double_kernel;
+        restrict_kernel<<<cuda_tool::best_grid_dim(m_total_nodes, restrict_kernel), cuda_tool::best_block_dim(restrict_kernel)>>>(
+            r,
+            nonlinear_coarse_R.view(),
+            coarse_tables.cview(),
+            nonlinear_real_to_part.cview(),
+            m_level_num,
+            m_total_nodes);
+        MASPreconditionerEngine_solve_coarse_double_kernel<<<coarse_count, 64>>>(
+            nonlinear_coarse_factors.cview(),
+            nonlinear_coarse_R.cview(),
+            nonlinear_coarse_Z.view(),
+            first_coarse);
+        auto collect = MASPreconditionerEngine_collect_coarse_double_kernel;
+        collect<<<cuda_tool::best_grid_dim(m_total_nodes, collect), cuda_tool::best_block_dim(collect)>>>(
+            z,
+            nonlinear_coarse_Z.cview(),
+            coarse_tables.cview(),
+            nonlinear_real_to_part.cview(),
+            m_level_num,
+            m_total_nodes);
+        CUDA_TOOL_CHECK(cudaGetLastError());
+        return;
+    }
     if(m_total_num_clusters > m_total_map_nodes)
         multi_level_R
             .view(m_total_map_nodes, m_total_num_clusters - m_total_map_nodes)
@@ -2161,9 +2412,6 @@ void MASPreconditionerEngine::apply_frozen_coarse(SizeT epoch,
     multi_level_Z.view(0, m_total_num_clusters).fill(float3{0, 0, 0});
     auto zero = cuda_tool::CVarView<IndexT>{nonlinear_status.data()};
     build_multi_level_R(r, zero);
-    int first_coarse =
-        bank_align(std::max(bank_align(m_total_map_nodes), m_total_nodes)) / BANKSIZE;
-    int coarse_count = m_total_num_clusters / BANKSIZE - first_coarse;
     if(coarse_count > 0)
         MASPreconditionerEngine_solve_frozen_coarse_kernel<<<coarse_count, BANKSIZE * BANKSIZE>>>(
             nonlinear_coarse_inverses.cview(),

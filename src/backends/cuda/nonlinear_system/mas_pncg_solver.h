@@ -45,11 +45,11 @@ class MASPNCGSolver final : public SimSystem
     bool            retry();
     void            accept(Float fraction);
     void            rejected_trial(bool nonfinite);
-    bool accepts_energy(Float initial, Float trial, Float fraction) const;
-    void record_energy(Float initial, Float trial);
-    void fail();
-    void recover();
-    bool uses_local_ccd() const noexcept;
+    bool            accepts_energy(Float initial, Float trial, Float fraction);
+    void            record_energy(Float initial, Float trial);
+    void            fail();
+    void            recover();
+    bool            uses_local_ccd() const noexcept;
     // Called after detecting full raw-direction candidates. Keeps raw history.
     void   limit_local_ccd();
     void   record_local_ccd_guard(Float fraction);
@@ -91,6 +91,7 @@ class MASPNCGSolver final : public SimSystem
     Float                                  m_velocity_tol      = 0.05;
     std::string                            m_update_mode;
     std::string                            m_iteration_policy;
+    std::string                            m_energy_guard;
     std::string                            m_ccd_mode;
     Float                                  m_preconditioned_tol = 1e-5;
     bool                                   m_use_fused          = true;

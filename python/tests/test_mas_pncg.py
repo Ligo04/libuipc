@@ -387,11 +387,13 @@ def _paper_tet_plane(scene):
 @pytest.mark.cuda
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
 @pytest.mark.parametrize("ccd_mode", ["global", "local_conservative"])
-def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path, ccd_mode):
+@pytest.mark.parametrize("energy_guard", ["none", "monotone"])
+def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path, ccd_mode, energy_guard):
     trajectories = {}
     for fused, graph in ((0, 0), (1, 0), (1, 1)):
         config = _mas_pncg_paper_config(fused, graph)
         config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = ccd_mode
+        config["nonlinear_system"]["mas_pncg"]["energy_guard"] = energy_guard
         config["contact"]["d_hat"] = 0.01
         config["contact"]["d_hat_relative"] = 0.0
         pncg = config["nonlinear_system"]["mas_pncg"]
@@ -411,6 +413,7 @@ def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path, cc
             stats = engine.frame_stats()
             assert world.is_valid(), stats
             _assert_mas_pncg_paper_stats(stats, fused, graph)
+            assert stats["energy_guard"] == energy_guard
             assert stats["completed"] and stats["converged"], stats
             assert stats["convergence_criterion"] == "preconditioned_gradient", stats
             assert stats["convergence_checked_on_rebuild"]

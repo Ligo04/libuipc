@@ -19,6 +19,19 @@ class FEMMASPreconditioner : public LocalPreconditioner
     {
         return m_nonlinear_diagnostic;
     }
+    bool nonlinear_coarse_direct_active() const
+    {
+        return m_nonlinear_ready && m_has_partition
+               && engine.nonlinear_coarse_direct_active();
+    }
+    SizeT nonlinear_coarse_direct_count() const
+    {
+        return engine.nonlinear_coarse_direct_count();
+    }
+    const MASPreconditionerEngine::CaptureDiagnostic& nonlinear_coarse_recovery_diagnostic() const
+    {
+        return engine.nonlinear_coarse_recovery_diagnostic();
+    }
     // Operates on distinct FEM-local input/output slices on the default stream.
     // Excludes the Level-0 solve; unpartitioned entries use their captured fallback.
     void apply_frozen_coarse(SizeT                              epoch,

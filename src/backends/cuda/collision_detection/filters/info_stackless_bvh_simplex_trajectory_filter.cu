@@ -1,4 +1,5 @@
 #include <collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.h>
+#include <collision_detection/filters/details/active_contact_compaction.h>
 #include <cuda_tool/cub.h>
 #include <cuda_tool/cuda_tool.h>
 #include <sim_engine.h>
@@ -11,6 +12,7 @@
 #include <utils/primitive_d_hat.h>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 
 namespace uipc::backend::cuda
 {
@@ -22,6 +24,50 @@ namespace
     constexpr SizeT max_iter = 1000;
 
     constexpr Float large_enough_toi = 1.1;
+
+    void trace_candidates(const char* phase, const std::array<IndexT, 4>& counts, Float alpha)
+    {
+        if(!std::getenv("UIPC_MAS_PNCG_TRACE"))
+            return;
+        size_t free = 0, total = 0;
+        cudaMemGetInfo(&free, &total);
+        std::fprintf(stderr,
+                     "[PNCG-CANDIDATES] phase=%s alpha=%.17g pp=%d pe=%d ee=%d pt=%d free=%zu total=%zu\n",
+                     phase,
+                     alpha,
+                     counts[0],
+                     counts[1],
+                     counts[2],
+                     counts[3],
+                     free,
+                     total);
+        std::fflush(stderr);
+    }
+
+    template <typename T>
+    void resize_diagnostic(cuda_tool::DeviceBuffer<T>& buffer, SizeT n, const char* name)
+    {
+        try
+        {
+            buffer.resize_discard(n);
+        }
+        catch(const std::exception& e)
+        {
+            size_t free = 0, total = 0;
+            cudaMemGetInfo(&free, &total);
+            std::fprintf(stderr,
+                         "[PNCG-ALLOCATION-FAILURE] buffer=%s requested_elements=%zu element_bytes=%zu old_capacity=%zu free=%zu total=%zu error=%s\n",
+                         name,
+                         n,
+                         sizeof(T),
+                         buffer.capacity(),
+                         free,
+                         total,
+                         e.what());
+            std::fflush(stderr);
+            throw;
+        }
+    }
 
     /****************************************************
     *                   Broad Phase
@@ -924,38 +970,6 @@ namespace
         }
     }
 
-    struct InfoStacklessBVHSimplexTrajectoryFilter_filter_active_PP_pred
-    {
-        CUB_RUNTIME_FUNCTION bool operator()(const Vector2i& PP) const
-        {
-            return PP(0) != -1;
-        }
-    };
-
-    struct InfoStacklessBVHSimplexTrajectoryFilter_filter_active_PE_pred
-    {
-        CUB_RUNTIME_FUNCTION bool operator()(const Vector3i& PE) const
-        {
-            return PE(0) != -1;
-        }
-    };
-
-    struct InfoStacklessBVHSimplexTrajectoryFilter_filter_active_PT_pred
-    {
-        CUB_RUNTIME_FUNCTION bool operator()(const Vector4i& PT) const
-        {
-            return PT(0) != -1;
-        }
-    };
-
-    struct InfoStacklessBVHSimplexTrajectoryFilter_filter_active_EE_pred
-    {
-        CUB_RUNTIME_FUNCTION bool operator()(const Vector4i& EE) const
-        {
-            return EE(0) != -1;
-        }
-    };
-
     __global__ void InfoStacklessBVHSimplexTrajectoryFilter_collect_query_counts_kernel(
         cuda_tool::CVarView<IndexT>   allp_codimp_count,
         cuda_tool::CVarView<IndexT>   codimp_alle_count,
@@ -1471,6 +1485,7 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::detect(DetectInfo& info)
 
     std::array<IndexT, 4> host_counts{};
     query_counts.copy_to(host_counts.data());
+    trace_candidates("detect", host_counts, alpha);
 
     if(lbvh_CodimP.prepare_query_result(candidate_AllP_CodimP_pairs, host_counts[0]))
         launch_allp_codimp(false);
@@ -1493,154 +1508,112 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_active(FilterActiveIn
     SizeT N_PTs     = candidate_AllP_AllT_pairs.size();
     SizeT N_EEs     = candidate_AllE_AllE_pairs.size();
 
-    temp_PPs.resize_discard(N_PCoimP + N_CodimPE + N_PTs + N_EEs);
-    temp_PEs.resize_discard(N_CodimPE + N_PTs + N_EEs);
+    details::ActiveContactCompaction compact(PPs, PEs, PTs, EEs, selected_counts);
+    compact.reset();
 
-    temp_PTs.resize_discard(N_PTs);
-    temp_EEs.resize_discard(N_EEs);
-
-    SizeT temp_PP_offset = 0;
-    SizeT temp_PE_offset = 0;
+    // Process sources in the same order as their previous concatenated temp
+    // buffers. Only the active prefix survives each stable selection; capacity
+    // depends on active contacts plus one chunk, not all broad-phase candidates.
+    const auto for_chunks = [](SizeT count, const auto& process)
+    {
+        for(SizeT offset = 0; offset < count; offset += details::ActiveContactChunkSize)
+            process(offset, std::min(details::ActiveContactChunkSize, count - offset));
+    };
 
     // AllP and CodimP
-    if(N_PCoimP > 0)
-    {
-        auto PP_view = temp_PPs.view(temp_PP_offset, N_PCoimP);
+    for_chunks(N_PCoimP,
+               [&](SizeT offset, SizeT count)
+               {
+                   resize_diagnostic(temp_PPs, count, "temp_PPs");
+                   int n = static_cast<int>(count);
+                   auto k = InfoStacklessBVHSimplexTrajectoryFilter_filter_active_k1_kernel;
+                   k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+                       positions,
+                       candidate_AllP_CodimP_pairs.view().subview(offset, count),
+                       info.surf_vertices(),
+                       info.codim_vertices(),
+                       info.thicknesses(),
+                       temp_PPs.view(),
+                       info.d_hats(),
+                       n);
+                   compact.append(temp_PPs.cview());
+               });
 
-        int n = static_cast<int>(candidate_AllP_CodimP_pairs.size());
-        auto k = InfoStacklessBVHSimplexTrajectoryFilter_filter_active_k1_kernel;
-        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-            positions,
-            candidate_AllP_CodimP_pairs.view(),
-            info.surf_vertices(),
-            info.codim_vertices(),
-            info.thicknesses(),
-            PP_view,
-            info.d_hats(),
-            n);
-
-        temp_PP_offset += N_PCoimP;
-    }
     // CodimP and AllE
-    if(N_CodimPE > 0)
-    {
-        auto PP_view = temp_PPs.view(temp_PP_offset, N_CodimPE);
-        auto PE_view = temp_PEs.view(temp_PE_offset, N_CodimPE);
-
-        int n = static_cast<int>(candidate_CodimP_AllE_pairs.size());
-        auto k = InfoStacklessBVHSimplexTrajectoryFilter_filter_active_k2_kernel;
-        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-            positions,
-            candidate_CodimP_AllE_pairs.view(),
-            info.codim_vertices(),
-            info.surf_edges(),
-            info.thicknesses(),
-            PP_view,
-            PE_view,
-            info.d_hats(),
-            n);
-
-        temp_PP_offset += N_CodimPE;
-        temp_PE_offset += N_CodimPE;
-    }
+    for_chunks(N_CodimPE,
+               [&](SizeT offset, SizeT count)
+               {
+                   resize_diagnostic(temp_PPs, count, "temp_PPs");
+                   resize_diagnostic(temp_PEs, count, "temp_PEs");
+                   int n = static_cast<int>(count);
+                   auto k = InfoStacklessBVHSimplexTrajectoryFilter_filter_active_k2_kernel;
+                   k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+                       positions,
+                       candidate_CodimP_AllE_pairs.view().subview(offset, count),
+                       info.codim_vertices(),
+                       info.surf_edges(),
+                       info.thicknesses(),
+                       temp_PPs.view(),
+                       temp_PEs.view(),
+                       info.d_hats(),
+                       n);
+                   compact.append(temp_PPs.cview(), temp_PEs.cview());
+               });
 
     // AllP and AllT
-    {
-        auto PP_view = temp_PPs.view(temp_PP_offset, N_PTs);
-        auto PE_view = temp_PEs.view(temp_PE_offset, N_PTs);
-
-        int n = static_cast<int>(candidate_AllP_AllT_pairs.size());
-        if(n > 0)
+    for_chunks(
+        N_PTs,
+        [&](SizeT offset, SizeT count)
         {
+            resize_diagnostic(temp_PPs, count, "temp_PPs");
+            resize_diagnostic(temp_PEs, count, "temp_PEs");
+            resize_diagnostic(temp_PTs, count, "temp_PTs");
+            int n = static_cast<int>(count);
             auto k = InfoStacklessBVHSimplexTrajectoryFilter_filter_active_k3_kernel;
             k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
                 positions,
-                candidate_AllP_AllT_pairs.view(),
+                candidate_AllP_AllT_pairs.view().subview(offset, count),
                 info.surf_vertices(),
                 info.surf_triangles(),
                 info.thicknesses(),
-                PP_view,
-                PE_view,
+                temp_PPs.view(),
+                temp_PEs.view(),
                 temp_PTs.view(),
                 info.d_hats(),
                 n);
-        }
+            compact.append(temp_PPs.cview(), temp_PEs.cview(), temp_PTs.cview());
+        });
 
-        temp_PP_offset += N_PTs;
-        temp_PE_offset += N_PTs;
-    }
     // AllE and AllE
-    {
-        auto PP_view = temp_PPs.view(temp_PP_offset, N_EEs);
-        auto PE_view = temp_PEs.view(temp_PE_offset, N_EEs);
-
-        int n = static_cast<int>(candidate_AllE_AllE_pairs.size());
-        if(n > 0)
+    for_chunks(
+        N_EEs,
+        [&](SizeT offset, SizeT count)
         {
+            resize_diagnostic(temp_PPs, count, "temp_PPs");
+            resize_diagnostic(temp_PEs, count, "temp_PEs");
+            resize_diagnostic(temp_EEs, count, "temp_EEs");
+            int n = static_cast<int>(count);
             auto k = InfoStacklessBVHSimplexTrajectoryFilter_filter_active_k4_kernel;
             k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
                 positions,
                 info.rest_positions(),
-                candidate_AllE_AllE_pairs.view(),
+                candidate_AllE_AllE_pairs.view().subview(offset, count),
                 info.surf_edges(),
                 info.thicknesses(),
-                PP_view,
-                PE_view,
+                temp_PPs.view(),
+                temp_PEs.view(),
                 temp_EEs.view(),
                 info.d_hats(),
                 n);
-        }
+            compact.append(temp_PPs.cview(), temp_PEs.cview(), {}, temp_EEs.cview());
+        });
 
-        temp_PP_offset += N_EEs;
-        temp_PE_offset += N_EEs;
-    }
-
-    UIPC_ASSERT(temp_PP_offset == temp_PPs.size(), "size mismatch");
-    UIPC_ASSERT(temp_PE_offset == temp_PEs.size(), "size mismatch");
-
-    {
-        PPs.resize_discard(temp_PPs.size());
-        PEs.resize_discard(temp_PEs.size());
-        PTs.resize_discard(temp_PTs.size());
-        EEs.resize_discard(temp_EEs.size());
-
-        DeviceSelect().If(temp_PPs.data(),
-                          PPs.data(),
-                          selected_counts.data(),
-                          temp_PPs.size(),
-                          InfoStacklessBVHSimplexTrajectoryFilter_filter_active_PP_pred{});
-
-        DeviceSelect().If(temp_PEs.data(),
-                          PEs.data(),
-                          selected_counts.data() + 1,
-                          temp_PEs.size(),
-                          InfoStacklessBVHSimplexTrajectoryFilter_filter_active_PE_pred{});
-
-        DeviceSelect().If(temp_PTs.data(),
-                          PTs.data(),
-                          selected_counts.data() + 2,
-                          temp_PTs.size(),
-                          InfoStacklessBVHSimplexTrajectoryFilter_filter_active_PT_pred{});
-
-        DeviceSelect().If(temp_EEs.data(),
-                          EEs.data(),
-                          selected_counts.data() + 3,
-                          temp_EEs.size(),
-                          InfoStacklessBVHSimplexTrajectoryFilter_filter_active_EE_pred{});
-
-        std::array<IndexT, 4> host_counts{};
-        selected_counts.copy_to(host_counts.data());
-
-        IndexT PP_count = host_counts[0];
-        IndexT PE_count = host_counts[1];
-        IndexT PT_count = host_counts[2];
-        IndexT EE_count = host_counts[3];
-
-        PPs.resize_discard(PP_count);
-        PEs.resize_discard(PE_count);
-        PTs.resize_discard(PT_count);
-        EEs.resize_discard(EE_count);
-    }
+    trace_candidates("active",
+                     {static_cast<IndexT>(PPs.size()),
+                      static_cast<IndexT>(PEs.size()),
+                      static_cast<IndexT>(EEs.size()),
+                      static_cast<IndexT>(PTs.size())},
+                     0);
 
     info.PPs(PPs);
     info.PEs(PEs);
@@ -1700,7 +1673,7 @@ void InfoStacklessBVHSimplexTrajectoryFilter::Impl::filter_toi(FilterTOIInfo& in
         candidate_AllP_CodimP_pairs.size() + candidate_CodimP_AllE_pairs.size()
         + candidate_AllP_AllT_pairs.size() + candidate_AllE_AllE_pairs.size();
 
-    tois.resize_discard(toi_size);
+    resize_diagnostic(tois, toi_size, "tois");
 
     auto offset  = 0;
     auto PP_tois = tois.view(offset, candidate_AllP_CodimP_pairs.size());

@@ -7,6 +7,28 @@
 
 namespace uipc::backend::cuda::pncg
 {
+struct LocalCCDDescentSelection
+{
+    cuda_tool::CDenseVectorView<Float> direction;
+    Float                              slope    = 0;
+    bool                               fallback = false;
+    bool                               valid    = false;
+};
+
+// Engineering extension: unequal domain scaling need not preserve descent.
+// A raw fallback still requires the engine's subsequent actual-direction CCD.
+inline LocalCCDDescentSelection select_local_ccd_direction(
+    cuda_tool::CDenseVectorView<Float> raw,
+    Float                              raw_slope,
+    cuda_tool::CDenseVectorView<Float> proposal,
+    Float                              proposal_slope)
+{
+    if(!std::isfinite(raw_slope) || raw_slope >= 0 || !std::isfinite(proposal_slope))
+        return {};
+    const bool fallback = proposal_slope >= 0;
+    return {fallback ? raw : proposal, fallback ? raw_slope : proposal_slope, fallback, true};
+}
+
 inline UIPC_DEVICE void ccd_atomic_min(Float* address, Float value)
 {
     auto* bits = reinterpret_cast<unsigned long long*>(address);

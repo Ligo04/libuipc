@@ -1,6 +1,7 @@
 #include <nonlinear_system/mas_pncg_local_ccd.h>
 #include <app/app.h>
 #include <array>
+#include <limits>
 #include <vector>
 
 namespace pncg_local_ccd_test
@@ -159,4 +160,115 @@ TEST_CASE("MAS-PNCG local pair kernels propagate thick-contact bounds to inciden
     REQUIRE(result[2] == 1);
     REQUIRE(stats[0] == 1);
     REQUIRE(stats[2] == 0);
+}
+
+TEST_CASE("MAS-PNCG local CCD selects a descending actual direction without changing raw history",
+          "[mas_pncg][cccd][descent_guard][device]")
+{
+    using namespace pncg_local_ccd_test;
+    Matrix2x2 B, H;
+    B << 5, -3, -3, 2;
+    H << 2, 3, 3, 5;
+    const Vector2 gradient{1, 1};
+    const Vector2 raw_direction = -B * gradient;
+    REQUIRE(B(0, 0) > 0);
+    REQUIRE(B(0, 0) * B(1, 1) - B(0, 1) * B(1, 0) > 0);
+    REQUIRE((B * H).isApprox(Matrix2x2::Identity()));
+    REQUIRE(raw_direction(0) == -2);
+    REQUIRE(raw_direction(1) == 1);
+
+    Float first = 0.1, second = 1;
+    bool  expect_fallback = true;
+    bool  strictly_uphill = true;
+    SECTION("mixed domain fractions turn a descent direction uphill") {}
+    SECTION("mixed descending fractions retain the local proposal")
+    {
+        first           = 0.8;
+        second          = 0.1;
+        expect_fallback = false;
+        strictly_uphill = false;
+    }
+    SECTION("uniform scaling retains the local proposal")
+    {
+        first = second  = 0.2;
+        expect_fallback = false;
+        strictly_uphill = false;
+    }
+    SECTION("zero slope also restores the descending raw direction")
+    {
+        first           = 0.5;
+        strictly_uphill = false;
+    }
+
+    auto mapping    = upload<IndexT>({0, 16});
+    auto fixed      = upload<IndexT>({0, 0});
+    auto fractions  = upload<Float>({first, second});
+    auto per_vertex = upload<Float>({1, 1});
+    auto counts     = upload<IndexT>({0, 0, 0});
+    MASPreconditionerEngine::FrozenLevel0View base;
+    base.real_to_part      = mapping.view();
+    base.domain_count      = 2;
+    base.real_vertex_count = 2;
+    const std::array<Float, 6> initial{raw_direction(0), 0, 0, raw_direction(1), 0, 0};
+    ct::DeviceDenseVector<Float> raw, proposal;
+    raw.resize_discard(initial.size());
+    proposal.resize_discard(initial.size());
+    raw.buffer_view().copy_from(initial.data());
+    pncg::local_ccd_scale_kernel<<<1, 32>>>(raw.cview(),
+                                            proposal.view(),
+                                            base,
+                                            fixed.view(),
+                                            fractions.view(),
+                                            per_vertex.view(),
+                                            counts.view());
+
+    std::array<Float, 6> scaled;
+    proposal.copy_to(scaled.data());
+    const Vector2 local_direction{scaled[0], scaled[3]};
+    REQUIRE(local_direction(0) == Catch::Approx(first * raw_direction(0)));
+    REQUIRE(local_direction(1) == Catch::Approx(second * raw_direction(1)));
+    const Float raw_slope      = gradient.dot(raw_direction);
+    const Float proposal_slope = gradient.dot(local_direction);
+    const auto  selected =
+        pncg::select_local_ccd_direction(raw.cview(), raw_slope, proposal.cview(), proposal_slope);
+    REQUIRE(selected.valid);
+    REQUIRE(selected.fallback == expect_fallback);
+    REQUIRE(selected.slope < 0);
+
+    std::array<Float, 6> actual, history;
+    selected.direction.buffer_view().copy_to(actual.data());
+    raw.copy_to(history.data());
+    REQUIRE(history == initial);
+    REQUIRE(actual == (expect_fallback ? initial : scaled));
+    REQUIRE(selected.slope == Catch::Approx(gradient.dot(Vector2{actual[0], actual[3]})));
+
+    if(strictly_uphill)
+    {
+        REQUIRE(raw_slope == -1);
+        REQUIRE(proposal_slope == Catch::Approx(0.8));
+        REQUIRE(local_direction.dot(H * local_direction) > 0);
+        // For this SPD quadratic both terms are positive for every t > 0,
+        // so shortening the unchanged local proposal cannot decrease energy.
+        for(Float step : {1e-12, 1e-6, 0.1, 1.0})
+        {
+            const Vector2 local_delta = step * local_direction;
+            const Vector2 raw_delta   = step * raw_direction;
+            REQUIRE(gradient.dot(local_delta) + 0.5 * local_delta.dot(H * local_delta) > 0);
+            REQUIRE(gradient.dot(raw_delta) + 0.5 * raw_delta.dot(H * raw_delta) < 0);
+        }
+    }
+}
+
+TEST_CASE("MAS-PNCG local CCD descent selection rejects invalid slopes", "[mas_pncg][cccd][descent_guard]")
+{
+    using namespace pncg_local_ccd_test;
+    const Float nan = std::numeric_limits<Float>::quiet_NaN();
+    const Float inf = std::numeric_limits<Float>::infinity();
+    for(Float invalid : {nan, inf, -inf})
+    {
+        REQUIRE_FALSE(pncg::select_local_ccd_direction({}, invalid, {}, -0.1).valid);
+        REQUIRE_FALSE(pncg::select_local_ccd_direction({}, -1, {}, invalid).valid);
+    }
+    REQUIRE_FALSE(pncg::select_local_ccd_direction({}, 0, {}, -0.1).valid);
+    REQUIRE_FALSE(pncg::select_local_ccd_direction({}, 1, {}, -0.1).valid);
 }

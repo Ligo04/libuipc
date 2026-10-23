@@ -53,7 +53,7 @@ class InfoStacklessBVHSimplexTrajectoryFilter final : public SimplexTrajectoryFi
         ThisBVH::QueryBuffer candidate_AllP_AllT_pairs;
 
         // Four query counts and four compacted PP/PE/PT/EE counts are each
-        // downloaded in one contiguous transfer.
+        // downloaded in one contiguous transfer (per chunk for active contacts).
         cuda_tool::DeviceBuffer<IndexT> query_counts;
         cuda_tool::DeviceBuffer<IndexT> selected_counts;
 

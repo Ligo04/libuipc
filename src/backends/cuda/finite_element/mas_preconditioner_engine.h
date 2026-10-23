@@ -21,7 +21,9 @@ namespace uipc::backend::cuda
  *       solution buffers are stored in float for memory / atomic bandwidth.
  *     - Only the final apply output is cast back to double.
  * - The nonlinear capture keeps separate double Level-0 matrices/inverses
- *   and frozen float coarse inverses; it does not change PCG storage.
+ *   and frozen float coarse inverses. If an inverse loses positive definiteness,
+ *   the captured epoch uses double coarse Cholesky factors and vectors instead.
+ *   Neither nonlinear representation changes PCG storage.
  */
 class MASPreconditionerEngine
 {
@@ -174,6 +176,19 @@ class MASPreconditionerEngine
     {
         return nonlinear_diagnostic;
     }
+    bool nonlinear_coarse_direct_active() const
+    {
+        return nonlinear_base_valid && nonlinear_coarse_direct;
+    }
+    SizeT nonlinear_coarse_direct_count() const
+    {
+        return nonlinear_coarse_direct_captures;
+    }
+    // Original inverse failure retained separately after successful recovery.
+    const CaptureDiagnostic& nonlinear_coarse_recovery_diagnostic() const
+    {
+        return nonlinear_coarse_recovery;
+    }
     void apply_frozen_coarse(SizeT                              epoch,
                              cuda_tool::CDenseVectorView<Float> r,
                              cuda_tool::DenseVectorView<Float>  z);
@@ -295,6 +310,12 @@ class MASPreconditionerEngine
     cuda_tool::DeviceBuffer<ClusterMatrixSym>  nonlinear_base_matrices;
     cuda_tool::DeviceBuffer<ClusterMatrixSym>  nonlinear_base_inverses;
     cuda_tool::DeviceBuffer<ClusterMatrixSymF> nonlinear_coarse_inverses;
+    bool                                       nonlinear_coarse_direct = false;
+    SizeT                           nonlinear_coarse_direct_captures   = 0;
+    CaptureDiagnostic               nonlinear_coarse_recovery;
+    cuda_tool::DeviceBuffer<double> nonlinear_coarse_factors;
+    cuda_tool::DeviceBuffer<Eigen::Vector3d>   nonlinear_coarse_R;
+    cuda_tool::DeviceBuffer<Eigen::Vector3d>   nonlinear_coarse_Z;
     cuda_tool::DeviceBuffer<int>               nonlinear_part_to_real;
     cuda_tool::DeviceBuffer<int>               nonlinear_real_to_part;
     cuda_tool::DeviceBuffer<IndexT>            nonlinear_status;

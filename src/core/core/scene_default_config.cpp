@@ -161,6 +161,12 @@ static SceneConfigContract make_scene_config_contract()
         "Select strict Armijo acceptance and independent residual convergence, or the MAS-PNCG paper iteration and fresh-rebuild preconditioned-gradient convergence.",
         {"src/backends/cuda/nonlinear_system", "src/backends/cuda/engine"},
         Json{{"enum", Json::array({"strict", "paper"})}});
+    add("nonlinear_system/mas_pncg/energy_guard",
+        std::string{"none"},
+        "string",
+        "Optional engineering safeguard for paper-policy energy acceptance: monotone backtracks energy increases beyond 32 machine epsilons times the energy magnitude. The none default preserves finite paper trials; strict policy always keeps Armijo acceptance.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"enum", Json::array({"none", "monotone"})}});
     add("nonlinear_system/mas_pncg/preconditioned_gradient_tol",
         Float{1.0e-5},
         "number",

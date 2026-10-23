@@ -4,6 +4,35 @@
 
 namespace uipc::backend::cuda
 {
+enum class PNCGEnergyPolicy
+{
+    StrictArmijo,
+    PaperFinite,
+    PaperMonotone
+};
+
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+    inline bool
+    accepts_pncg_energy(double initial, double trial, double fraction, double slope, PNCGEnergyPolicy policy)
+{
+    if(!std::isfinite(initial) || !std::isfinite(trial)
+       || !std::isfinite(fraction) || fraction <= 0)
+        return false;
+    if(policy == PNCGEnergyPolicy::StrictArmijo)
+        return trial <= initial + 1e-4 * fraction * slope;
+    if(fraction > 1)
+        return false;
+    if(policy == PNCGEnergyPolicy::PaperFinite)
+        return true;
+    // Optional engineering safeguard. Scale roundoff only by the actual
+    // energies: a unit-valued floor would change behavior with energy units.
+    const double allowance = 32 * std::numeric_limits<double>::epsilon()
+                             * std::fmax(std::abs(initial), std::abs(trial));
+    return trial <= initial + allowance;
+}
+
 struct PNCGSubspaceResult
 {
     double mu           = 0;

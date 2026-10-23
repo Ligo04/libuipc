@@ -44,6 +44,87 @@ IPCNormalSurrogate pair_contact(Float stiffness)
     return result;
 }
 
+TEST_CASE("MAS-PNCG optional energy guard rejects a finite quartic overshoot", "[mas_pncg][energy_guard]")
+{
+    // E(x)=x^4 at x=1, with the descent direction p=-4. Descent at the
+    // initial point does not make the full trial E(-3)=81 acceptable.
+    const auto       energy     = [](double x) { return x * x * x * x; };
+    constexpr double initial    = 1;
+    constexpr double slope      = -16;
+    const double     full_trial = energy(1 - 4);
+    REQUIRE(slope < 0);
+    REQUIRE(full_trial == 81);
+    REQUIRE_FALSE(accepts_pncg_energy(initial, full_trial, 1, slope, PNCGEnergyPolicy::PaperMonotone));
+    REQUIRE(accepts_pncg_energy(initial, full_trial, 1, slope, PNCGEnergyPolicy::PaperFinite));
+    REQUIRE_FALSE(accepts_pncg_energy(initial, full_trial, 1, slope, PNCGEnergyPolicy::StrictArmijo));
+    const double smaller_trial = energy(1 - 0.25 * 4);
+    REQUIRE(smaller_trial < initial);
+    REQUIRE(accepts_pncg_energy(initial, smaller_trial, 0.25, slope, PNCGEnergyPolicy::PaperMonotone));
+}
+
+TEST_CASE("MAS-PNCG monotone energy roundoff allowance follows actual energy units",
+          "[mas_pncg][energy_guard]")
+{
+    const double eps = std::numeric_limits<double>::epsilon();
+    for(double initial : {1.0, -1.0, 1e-200, -1e-200, 1e200, -1e200})
+    {
+        CAPTURE(initial);
+        const double adjacent =
+            std::nextafter(initial, std::numeric_limits<double>::infinity());
+        REQUIRE(adjacent > initial);
+        REQUIRE(accepts_pncg_energy(initial, adjacent, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+        const double increased = initial + 128 * eps * std::abs(initial);
+        REQUIRE(increased > initial);
+        REQUIRE_FALSE(accepts_pncg_energy(initial, increased, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+    }
+    // An absolute floor of one would silently accept both of these increases.
+    REQUIRE_FALSE(accepts_pncg_energy(1e-200, 2e-200, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+    REQUIRE_FALSE(accepts_pncg_energy(
+        0, std::numeric_limits<double>::denorm_min(), 1, -1, PNCGEnergyPolicy::PaperMonotone));
+    REQUIRE(accepts_pncg_energy(0, 0, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+    REQUIRE(accepts_pncg_energy(0, -1, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+    REQUIRE(accepts_pncg_energy(-1, -2, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+    REQUIRE_FALSE(accepts_pncg_energy(-2, -1, 1, -1, PNCGEnergyPolicy::PaperMonotone));
+}
+
+TEST_CASE("MAS-PNCG energy acceptance rejects invalid energies and fractions", "[mas_pncg][energy_guard]")
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for(auto policy : {PNCGEnergyPolicy::StrictArmijo,
+                       PNCGEnergyPolicy::PaperFinite,
+                       PNCGEnergyPolicy::PaperMonotone})
+    {
+        for(double invalid : {nan, inf, -inf})
+        {
+            REQUIRE_FALSE(accepts_pncg_energy(invalid, 0, 1, -1, policy));
+            REQUIRE_FALSE(accepts_pncg_energy(1, invalid, 1, -1, policy));
+            REQUIRE_FALSE(accepts_pncg_energy(1, 0, invalid, -1, policy));
+        }
+        REQUIRE_FALSE(accepts_pncg_energy(1, 0, 0, -1, policy));
+        REQUIRE_FALSE(accepts_pncg_energy(1, 0, -0.5, -1, policy));
+    }
+    REQUIRE_FALSE(accepts_pncg_energy(1, 0, 1.01, -1, PNCGEnergyPolicy::PaperFinite));
+    REQUIRE_FALSE(accepts_pncg_energy(1, 0, 1.01, -1, PNCGEnergyPolicy::PaperMonotone));
+}
+
+TEST_CASE("MAS-PNCG strict energy acceptance retains its original Armijo condition",
+          "[mas_pncg][energy_guard]")
+{
+    constexpr double initial = 1;
+    constexpr double slope   = -4;
+    for(double fraction : {0.25, 1.0, 2.0})
+        for(double trial : {0.0, 0.9999, 1.0, 1.1})
+        {
+            CAPTURE(fraction, trial);
+            const bool original = trial <= initial + 1e-4 * fraction * slope;
+            REQUIRE(accepts_pncg_energy(initial, trial, fraction, slope, PNCGEnergyPolicy::StrictArmijo)
+                    == original);
+        }
+    REQUIRE_FALSE(accepts_pncg_energy(initial, 0.9999, 1, slope, PNCGEnergyPolicy::StrictArmijo));
+    REQUIRE(accepts_pncg_energy(initial, 0.9999, 1, slope, PNCGEnergyPolicy::PaperMonotone));
+}
+
 Eigen::MatrixXd contact_operator(const std::vector<IPCNormalSurrogate>& columns,
                                  int vertices = 2)
 {

@@ -2,6 +2,7 @@
 #include <app/app.h>
 #include <Eigen/Cholesky>
 #include <array>
+#include <cmath>
 #include <vector>
 #include <limits>
 #include <string_view>
@@ -111,6 +112,8 @@ TEST_CASE("MAS frozen coarse application excludes fine solve and live numeric ch
     TwoNodeMAS fixture;
     fixture.assemble(2.0, 3.0, 0.25);
     REQUIRE(fixture.engine.capture_nonlinear_base(21));
+    REQUIRE_FALSE(fixture.engine.nonlinear_coarse_direct_active());
+    REQUIRE(fixture.engine.nonlinear_coarse_direct_count() == 0);
     ct::DeviceDenseVector<Float> r, z;
     r.resize(6);
     z.resize(6);
@@ -134,6 +137,70 @@ TEST_CASE("MAS frozen coarse application excludes fine solve and live numeric ch
         REQUIRE(std::abs(after[i] - before[i]) < 1e-12);
 }
 
+TEST_CASE("MAS frozen coarse recovers inverse rounding with double direct solves",
+          "[cuda][mas_pncg][coarse_direct]")
+{
+    // B is SPD in double but rounding it to float makes its leading 2x2
+    // block indefinite. The original A = B^-1 remains a valid source matrix.
+    const double    a = 1.0 + 0.6 * std::ldexp(1.0, -23);
+    const double    e = std::ldexp(1.0, -30);
+    Eigen::Matrix3d A = Eigen::Matrix3d::Identity();
+    A(0, 0)           = (a * a + e) / e;
+    A(0, 1) = A(1, 0) = -a / e;
+    A(1, 1)           = 1.0 / e;
+    TwoNodeMAS fixture;
+    std::array<Eigen::Matrix3d, 3> blocks{0.5 * A, Eigen::Matrix3d::Zero(), 0.5 * A};
+    fixture.assemble(blocks);
+    ct::DeviceDenseVector<Float> r, z;
+    r.resize(6);
+    z.resize(6);
+    // Casting this residual to float before restriction loses the small
+    // component along the accurately represented source matrix direction.
+    std::array<Float, 6> rhs{-a, 1.0, 0.0, 0.0, 0.0, 0.0};
+    r.view().buffer_view().copy_from(rhs.data());
+    ct::DeviceVar<IndexT> converged(0);
+    std::array<Float, 6>  pcg_before, pcg_after, direct, frozen;
+    fixture.engine.apply(r.cview(), z.view(), converged.cview());
+    z.cview().buffer_view().copy_to(pcg_before.data());
+
+    REQUIRE(fixture.engine.capture_nonlinear_base(71));
+    REQUIRE(fixture.engine.nonlinear_coarse_direct_active());
+    REQUIRE(fixture.engine.nonlinear_coarse_direct_count() == 1);
+    REQUIRE_FALSE(fixture.engine.nonlinear_capture_diagnostic().failed());
+    const auto recovery = fixture.engine.nonlinear_coarse_recovery_diagnostic();
+    REQUIRE(recovery.stage == MASPreconditionerEngine::CaptureStage::Coarse);
+    REQUIRE(recovery.reason == MASPreconditionerEngine::CaptureReason::CholeskyPivot);
+    REQUIRE(recovery.epoch == 71);
+    REQUIRE(recovery.domain == 1);
+    fixture.engine.apply_frozen_coarse(71, r.cview(), z.view());
+    z.cview().buffer_view().copy_to(direct.data());
+    Eigen::Vector3d reference = A.llt().solve(Eigen::Vector3d(-a, 1.0, 0.0));
+    double          r_dot_z   = 0.0;
+    for(int i = 0; i < 6; ++i)
+    {
+        REQUIRE(std::isfinite(direct[i]));
+        REQUIRE(std::abs(direct[i] - reference[i % 3]) < 1e-15);
+        r_dot_z += rhs[i] * direct[i];
+    }
+    REQUIRE(r_dot_z > 0.0);
+
+    // Capturing and applying the nonlinear recovery leaves legacy PCG's
+    // preconditioner and its mixed-precision application unchanged.
+    fixture.engine.apply(r.cview(), z.view(), converged.cview());
+    z.cview().buffer_view().copy_to(pcg_after.data());
+    REQUIRE(pcg_after == pcg_before);
+
+    fixture.assemble(2.0, 3.0, 0.25);
+    fixture.engine.apply_frozen_coarse(71, r.cview(), z.view());
+    z.cview().buffer_view().copy_to(frozen.data());
+    REQUIRE(frozen == direct);
+    REQUIRE(fixture.engine.capture_nonlinear_base(72));
+    REQUIRE_FALSE(fixture.engine.nonlinear_coarse_direct_active());
+    REQUIRE(fixture.engine.nonlinear_coarse_direct_count() == 1);
+    REQUIRE_FALSE(fixture.engine.nonlinear_coarse_recovery_diagnostic().failed());
+    REQUIRE(fixture.engine.nonlinear_coarse_recovery_diagnostic().epoch == 72);
+}
+
 TEST_CASE("MAS nonlinear capture rejects zero curvature on real slots", "[cuda][mas_pncg]")
 {
     TwoNodeMAS fixture;
@@ -143,6 +210,67 @@ TEST_CASE("MAS nonlinear capture rejects zero curvature on real slots", "[cuda][
     REQUIRE_FALSE(fixture.engine.capture_nonlinear_base(32));
     REQUIRE_FALSE(fixture.engine.nonlinear_base(31).valid());
     REQUIRE_FALSE(fixture.engine.nonlinear_base(32).valid());
+}
+
+TEST_CASE("MAS double coarse restriction preserves hierarchy and unpartitioned mapping",
+          "[cuda][mas_pncg][coarse_direct]")
+{
+    constexpr int             n = 33, partitioned = 32;
+    std::vector<unsigned int> neighbors, starts(n), counts(n);
+    std::vector<int>          part(partitioned), real(n, -1), diagonal(n);
+    for(int i = 0; i < n; ++i)
+    {
+        starts[i] = neighbors.size();
+        if(i < partitioned)
+        {
+            if(i > 0)
+                neighbors.push_back(i - 1);
+            if(i + 1 < partitioned)
+                neighbors.push_back(i + 1);
+            real[i]       = partitioned - 1 - i;
+            part[real[i]] = i;
+        }
+        counts[i]   = neighbors.size() - starts[i];
+        diagonal[i] = i;
+    }
+    MASPreconditionerEngine engine;
+    engine.init_neighbor(n, neighbors.size(), partitioned, neighbors, starts, counts, part, real);
+    engine.init_matrix();
+    const double    a = 1.0 + 0.6 * std::ldexp(1.0, -23);
+    const double    e = std::ldexp(1.0, -30);
+    Eigen::Matrix3d A = Eigen::Matrix3d::Identity();
+    A(0, 0)           = (a * a + e) / e;
+    A(0, 1) = A(1, 0) = -a / e;
+    A(1, 1)           = 1.0 / e;
+    std::vector<Eigen::Matrix3d> blocks(n, A);
+    blocks.back().setIdentity();
+    ct::DeviceBuffer<Eigen::Matrix3d> values(n);
+    ct::DeviceBuffer<int>             rows(n), cols(n);
+    values.view().copy_from(blocks.data());
+    rows.view().copy_from(diagonal.data());
+    cols.view().copy_from(diagonal.data());
+    engine.set_preconditioner(values.cview(), rows.cview(), cols.cview(), 0);
+    REQUIRE(engine.capture_nonlinear_base(81));
+    REQUIRE(engine.nonlinear_coarse_direct_active());
+    ct::DeviceDenseVector<Float> r, z;
+    r.resize(3 * n);
+    z.resize(3 * n);
+    Eigen::Vector3d    vertex_rhs(-a, 1.0, 1e-10);
+    std::vector<Float> rhs(3 * n), result(3 * n);
+    for(int i = 0; i < partitioned; ++i)
+        for(int j = 0; j < 3; ++j)
+            rhs[3 * i + j] = vertex_rhs[j];
+    rhs[3 * partitioned] = 9.0;
+    r.view().buffer_view().copy_from(rhs.data());
+    engine.apply_frozen_coarse(81, r.cview(), z.view());
+    z.cview().buffer_view().copy_to(result.data());
+    // There are two coarse levels, each contributing A^-1 * vertex_rhs.
+    const Eigen::Vector3d expected = 2.0 * A.llt().solve(vertex_rhs);
+    for(int i = 0; i < partitioned; ++i)
+        for(int j = 0; j < 3; ++j)
+            REQUIRE(std::abs(result[3 * i + j] - expected[j]) < 1e-13);
+    for(int j = 0; j < 3; ++j)
+        REQUIRE(result[3 * partitioned + j] == 0.0);
 }
 
 
@@ -240,7 +368,8 @@ TEST_CASE("MAS diagnostics distinguish coarse failure from valid fine domains", 
         part[i] = real[i] = rows[i] = cols[i] = i;
     }
     // Each fine domain sees identity. The first coarse 2x2 vertex block is
-    // [[16, 100], [100, 16]], whose inverse has a negative first pivot.
+    // [[16, 100], [100, 16]]. Both its inverse and the original source
+    // are indefinite, so the direct coarse recovery must also reject it.
     rows[n] = 0;
     cols[n] = 16;
     MASPreconditionerEngine engine;
@@ -260,10 +389,26 @@ TEST_CASE("MAS diagnostics distinguish coarse failure from valid fine domains", 
     REQUIRE(diagnostic.reason == MASPreconditionerEngine::CaptureReason::CholeskyPivot);
     REQUIRE(diagnostic.level == 1);
     REQUIRE(diagnostic.domain == 2);
-    REQUIRE(diagnostic.row == 0);
-    REQUIRE(diagnostic.column == 0);
+    REQUIRE(diagnostic.row == 3);
+    REQUIRE(diagnostic.column == 3);
     REQUIRE(diagnostic.value < 0.0);
     REQUIRE(diagnostic.threshold > 0.0);
+    REQUIRE_FALSE(engine.nonlinear_coarse_direct_active());
+    REQUIRE(engine.nonlinear_coarse_direct_count() == 0);
+    REQUIRE(engine.nonlinear_coarse_recovery_diagnostic().row == 0);
+    REQUIRE_FALSE(engine.nonlinear_base(61).valid());
+
+    blocks[n](0, 0) = std::numeric_limits<double>::quiet_NaN();
+    values.view().copy_from(blocks.data());
+    engine.set_preconditioner(values.cview(), d_rows.cview(), d_cols.cview(), 0);
+    REQUIRE_FALSE(engine.capture_nonlinear_base(67));
+    REQUIRE(engine.nonlinear_capture_diagnostic().stage
+            == MASPreconditionerEngine::CaptureStage::Coarse);
+    REQUIRE(engine.nonlinear_capture_diagnostic().reason
+            == MASPreconditionerEngine::CaptureReason::NonfiniteMatrix);
+    REQUIRE_FALSE(engine.nonlinear_coarse_direct_active());
+    REQUIRE(engine.nonlinear_coarse_direct_count() == 0);
+    blocks[n] = 100.0 * Eigen::Matrix3d::Identity();
 
     // Both fine domains now fail, and must take precedence over coarse errors.
     // Repeated captures must select the lower domain even when blocks race.

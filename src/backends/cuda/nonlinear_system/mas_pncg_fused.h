@@ -24,6 +24,7 @@ struct DirectionSums
 struct DirectionResult
 {
     Float  mu = 0, nu = 0, slope = 0;
+    Float  a = 0, b = 0, c = 0, gz = 0, gp = 0;
     IndexT valid = 0, used_history = 0, update_columns = 0;
     Float  preconditioned_norm = 0, restart_ratio = 0;
     IndexT restart_next = 0;
@@ -172,6 +173,11 @@ namespace fused
     {
         DirectionResult out{};
         const auto      s       = *sums;
+        out.a                   = s.a;
+        out.b                   = s.b;
+        out.c                   = s.c;
+        out.gz                  = s.gz;
+        out.gp                  = s.gp;
         out.update_columns      = s.columns;
         out.preconditioned_norm = sqrt(s.z_squared_norm);
         if(!s.invalid && isfinite(s.gz) && s.gz > 0)
