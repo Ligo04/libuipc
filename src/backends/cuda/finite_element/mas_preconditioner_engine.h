@@ -50,6 +50,58 @@ class MASPreconditionerEngine
 
     static constexpr SizeT invalid_epoch = ~SizeT{0};
 
+    enum class CaptureStage
+    {
+        None,
+        Host,
+        Level0,
+        Coarse,
+        RealMapping,
+        Unpartitioned
+    };
+
+    enum class CaptureReason
+    {
+        None,
+        Uninitialized,
+        InvalidEpoch,
+        InvalidPartitionSize,
+        InvalidMatrixSize,
+        InvalidMappingSize,
+        InvalidDiagonalSize,
+        MappingOutOfRange,
+        MappingMismatch,
+        NonfiniteMatrix,
+        ZeroScale,
+        AsymmetricMatrix,
+        CholeskyPivot,
+        NonfiniteFactor,
+        NonfiniteInverse
+    };
+
+    struct CaptureDiagnostic
+    {
+        CaptureStage  stage  = CaptureStage::None;
+        CaptureReason reason = CaptureReason::None;
+        SizeT         epoch  = invalid_epoch;
+        // Domain is a global cluster index; row/column are local scalar DOFs.
+        // Index is a partition slot or real vertex for mapping/diagonal errors.
+        int    level     = -1;
+        int    domain    = -1;
+        int    index     = -1;
+        int    row       = -1;
+        int    column    = -1;
+        double value     = 0.0;
+        double threshold = 0.0;
+
+        UIPC_GENERIC bool failed() const
+        {
+            return reason != CaptureReason::None;
+        }
+        const char* stage_name() const;
+        const char* reason_name() const;
+    };
+
     struct FrozenLevel0View
     {
         // Views remain valid until the next capture or hierarchy initialization.
@@ -115,9 +167,16 @@ class MASPreconditionerEngine
     // invalidates the previous capture; a successful return is host-complete.
     bool             capture_nonlinear_base(SizeT epoch);
     FrozenLevel0View nonlinear_base(SizeT expected_epoch) const;
-    void             apply_frozen_coarse(SizeT                              epoch,
-                                         cuda_tool::CDenseVectorView<Float> r,
-                                         cuda_tool::DenseVectorView<Float>  z);
+    // Reset on each capture. Failure priority is host checks, ascending fine
+    // domains, ascending coarse clusters, then ascending real mapping indices.
+    // Within a matrix, validation follows row-major scan and Cholesky order.
+    const CaptureDiagnostic& nonlinear_capture_diagnostic() const
+    {
+        return nonlinear_diagnostic;
+    }
+    void apply_frozen_coarse(SizeT                              epoch,
+                             cuda_tool::CDenseVectorView<Float> r,
+                             cuda_tool::DenseVectorView<Float>  z);
 
     bool is_initialized() const { return m_initialized; }
 
@@ -239,5 +298,9 @@ class MASPreconditionerEngine
     cuda_tool::DeviceBuffer<int>               nonlinear_part_to_real;
     cuda_tool::DeviceBuffer<int>               nonlinear_real_to_part;
     cuda_tool::DeviceBuffer<IndexT>            nonlinear_status;
+    CaptureDiagnostic                          nonlinear_diagnostic;
+    cuda_tool::DeviceBuffer<CaptureDiagnostic> nonlinear_diagnostics;
+    cuda_tool::DeviceBuffer<CaptureDiagnostic> nonlinear_selected_diagnostic;
+    cuda_tool::DeviceBuffer<int>               nonlinear_mapping_failure;
 };
 }  // namespace uipc::backend::cuda

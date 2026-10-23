@@ -432,6 +432,16 @@ void SimEngine::advance()
                 // 5) Collect Vertex Displacements Globally
                 m_global_vertex_manager->collect_vertex_displacements();
 
+                if(m_mas_pncg_solver && m_mas_pncg_solver->uses_local_ccd())
+                {
+                    // Local fractions are proposals, not a certificate for
+                    // cross-domain motion. Re-detect and run native CCD below
+                    // on the actual scaled FEM/global displacement.
+                    detect_trajectory_candidates(1.0);
+                    m_mas_pncg_solver->limit_local_ccd();
+                    m_global_vertex_manager->collect_vertex_displacements();
+                }
+
                 // 7) Begin Line Search
                 m_state = SimEngineState::LineSearch;
                 {
@@ -473,6 +483,8 @@ void SimEngine::advance()
                     // this step; in free flight it must not bite)
                     if(ccd_alpha < 1.0)
                         alpha = cfl_condition(alpha);
+                    if(m_mas_pncg_solver)
+                        m_mas_pncg_solver->record_local_ccd_guard(alpha);
 
                     // Line Search Iteration
                     bool converged = !m_mas_pncg_solver && convergence_check(newton_iter);

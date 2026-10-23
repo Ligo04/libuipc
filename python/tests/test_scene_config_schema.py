@@ -30,7 +30,8 @@ def test_scene_config_schema_matches_public_defaults() -> None:
         assert entries[name]["default"] == value
     assert entries["nonlinear_system/solver"]["default"] == "newton"
     assert entries["nonlinear_system/solver"]["enum"] == ["newton", "mas_pncg"]
-    assert entries["nonlinear_system/mas_pncg/ccd_mode"]["const"] == "global"
+    assert entries["nonlinear_system/mas_pncg/ccd_mode"]["default"] == "global"
+    assert entries["nonlinear_system/mas_pncg/ccd_mode"]["enum"] == ["global", "local_conservative"]
     policy = entries["nonlinear_system/mas_pncg/iteration_policy"]
     assert policy["default"] == "strict"
     assert policy["enum"] == ["strict", "paper"]
@@ -155,3 +156,16 @@ def test_mas_pncg_paper_accepts_positive_length_tolerance(tolerance) -> None:
     config["nonlinear_system"]["mas_pncg"]["iteration_policy"] = "paper"
     config["nonlinear_system"]["mas_pncg"]["preconditioned_gradient_tol"] = tolerance
     Scene(config).validate_config()
+
+
+@pytest.mark.parametrize("policy", ["strict", "paper"])
+def test_mas_pncg_local_ccd_requires_paper_policy(policy) -> None:
+    config = Scene.default_config()
+    config["nonlinear_system"]["solver"] = "mas_pncg"
+    config["nonlinear_system"]["mas_pncg"]["iteration_policy"] = policy
+    config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = "local_conservative"
+    if policy == "strict":
+        with pytest.raises(UIPCException):
+            Scene(config)
+    else:
+        Scene(config).validate_config()

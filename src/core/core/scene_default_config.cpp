@@ -233,9 +233,9 @@ static SceneConfigContract make_scene_config_contract()
     add("nonlinear_system/mas_pncg/ccd_mode",
         std::string{"global"},
         "string",
-        "Conservative global CCD on the actual direction.",
+        "Global CCD, or paper-policy local conservative proposals followed by global CCD on the actual scaled direction.",
         {"src/backends/cuda/engine"},
-        Json{{"const", "global"}});
+        Json{{"enum", Json::array({"global", "local_conservative"})}});
 
     add("linear_system/tol_rate",
         Float{1e-3},
@@ -637,6 +637,10 @@ void validate_scene_config(const geometry::AttributeCollection& config)
         UIPC_ASSERT_THROW(config.find<std::string>("integrator/type")->view()[0] == "bdf1",
                           "MAS-PNCG currently requires integrator/type=bdf1.");
         UIPC_ASSERT_THROW(number("diff_sim/enable") == 0, "MAS-PNCG does not support DiffSim.");
+        UIPC_ASSERT_THROW(
+            config.find<std::string>("nonlinear_system/mas_pncg/ccd_mode")->view()[0] != "local_conservative"
+                || config.find<std::string>("nonlinear_system/mas_pncg/iteration_policy")->view()[0] == "paper",
+            "MAS-PNCG local conservative CCD requires iteration_policy=paper.");
     }
 
     UIPC_ASSERT_THROW(number("newton/min_iter") <= number("newton/max_iter"),

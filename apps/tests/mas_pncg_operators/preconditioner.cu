@@ -3,6 +3,8 @@
 #include <Eigen/Cholesky>
 #include <array>
 #include <vector>
+#include <limits>
+#include <string_view>
 
 namespace
 {
@@ -43,6 +45,11 @@ struct TwoNodeMAS
         std::array<Eigen::Matrix3d, 3> blocks{a * Eigen::Matrix3d::Identity(),
                                               coupling * Eigen::Matrix3d::Identity(),
                                               b * Eigen::Matrix3d::Identity()};
+        assemble(blocks);
+    }
+
+    void assemble(const std::array<Eigen::Matrix3d, 3>& blocks)
+    {
         values.view().copy_from(blocks.data());
         engine.set_preconditioner(values.cview(), rows.cview(), cols.cview(), 0);
     }
@@ -136,6 +143,146 @@ TEST_CASE("MAS nonlinear capture rejects zero curvature on real slots", "[cuda][
     REQUIRE_FALSE(fixture.engine.capture_nonlinear_base(32));
     REQUIRE_FALSE(fixture.engine.nonlinear_base(31).valid());
     REQUIRE_FALSE(fixture.engine.nonlinear_base(32).valid());
+}
+
+
+TEST_CASE("MAS capture diagnostics identify the rejected matrix and reset on success", "[cuda][mas_pncg]")
+{
+    using Stage  = MASPreconditionerEngine::CaptureStage;
+    using Reason = MASPreconditionerEngine::CaptureReason;
+    MASPreconditionerEngine empty;
+    REQUIRE_FALSE(empty.capture_nonlinear_base(1));
+    REQUIRE(empty.nonlinear_capture_diagnostic().stage == Stage::Host);
+    REQUIRE(empty.nonlinear_capture_diagnostic().reason == Reason::Uninitialized);
+    REQUIRE(empty.nonlinear_capture_diagnostic().epoch == 1);
+
+    TwoNodeMAS                     fixture;
+    std::array<Eigen::Matrix3d, 3> blocks{2.0 * Eigen::Matrix3d::Identity(),
+                                          Eigen::Matrix3d::Zero(),
+                                          3.0 * Eigen::Matrix3d::Identity()};
+    Reason                         expected     = Reason::None;
+    int                            expected_row = -1, expected_column = -1;
+    SECTION("nonfinite input precedes factorization")
+    {
+        blocks[0](1, 1) = std::numeric_limits<double>::infinity();
+        expected        = Reason::NonfiniteMatrix;
+        expected_row = expected_column = 1;
+    }
+    SECTION("asymmetric diagonal block reports the measured difference")
+    {
+        blocks[0](0, 1) = 0.5;
+        expected        = Reason::AsymmetricMatrix;
+        expected_row    = 0;
+        expected_column = 1;
+    }
+    SECTION("negative curvature reports its Cholesky pivot")
+    {
+        blocks[0](2, 2) = -0.25;
+        expected        = Reason::CholeskyPivot;
+        expected_row = expected_column = 2;
+    }
+    fixture.assemble(blocks);
+    REQUIRE_FALSE(fixture.engine.capture_nonlinear_base(51));
+    const auto diagnostic = fixture.engine.nonlinear_capture_diagnostic();
+    REQUIRE(diagnostic.failed());
+    REQUIRE(diagnostic.stage == Stage::Level0);
+    REQUIRE(diagnostic.reason == expected);
+    REQUIRE(diagnostic.epoch == 51);
+    REQUIRE(diagnostic.domain == 0);
+    REQUIRE(diagnostic.level == 0);
+    REQUIRE(diagnostic.row == expected_row);
+    REQUIRE(diagnostic.column == expected_column);
+    REQUIRE(std::string_view(diagnostic.stage_name()) == "level0");
+    if(expected == Reason::AsymmetricMatrix)
+    {
+        REQUIRE(diagnostic.value == 0.5);
+        REQUIRE(diagnostic.threshold == 3e-10);
+    }
+    if(expected == Reason::CholeskyPivot)
+    {
+        REQUIRE(diagnostic.value == -0.25);
+        REQUIRE(diagnostic.threshold == 64.0 * std::numeric_limits<double>::epsilon() * 3.0);
+    }
+    REQUIRE_FALSE(fixture.engine.nonlinear_base(51).valid());
+
+    fixture.assemble(2.0, 3.0, 0.25);
+    REQUIRE(fixture.engine.capture_nonlinear_base(52));
+    const auto& clean = fixture.engine.nonlinear_capture_diagnostic();
+    REQUIRE_FALSE(clean.failed());
+    REQUIRE(clean.stage == Stage::None);
+    REQUIRE(clean.reason == Reason::None);
+    REQUIRE(clean.epoch == 52);
+    REQUIRE(clean.domain == -1);
+    REQUIRE(clean.row == -1);
+    REQUIRE(clean.column == -1);
+    REQUIRE(clean.value == 0.0);
+    REQUIRE(clean.threshold == 0.0);
+    REQUIRE(std::string_view(clean.reason_name()) == "none");
+
+    REQUIRE_FALSE(fixture.engine.capture_nonlinear_base(MASPreconditionerEngine::invalid_epoch));
+    REQUIRE(fixture.engine.nonlinear_capture_diagnostic().reason == Reason::InvalidEpoch);
+    REQUIRE_FALSE(fixture.engine.nonlinear_base(52).valid());
+}
+
+TEST_CASE("MAS diagnostics distinguish coarse failure from valid fine domains", "[cuda][mas_pncg]")
+{
+    constexpr int             n = 32;
+    std::vector<unsigned int> neighbors, starts(n), counts(n);
+    std::vector<int>          part(n), real(n), rows(n + 1), cols(n + 1);
+    for(int i = 0; i < n; ++i)
+    {
+        starts[i] = neighbors.size();
+        if(i > 0)
+            neighbors.push_back(i - 1);
+        if(i + 1 < n)
+            neighbors.push_back(i + 1);
+        counts[i] = neighbors.size() - starts[i];
+        part[i] = real[i] = rows[i] = cols[i] = i;
+    }
+    // Each fine domain sees identity. The first coarse 2x2 vertex block is
+    // [[16, 100], [100, 16]], whose inverse has a negative first pivot.
+    rows[n] = 0;
+    cols[n] = 16;
+    MASPreconditionerEngine engine;
+    engine.init_neighbor(n, neighbors.size(), n, neighbors, starts, counts, part, real);
+    engine.init_matrix();
+    ct::DeviceBuffer<int>             d_rows(n + 1), d_cols(n + 1);
+    ct::DeviceBuffer<Eigen::Matrix3d> values(n + 1);
+    d_rows.view().copy_from(rows.data());
+    d_cols.view().copy_from(cols.data());
+    std::vector<Eigen::Matrix3d> blocks(n + 1, Eigen::Matrix3d::Identity());
+    blocks[n] *= 100.0;
+    values.view().copy_from(blocks.data());
+    engine.set_preconditioner(values.cview(), d_rows.cview(), d_cols.cview(), 0);
+    REQUIRE_FALSE(engine.capture_nonlinear_base(61));
+    auto diagnostic = engine.nonlinear_capture_diagnostic();
+    REQUIRE(diagnostic.stage == MASPreconditionerEngine::CaptureStage::Coarse);
+    REQUIRE(diagnostic.reason == MASPreconditionerEngine::CaptureReason::CholeskyPivot);
+    REQUIRE(diagnostic.level == 1);
+    REQUIRE(diagnostic.domain == 2);
+    REQUIRE(diagnostic.row == 0);
+    REQUIRE(diagnostic.column == 0);
+    REQUIRE(diagnostic.value < 0.0);
+    REQUIRE(diagnostic.threshold > 0.0);
+
+    // Both fine domains now fail, and must take precedence over coarse errors.
+    // Repeated captures must select the lower domain even when blocks race.
+    blocks[0](0, 0)  = -0.25;
+    blocks[16](0, 0) = -0.5;
+    values.view().copy_from(blocks.data());
+    engine.set_preconditioner(values.cview(), d_rows.cview(), d_cols.cview(), 0);
+    for(SizeT epoch = 62; epoch < 66; ++epoch)
+    {
+        REQUIRE_FALSE(engine.capture_nonlinear_base(epoch));
+        diagnostic = engine.nonlinear_capture_diagnostic();
+        REQUIRE(diagnostic.stage == MASPreconditionerEngine::CaptureStage::Level0);
+        REQUIRE(diagnostic.reason == MASPreconditionerEngine::CaptureReason::CholeskyPivot);
+        REQUIRE(diagnostic.epoch == epoch);
+        REQUIRE(diagnostic.domain == 0);
+        REQUIRE(diagnostic.row == 0);
+        REQUIRE(diagnostic.column == 0);
+        REQUIRE(diagnostic.value == -0.25);
+    }
 }
 
 TEST_CASE("MAS hierarchy preserves analytic corrections across split and padded domains",

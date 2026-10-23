@@ -15,6 +15,12 @@ class FEMMASPreconditioner;
 class FiniteElementVertexReporter;
 class SimplexNormalContact;
 class VertexHalfPlaneNormalContact;
+class GlobalVertexManager;
+class GlobalSimplicialSurfaceManager;
+class GlobalContactManager;
+class SimplexTrajectoryFilter;
+class HalfPlane;
+class HalfPlaneVertexReporter;
 namespace pncg
 {
     class FusedOperations;
@@ -39,10 +45,14 @@ class MASPNCGSolver final : public SimSystem
     bool            retry();
     void            accept(Float fraction);
     void            rejected_trial(bool nonfinite);
-    bool   accepts_energy(Float initial, Float trial, Float fraction) const;
-    void   record_energy(Float initial, Float trial);
-    void   fail();
-    void   recover();
+    bool accepts_energy(Float initial, Float trial, Float fraction) const;
+    void record_energy(Float initial, Float trial);
+    void fail();
+    void recover();
+    bool uses_local_ccd() const noexcept;
+    // Called after detecting full raw-direction candidates. Keeps raw history.
+    void   limit_local_ccd();
+    void   record_local_ccd_guard(Float fraction);
     IndexT max_iter() const noexcept { return m_max_iter; }
     Float  slope() const noexcept { return m_slope; }
     Json   frame_stats() const;
@@ -57,13 +67,19 @@ class MASPNCGSolver final : public SimSystem
     bool apply_preconditioner();
     void update_residual();
 
-    GlobalLinearSystem*           m_system    = nullptr;
-    FiniteElementMethod*          m_fem       = nullptr;
-    FEMLinearSubsystem*           m_subsystem = nullptr;
-    FEMMASPreconditioner*         m_mas       = nullptr;
-    FiniteElementVertexReporter*  m_vertices  = nullptr;
-    SimplexNormalContact*         m_simplex   = nullptr;
-    VertexHalfPlaneNormalContact* m_planes    = nullptr;
+    GlobalLinearSystem*             m_system          = nullptr;
+    FiniteElementMethod*            m_fem             = nullptr;
+    FEMLinearSubsystem*             m_subsystem       = nullptr;
+    FEMMASPreconditioner*           m_mas             = nullptr;
+    FiniteElementVertexReporter*    m_vertices        = nullptr;
+    SimplexNormalContact*           m_simplex         = nullptr;
+    VertexHalfPlaneNormalContact*   m_planes          = nullptr;
+    GlobalVertexManager*            m_global_vertices = nullptr;
+    GlobalSimplicialSurfaceManager* m_surface         = nullptr;
+    GlobalContactManager*           m_contact_manager = nullptr;
+    SimplexTrajectoryFilter*        m_trajectory      = nullptr;
+    HalfPlane*                      m_half_planes     = nullptr;
+    HalfPlaneVertexReporter*        m_plane_vertices  = nullptr;
 
     IndexT                                 m_max_iter          = 1024;
     IndexT                                 m_top_k             = 8;
@@ -75,6 +91,7 @@ class MASPNCGSolver final : public SimSystem
     Float                                  m_velocity_tol      = 0.05;
     std::string                            m_update_mode;
     std::string                            m_iteration_policy;
+    std::string                            m_ccd_mode;
     Float                                  m_preconditioned_tol = 1e-5;
     bool                                   m_use_fused          = true;
     bool                                   m_use_graph          = true;
@@ -106,10 +123,13 @@ class MASPNCGSolver final : public SimSystem
     cuda_tool::DeviceBCOOMatrix<Float, 3> m_base;
     cuda_tool::DeviceDenseVector<Float>   m_z, m_old_z, m_p, m_direction;
     cuda_tool::DeviceDenseVector<Float>   m_hz, m_hp;
-    Spmv                                  m_spmv;
-    cuda_tool::DeviceBuffer<Float>        m_lengths, m_eta0, m_residual_terms;
-    cuda_tool::DeviceBuffer<Float>        m_ratios, m_corrections;
-    cuda_tool::DeviceVar<Float>           m_sum, m_max;
+    cuda_tool::DeviceDenseVector<Float>   m_trial_direction;
+    cuda_tool::DeviceBuffer<Float>  m_domain_fractions, m_vertex_fractions;
+    cuda_tool::DeviceBuffer<IndexT> m_ccd_counts;
+    Spmv                            m_spmv;
+    cuda_tool::DeviceBuffer<Float>  m_lengths, m_eta0, m_residual_terms;
+    cuda_tool::DeviceBuffer<Float>  m_ratios, m_corrections;
+    cuda_tool::DeviceVar<Float>     m_sum, m_max;
     cuda_tool::DeviceBuffer<IPCNormalSurrogate> m_current, m_baseline, m_updates;
     cuda_tool::DeviceBuffer<IPCContactCurvature> m_curvatures, m_base_curvatures;
     cuda_tool::DeviceBuffer<unsigned long long> m_hash_in, m_hash, m_base_hash;

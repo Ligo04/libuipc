@@ -23,6 +23,67 @@ using ClusterMatrixSym  = MASPreconditionerEngine::ClusterMatrixSym;
 using ClusterMatrixSymF = MASPreconditionerEngine::ClusterMatrixSymF;
 using LevelTable        = MASPreconditionerEngine::LevelTable;
 using Int2              = MASPreconditionerEngine::Int2;
+using CaptureDiagnostic = MASPreconditionerEngine::CaptureDiagnostic;
+using CaptureStage      = MASPreconditionerEngine::CaptureStage;
+using CaptureReason     = MASPreconditionerEngine::CaptureReason;
+
+const char* CaptureDiagnostic::stage_name() const
+{
+    switch(stage)
+    {
+        case CaptureStage::None:
+            return "none";
+        case CaptureStage::Host:
+            return "host";
+        case CaptureStage::Level0:
+            return "level0";
+        case CaptureStage::Coarse:
+            return "coarse";
+        case CaptureStage::RealMapping:
+            return "real_mapping";
+        case CaptureStage::Unpartitioned:
+            return "unpartitioned";
+    }
+    return "unknown";
+}
+
+const char* CaptureDiagnostic::reason_name() const
+{
+    switch(reason)
+    {
+        case CaptureReason::None:
+            return "none";
+        case CaptureReason::Uninitialized:
+            return "uninitialized";
+        case CaptureReason::InvalidEpoch:
+            return "invalid_epoch";
+        case CaptureReason::InvalidPartitionSize:
+            return "invalid_partition_size";
+        case CaptureReason::InvalidMatrixSize:
+            return "invalid_matrix_size";
+        case CaptureReason::InvalidMappingSize:
+            return "invalid_mapping_size";
+        case CaptureReason::InvalidDiagonalSize:
+            return "invalid_diagonal_size";
+        case CaptureReason::MappingOutOfRange:
+            return "mapping_out_of_range";
+        case CaptureReason::MappingMismatch:
+            return "mapping_mismatch";
+        case CaptureReason::NonfiniteMatrix:
+            return "nonfinite_matrix";
+        case CaptureReason::ZeroScale:
+            return "zero_scale";
+        case CaptureReason::AsymmetricMatrix:
+            return "asymmetric_matrix";
+        case CaptureReason::CholeskyPivot:
+            return "cholesky_pivot";
+        case CaptureReason::NonfiniteFactor:
+            return "nonfinite_factor";
+        case CaptureReason::NonfiniteInverse:
+            return "nonfinite_inverse";
+    }
+    return "unknown";
+}
 
 // Device helper: bitmask with bits [0, lane_id) set
 UIPC_GENERIC unsigned int lanemask_lt(int lane_id)
@@ -1038,7 +1099,24 @@ namespace
         seg(2)   = static_cast<double>(cz.z);
     }
 
-    __device__ bool MASPreconditionerEngine_symmetrize48(double* A, double symmetry_tol)
+    __device__ bool capture_failure(CaptureDiagnostic& diagnostic,
+                                    CaptureReason      reason,
+                                    int                row,
+                                    int                column,
+                                    double             value,
+                                    double             threshold = 0.0)
+    {
+        diagnostic.reason    = reason;
+        diagnostic.row       = row;
+        diagnostic.column    = column;
+        diagnostic.value     = value;
+        diagnostic.threshold = threshold;
+        return false;
+    }
+
+    __device__ bool MASPreconditionerEngine_symmetrize48(double* A,
+                                                         double  symmetry_tol,
+                                                         CaptureDiagnostic& diagnostic)
     {
         constexpr int N     = BANKSIZE * 3;
         double        scale = 0.0;
@@ -1047,11 +1125,12 @@ namespace
             {
                 double v = A[i * N + j];
                 if(!isfinite(v))
-                    return false;
+                    return capture_failure(
+                        diagnostic, CaptureReason::NonfiniteMatrix, i, j, v);
                 scale = fmax(scale, fabs(v));
             }
         if(!(scale > 0.0))
-            return false;
+            return capture_failure(diagnostic, CaptureReason::ZeroScale, -1, -1, scale);
 
         for(int i = 0; i < N; ++i)
             for(int j = i + 1; j < N; ++j)
@@ -1059,16 +1138,23 @@ namespace
                 double a = A[i * N + j];
                 double b = A[j * N + i];
                 if(fabs(a - b) > symmetry_tol * scale)
-                    return false;
+                    return capture_failure(diagnostic,
+                                           CaptureReason::AsymmetricMatrix,
+                                           i,
+                                           j,
+                                           fabs(a - b),
+                                           symmetry_tol * scale);
                 A[i * N + j] = A[j * N + i] = 0.5 * (a + b);
             }
         return true;
     }
 
-    __device__ bool MASPreconditionerEngine_factor_spd48(double* A, double symmetry_tol)
+    __device__ bool MASPreconditionerEngine_factor_spd48(double* A,
+                                                         double  symmetry_tol,
+                                                         CaptureDiagnostic& diagnostic)
     {
         constexpr int N = BANKSIZE * 3;
-        if(!MASPreconditionerEngine_symmetrize48(A, symmetry_tol))
+        if(!MASPreconditionerEngine_symmetrize48(A, symmetry_tol, diagnostic))
             return false;
         double scale = 0.0;
         for(int i = 0; i < N; ++i)
@@ -1081,7 +1167,8 @@ namespace
             for(int j = 0; j < k; ++j)
                 pivot -= A[k * N + j] * A[k * N + j];
             if(!isfinite(pivot) || !(pivot > pivot_tol * scale))
-                return false;
+                return capture_failure(
+                    diagnostic, CaptureReason::CholeskyPivot, k, k, pivot, pivot_tol * scale);
             A[k * N + k] = sqrt(pivot);
             for(int i = k + 1; i < N; ++i)
             {
@@ -1090,7 +1177,8 @@ namespace
                     value -= A[i * N + j] * A[k * N + j];
                 value /= A[k * N + k];
                 if(!isfinite(value))
-                    return false;
+                    return capture_failure(
+                        diagnostic, CaptureReason::NonfiniteFactor, i, k, value);
                 A[i * N + k] = value;
             }
         }
@@ -1103,7 +1191,7 @@ namespace
         cuda_tool::CBufferView<int>              real_to_part,
         cuda_tool::BufferView<ClusterMatrixSym>  matrices,
         cuda_tool::BufferView<ClusterMatrixSym>  inverses,
-        cuda_tool::BufferView<IndexT>            status,
+        cuda_tool::BufferView<CaptureDiagnostic> diagnostics,
         int                                      real_vertex_count)
     {
         constexpr int     N      = BANKSIZE * 3;
@@ -1112,30 +1200,49 @@ namespace
         __shared__ double inverse[N * N];
         __shared__ int    valid;
         __shared__ int    symmetric_valid;
+        __shared__ int    first_inverse_failure;
+        // Only lane zero writes the domain record. Other lanes only reduce
+        // integer indices; publication happens after the block barrier.
+        auto& diagnostic = diagnostics(domain);
         if(threadIdx.x == 0)
-            valid = 1;
+        {
+            diagnostic            = {};
+            diagnostic.stage      = CaptureStage::Level0;
+            diagnostic.level      = 0;
+            diagnostic.domain     = domain;
+            valid                 = 1;
+            first_inverse_failure = N * N;
+            for(int local = 0; local < BANKSIZE; ++local)
+            {
+                int slot = domain * BANKSIZE + local;
+                int real = part_to_real(slot);
+                if(real < -1 || real >= real_vertex_count)
+                {
+                    diagnostic.index = slot;
+                    valid            = capture_failure(
+                        diagnostic, CaptureReason::MappingOutOfRange, -1, -1, real, real_vertex_count);
+                    break;
+                }
+                if(real >= 0 && real_to_part(real) != slot)
+                {
+                    diagnostic.index = slot;
+                    valid            = capture_failure(
+                        diagnostic, CaptureReason::MappingMismatch, -1, -1, real_to_part(real), slot);
+                    break;
+                }
+            }
+        }
         __syncthreads();
 
         for(int i = threadIdx.x; i < N * N; i += blockDim.x)
         {
-            int  row      = i / N;
-            int  col      = i % N;
-            int  row_slot = domain * BANKSIZE + row / 3;
-            int  col_slot = domain * BANKSIZE + col / 3;
-            int  row_real = part_to_real(row_slot);
-            int  col_real = part_to_real(col_slot);
-            bool row_pad  = row_real == -1;
-            bool col_pad  = col_real == -1;
-            if(row_real < -1 || row_real >= real_vertex_count || col_real < -1
-               || col_real >= real_vertex_count)
-                atomicExch(&valid, 0);
-            if(!row_pad && row_real >= 0 && row_real < real_vertex_count
-               && real_to_part(row_real) != row_slot)
-                atomicExch(&valid, 0);
-            if(!col_pad && col_real >= 0 && col_real < real_vertex_count
-               && real_to_part(col_real) != col_slot)
-                atomicExch(&valid, 0);
-            double value = 0.0;
+            int    row      = i / N;
+            int    col      = i % N;
+            int    row_slot = domain * BANKSIZE + row / 3;
+            int    col_slot = domain * BANKSIZE + col / 3;
+            bool   row_pad  = part_to_real(row_slot) == -1;
+            bool   col_pad  = part_to_real(col_slot) == -1;
+            double value    = 0.0;
             if(row_pad || col_pad)
                 value = row == col ? 1.0 : 0.0;
             else if(col / 3 >= row / 3)
@@ -1148,7 +1255,8 @@ namespace
 
         // Keep each stage's input flag read-only until the next block barrier.
         if(threadIdx.x == 0)
-            symmetric_valid = valid && MASPreconditionerEngine_symmetrize48(factor, 1e-10);
+            symmetric_valid =
+                valid && MASPreconditionerEngine_symmetrize48(factor, 1e-10, diagnostic);
         __syncthreads();
 
         // Keep the padded base matrix as well as its double inverse, so a
@@ -1163,14 +1271,11 @@ namespace
         }
         __syncthreads();
         if(threadIdx.x == 0)
-            valid = symmetric_valid && MASPreconditionerEngine_factor_spd48(factor, 1e-10);
+            valid = symmetric_valid
+                    && MASPreconditionerEngine_factor_spd48(factor, 1e-10, diagnostic);
         __syncthreads();
         if(!valid)
-        {
-            if(threadIdx.x == 0)
-                atomicExch(status.data(), IndexT{1});
             return;
-        }
 
         if(threadIdx.x < N)
         {
@@ -1190,11 +1295,17 @@ namespace
                     value -= factor[j * N + row] * solution[j];
                 solution[row] = value / factor[row * N + row];
                 if(!isfinite(solution[row]))
-                    atomicExch(status.data(), IndexT{1});
+                    atomicMin(&first_inverse_failure, row * N + col);
                 inverse[row * N + col] = solution[row];
             }
         }
         __syncthreads();
+        if(threadIdx.x == 0 && first_inverse_failure < N * N)
+            capture_failure(diagnostic,
+                            CaptureReason::NonfiniteInverse,
+                            first_inverse_failure / N,
+                            first_inverse_failure % N,
+                            inverse[first_inverse_failure]);
         for(int i = threadIdx.x; i < N * N; i += blockDim.x)
         {
             int row = i / N;
@@ -1207,8 +1318,10 @@ namespace
 
     __global__ void MASPreconditionerEngine_validate_coarse_kernel(
         cuda_tool::CBufferView<ClusterMatrixSymF> inverses,
-        cuda_tool::BufferView<IndexT>             status,
-        int                                       first_cluster)
+        cuda_tool::CBufferView<Int2>              level_sizes,
+        cuda_tool::BufferView<CaptureDiagnostic>  diagnostics,
+        int                                       first_cluster,
+        int                                       level_count)
     {
         constexpr int     N      = BANKSIZE * 3;
         int               domain = first_cluster + blockIdx.x;
@@ -1223,15 +1336,25 @@ namespace
                     inverses(domain).M[sym_index(col / 3, row / 3)](col % 3, row % 3);
         }
         __syncthreads();
-        if(threadIdx.x == 0 && !MASPreconditionerEngine_factor_spd48(matrix, 1e-6))
-            atomicExch(status.data(), IndexT{1});
+        if(threadIdx.x == 0)
+        {
+            auto& diagnostic  = diagnostics(blockIdx.x);
+            diagnostic        = {};
+            diagnostic.stage  = CaptureStage::Coarse;
+            diagnostic.domain = domain;
+            for(int level = 1; level < level_count; ++level)
+                if(domain * BANKSIZE >= level_sizes(level).y
+                   && domain * BANKSIZE < level_sizes(level + 1).y)
+                    diagnostic.level = level;
+            MASPreconditionerEngine_factor_spd48(matrix, 1e-6, diagnostic);
+        }
     }
 
     __global__ void MASPreconditionerEngine_validate_mapping_kernel(
-        cuda_tool::CBufferView<int>   real_to_part,
-        cuda_tool::CBufferView<int>   part_to_real,
-        cuda_tool::BufferView<IndexT> status,
-        int                           n)
+        cuda_tool::CBufferView<int> real_to_part,
+        cuda_tool::CBufferView<int> part_to_real,
+        cuda_tool::BufferView<int>  first_failure,
+        int                         n)
     {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if(i >= n)
@@ -1239,7 +1362,46 @@ namespace
         int slot = real_to_part(i);
         if(slot < -1 || slot >= static_cast<int>(part_to_real.size())
            || (slot >= 0 && part_to_real(slot) != i))
-            atomicExch(status.data(), IndexT{1});
+            atomicMin(first_failure.data(), i);
+    }
+
+    __global__ void MASPreconditionerEngine_select_diagnostic_kernel(
+        cuda_tool::CBufferView<CaptureDiagnostic> diagnostics,
+        cuda_tool::CBufferView<int>               real_to_part,
+        cuda_tool::CBufferView<int>               part_to_real,
+        cuda_tool::CBufferView<int>               mapping_failure,
+        cuda_tool::BufferView<CaptureDiagnostic>  selected,
+        cuda_tool::BufferView<IndexT>             status,
+        SizeT                                     epoch)
+    {
+        CaptureDiagnostic result;
+        result.epoch = epoch;
+        for(int i = 0; i < diagnostics.size(); ++i)
+            if(diagnostics(i).failed())
+            {
+                result       = diagnostics(i);
+                result.epoch = epoch;
+                break;
+            }
+        if(!result.failed() && mapping_failure(0) < real_to_part.size())
+        {
+            int i        = mapping_failure(0);
+            int slot     = real_to_part(i);
+            result.stage = CaptureStage::RealMapping;
+            result.index = i;
+            if(slot < -1 || slot >= static_cast<int>(part_to_real.size()))
+                capture_failure(result,
+                                CaptureReason::MappingOutOfRange,
+                                -1,
+                                -1,
+                                slot,
+                                part_to_real.size());
+            else
+                capture_failure(
+                    result, CaptureReason::MappingMismatch, -1, -1, part_to_real(slot), i);
+        }
+        selected(0) = result;
+        status(0)   = result.failed() ? IndexT{1} : IndexT{0};
     }
 
     __global__ void MASPreconditionerEngine_collect_frozen_coarse_kernel(
@@ -1863,25 +2025,61 @@ void MASPreconditionerEngine::apply(cuda_tool::CDenseVectorView<Float> r,
 
 bool MASPreconditionerEngine::capture_nonlinear_base(SizeT epoch)
 {
-    nonlinear_base_valid = false;
-    nonlinear_epoch      = invalid_epoch;
-    if(!m_initialized || epoch == invalid_epoch || m_total_map_nodes < 1
-       || m_total_map_nodes % BANKSIZE != 0)
+    nonlinear_base_valid       = false;
+    nonlinear_epoch            = invalid_epoch;
+    nonlinear_diagnostic       = {};
+    nonlinear_diagnostic.epoch = epoch;
+    auto fail = [&](CaptureStage stage, CaptureReason reason, double value = 0.0, double threshold = 0.0)
+    {
+        nonlinear_diagnostic.stage     = stage;
+        nonlinear_diagnostic.reason    = reason;
+        nonlinear_diagnostic.value     = value;
+        nonlinear_diagnostic.threshold = threshold;
         return false;
+    };
+    if(!m_initialized)
+        return fail(CaptureStage::Host, CaptureReason::Uninitialized);
+    if(epoch == invalid_epoch)
+        return fail(CaptureStage::Host, CaptureReason::InvalidEpoch);
+    if(m_total_map_nodes < 1 || m_total_map_nodes % BANKSIZE != 0)
+        return fail(CaptureStage::Host, CaptureReason::InvalidPartitionSize, m_total_map_nodes, BANKSIZE);
 
     int domain_count  = m_total_map_nodes / BANKSIZE;
     int cluster_count = m_total_num_clusters / BANKSIZE;
-    if(domain_count > cluster_hessians.size()
-       || cluster_count > cluster_inverses.size())
-        return false;
+    if(domain_count > cluster_hessians.size())
+        return fail(CaptureStage::Level0,
+                    CaptureReason::InvalidMatrixSize,
+                    cluster_hessians.size(),
+                    domain_count);
+    if(cluster_count > cluster_inverses.size())
+        return fail(CaptureStage::Coarse,
+                    CaptureReason::InvalidMatrixSize,
+                    cluster_inverses.size(),
+                    cluster_count);
+    if(part_to_real.size() < m_total_map_nodes)
+        return fail(CaptureStage::Level0,
+                    CaptureReason::InvalidMappingSize,
+                    part_to_real.size(),
+                    m_total_map_nodes);
+    if(real_to_part.size() < m_total_nodes)
+        return fail(CaptureStage::RealMapping,
+                    CaptureReason::InvalidMappingSize,
+                    real_to_part.size(),
+                    m_total_nodes);
 
+    int first_coarse =
+        bank_align(std::max(bank_align(m_total_map_nodes), m_total_nodes)) / BANKSIZE;
+    int coarse_count = cluster_count - first_coarse;
     nonlinear_base_matrices.resize_discard(domain_count);
     nonlinear_base_inverses.resize_discard(domain_count);
     nonlinear_coarse_inverses.resize_discard(cluster_count);
     nonlinear_part_to_real.resize_discard(m_total_map_nodes);
     nonlinear_real_to_part.resize_discard(m_total_nodes);
     nonlinear_status.resize_discard(1);
-    nonlinear_status.fill(IndexT{0});
+    nonlinear_diagnostics.resize_discard(domain_count + std::max(coarse_count, 0));
+    nonlinear_selected_diagnostic.resize_discard(1);
+    nonlinear_mapping_failure.resize_discard(1);
+    nonlinear_mapping_failure.fill(m_total_nodes);
     nonlinear_coarse_inverses.view().copy_from(cluster_inverses.cview(0, cluster_count));
     nonlinear_part_to_real.view().copy_from(part_to_real.cview(0, m_total_map_nodes));
     nonlinear_real_to_part.view().copy_from(real_to_part.cview(0, m_total_nodes));
@@ -1892,26 +2090,34 @@ bool MASPreconditionerEngine::capture_nonlinear_base(SizeT epoch)
         nonlinear_real_to_part.cview(),
         nonlinear_base_matrices.view(),
         nonlinear_base_inverses.view(),
-        nonlinear_status.view(),
+        nonlinear_diagnostics.view(0, domain_count),
         m_total_nodes);
 
-    int first_coarse =
-        bank_align(std::max(bank_align(m_total_map_nodes), m_total_nodes)) / BANKSIZE;
-    int coarse_count = cluster_count - first_coarse;
     if(coarse_count > 0)
         MASPreconditionerEngine_validate_coarse_kernel<<<coarse_count, 64>>>(
-            nonlinear_coarse_inverses.cview(), nonlinear_status.view(), first_coarse);
+            nonlinear_coarse_inverses.cview(),
+            level_sizes.cview(),
+            nonlinear_diagnostics.view(domain_count, coarse_count),
+            first_coarse,
+            m_level_num);
     auto mapping_kernel = MASPreconditionerEngine_validate_mapping_kernel;
     mapping_kernel<<<cuda_tool::best_grid_dim(m_total_nodes, mapping_kernel), cuda_tool::best_block_dim(mapping_kernel)>>>(
         nonlinear_real_to_part.cview(),
         nonlinear_part_to_real.cview(),
-        nonlinear_status.view(),
+        nonlinear_mapping_failure.view(),
         m_total_nodes);
+    MASPreconditionerEngine_select_diagnostic_kernel<<<1, 1>>>(
+        nonlinear_diagnostics.cview(),
+        nonlinear_real_to_part.cview(),
+        nonlinear_part_to_real.cview(),
+        nonlinear_mapping_failure.cview(),
+        nonlinear_selected_diagnostic.view(),
+        nonlinear_status.view(),
+        epoch);
     CUDA_TOOL_CHECK(cudaGetLastError());
-    IndexT failed = 1;
-    nonlinear_status.cview().copy_to(&failed);
+    nonlinear_selected_diagnostic.cview().copy_to(&nonlinear_diagnostic);
     CUDA_TOOL_CHECK(cudaStreamSynchronize(nullptr));
-    if(failed != 0)
+    if(nonlinear_diagnostic.failed())
         return false;
 
     nonlinear_domain_count = domain_count;

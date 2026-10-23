@@ -15,6 +15,10 @@ class FEMMASPreconditioner : public LocalPreconditioner
 
     bool capture_nonlinear_base(SizeT epoch);
     MASPreconditionerEngine::FrozenLevel0View nonlinear_base(SizeT expected_epoch) const;
+    const MASPreconditionerEngine::CaptureDiagnostic& nonlinear_capture_diagnostic() const
+    {
+        return m_nonlinear_diagnostic;
+    }
     // Operates on distinct FEM-local input/output slices on the default stream.
     // Excludes the Level-0 solve; unpartitioned entries use their captured fallback.
     void apply_frozen_coarse(SizeT                              epoch,
@@ -34,8 +38,10 @@ class FEMMASPreconditioner : public LocalPreconditioner
     bool  m_nonlinear_ready        = false;
     SizeT m_nonlinear_epoch        = MASPreconditionerEngine::invalid_epoch;
     int   m_nonlinear_vertex_count = 0;
-    cuda_tool::DeviceBuffer<Matrix3x3> nonlinear_diag_inv;
-    cuda_tool::DeviceBuffer<IndexT>    nonlinear_status;
+    cuda_tool::DeviceBuffer<Matrix3x3>         nonlinear_diag_inv;
+    cuda_tool::DeviceBuffer<IndexT>            nonlinear_status;
+    MASPreconditionerEngine::CaptureDiagnostic m_nonlinear_diagnostic;
+    cuda_tool::DeviceBuffer<MASPreconditionerEngine::CaptureDiagnostic> nonlinear_diagnostic;
 
     void do_build(BuildInfo& info) override;
     void do_init(InitInfo& info) override;

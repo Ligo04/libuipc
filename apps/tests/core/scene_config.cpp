@@ -39,7 +39,9 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
     REQUIRE(entries.at("nonlinear_system/solver").at("default") == "newton");
     REQUIRE(entries.at("nonlinear_system/solver").at("enum")
             == Json::array({"newton", "mas_pncg"}));
-    REQUIRE(entries.at("nonlinear_system/mas_pncg/ccd_mode").at("const") == "global");
+    REQUIRE(entries.at("nonlinear_system/mas_pncg/ccd_mode").at("default") == "global");
+    REQUIRE(entries.at("nonlinear_system/mas_pncg/ccd_mode").at("enum")
+            == Json::array({"global", "local_conservative"}));
     REQUIRE(entries.at("nonlinear_system/mas_pncg/iteration_policy").at("default") == "strict");
     REQUIRE(entries.at("nonlinear_system/mas_pncg/iteration_policy").at("enum")
             == Json::array({"strict", "paper"}));
@@ -149,6 +151,17 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
         config["nonlinear_system"]["mas_pncg"]["top_k"]    = 8;
         config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = "localized";
         REQUIRE_THROWS(Scene{config});
+    }
+
+    SECTION("Local conservative CCD requires the paper policy")
+    {
+        auto config = Scene::default_config();
+        config["nonlinear_system"]["solver"] = "mas_pncg";
+        auto& pncg = config["nonlinear_system"]["mas_pncg"];
+        pncg["ccd_mode"] = "local_conservative";
+        REQUIRE_THROWS(Scene{config});
+        pncg["iteration_policy"] = "paper";
+        REQUIRE_NOTHROW(Scene{config});
     }
 
     SECTION("MAS-PNCG policies preserve the linear solver selection")

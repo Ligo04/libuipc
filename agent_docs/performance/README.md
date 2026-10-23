@@ -22,6 +22,7 @@ when iteration counts change. Report both and state which is the primary signal.
 
 | Record | Status | Scope |
 |---|---|---|
+| [2026-10-23 MAS-PNCG local CCD](2026-10-23-mas-pncg-local-ccd.md) | Opt-in; large-scene OOM remains | Per-domain proposals plus actual-direction global CCD; focused tests pass; global diagnostic26/32 and local25/250 abort on CUDA allocation |
 | [2026-10-23 MAS-PNCG paper policy](2026-10-23-mas-pncg-paper-policy.md) | Integrated as opt-in; large-scene validation incomplete | Unit trial, delayed restart and fresh-preconditioner stopping; focused tests and sanitizer pass; Example88 repeat completes 31/250, then baseline validation fails |
 | [2026-10-23 MAS-PNCG mollified EE](2026-10-23-mas-pncg-mollified-ee.md) | Integrated; convergence limits remain | Full EE PSD curvature increments, focused CUDA/sanitizer checks, Example88 frame 24 passes; extended run stops at frame 47 |
 | [2026-10-22 MAS-PNCG fused kernels](2026-10-22-mas-pncg-fused-kernels.md) | Accepted with limits | Fused reductions/history, device direct subspace solve, graph replay; three-run Example88 20-frame prefix, focused CUDA and sanitizer validation |

@@ -310,8 +310,10 @@ def _assert_mas_pncg_paper_stats(stats, fused, graph):
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
 @pytest.mark.parametrize("fixed", [False, True])
 @pytest.mark.parametrize("fused,graph", [(0, 0), (1, 0), (1, 1)])
-def test_mas_pncg_paper_preserves_resting_and_fixed_states(tmp_path, fixed, fused, graph):
+@pytest.mark.parametrize("ccd_mode", ["global", "local_conservative"])
+def test_mas_pncg_paper_preserves_resting_and_fixed_states(tmp_path, fixed, fused, graph, ccd_mode):
     config = _mas_pncg_paper_config(fused, graph)
+    config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = ccd_mode
     config["contact"]["enable"] = False
     if not fixed:
         config["gravity"] = [[0.0], [0.0], [0.0]]
@@ -384,10 +386,12 @@ def _paper_tet_plane(scene):
 
 @pytest.mark.cuda
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
-def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path):
+@pytest.mark.parametrize("ccd_mode", ["global", "local_conservative"])
+def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path, ccd_mode):
     trajectories = {}
     for fused, graph in ((0, 0), (1, 0), (1, 1)):
         config = _mas_pncg_paper_config(fused, graph)
+        config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = ccd_mode
         config["contact"]["d_hat"] = 0.01
         config["contact"]["d_hat_relative"] = 0.0
         pncg = config["nonlinear_system"]["mas_pncg"]
@@ -434,8 +438,10 @@ def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path):
 @pytest.mark.cuda
 @pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
 @pytest.mark.parametrize("fused,graph", [(0, 0), (1, 0), (1, 1)])
-def test_mas_pncg_paper_budget_exhaustion_is_not_convergence(tmp_path, fused, graph):
+@pytest.mark.parametrize("ccd_mode", ["global", "local_conservative"])
+def test_mas_pncg_paper_budget_exhaustion_is_not_convergence(tmp_path, fused, graph, ccd_mode):
     config = _mas_pncg_paper_config(fused, graph)
+    config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = ccd_mode
     config["contact"]["d_hat"] = 0.01
     config["contact"]["d_hat_relative"] = 0.0
     config["nonlinear_system"]["mas_pncg"]["max_iter"] = 1
@@ -455,3 +461,60 @@ def test_mas_pncg_paper_budget_exhaustion_is_not_convergence(tmp_path, fused, gr
     assert stats["hit_newton_limit"]
     assert stats["accepted_steps"] == stats["nonlinear_iterations"] == 1
     assert stats["preconditioned_gradient_norm"] > 1e-30
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
+def test_mas_pncg_local_ccd_keeps_unconstrained_domain_full_step(tmp_path):
+    trajectories = {}
+    for fused, graph in ((0, 0), (1, 0), (1, 1)):
+        config = _mas_pncg_paper_config(fused, graph)
+        config["contact"]["d_hat"] = 0.001
+        config["contact"]["d_hat_relative"] = 0.0
+        config["nonlinear_system"]["mas_pncg"]["ccd_mode"] = "local_conservative"
+        scene = Scene(config)
+        scene.contact_tabular().default_model(0.0, 1e4)
+        slots = []
+        for name, position in (("near", [0, 0.006, 0]), ("far", [1, 0.5, 0])):
+            vertices = np.array([[0, 0, 0], [0.1, 0, 0],
+                                 [0, 0.1, 0], [0, 0, 0.1]]) + position
+            mesh = tetmesh(vertices, np.array([[0, 1, 2, 3]], dtype=np.int32))
+            label_surface(mesh)
+            label_triangle_orient(mesh)
+            StableNeoHookean().apply_to(
+                mesh, ElasticModuli.youngs_poisson(1e4, 0.3), mass_density=1000.0
+            )
+            view(mesh.vertices().find(builtin.velocity))[:] = [[0.0], [-1.0], [0.0]]
+            slot, _ = scene.objects().create(name).geometries().create(mesh)
+            slots.append(slot)
+        scene.objects().create("floor").geometries().create(ground(0))
+        engine = Engine("cuda", str(tmp_path / f"local-domains-{fused}-{graph}"))
+        world = World(engine)
+        world.init(scene)
+        assert world.is_valid()
+        frames = []
+        clamped = 0
+        for _ in range(3):
+            world.advance()
+            stats = engine.frame_stats()
+            assert world.is_valid(), stats
+            _assert_mas_pncg_paper_stats(stats, fused, graph)
+            assert stats["completed"] and stats["converged"], stats
+            assert stats["ccd_mode"] == "local_conservative"
+            assert stats["local_ccd_steps"] > 0
+            assert stats["local_ccd_last_max_fraction"] == 1
+            clamped += stats["local_ccd_clamped_vertices"]
+            world.retrieve()
+            positions = np.concatenate([
+                np.array(slot.geometry().positions().view()).reshape(-1, 3)
+                for slot in slots
+            ])
+            assert np.isfinite(positions).all()
+            assert (positions[:, 1] > 0).all()
+            frames.append(positions)
+        assert clamped > 0
+        trajectories[(fused, graph)] = np.stack(frames)
+    for mode in ((1, 0), (1, 1)):
+        np.testing.assert_allclose(
+            trajectories[mode], trajectories[(0, 0)], atol=1e-7, rtol=0
+        )

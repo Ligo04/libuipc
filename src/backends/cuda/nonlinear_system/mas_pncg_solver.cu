@@ -2,6 +2,7 @@
 #include <nonlinear_system/mas_pncg_math.h>
 #include <nonlinear_system/mas_pncg_kernels.h>
 #include <nonlinear_system/mas_pncg_fused.h>
+#include <nonlinear_system/mas_pncg_local_ccd.h>
 #include <linear_system/global_linear_system.h>
 #include <finite_element/fem_linear_subsystem.h>
 #include <finite_element/fem_mas_preconditioner.h>
@@ -10,6 +11,12 @@
 #include <affine_body/affine_body_dynamics.h>
 #include <contact_system/simplex_normal_contact.h>
 #include <contact_system/vertex_half_plane_normal_contact.h>
+#include <contact_system/global_contact_manager.h>
+#include <collision_detection/simplex_trajectory_filter.h>
+#include <global_geometry/global_vertex_manager.h>
+#include <global_geometry/global_simplicial_surface_manager.h>
+#include <implicit_geometry/half_plane.h>
+#include <implicit_geometry/half_plane_vertex_reporter.h>
 #include <sim_engine.h>
 #include <cmath>
 #include <limits>
@@ -62,6 +69,19 @@ void MASPNCGSolver::do_build()
     m_velocity_tol = value("nonlinear_system/mas_pncg/velocity_tol");
     m_iteration_policy =
         config.find<std::string>("nonlinear_system/mas_pncg/iteration_policy")->view()[0];
+    m_ccd_mode =
+        config.find<std::string>("nonlinear_system/mas_pncg/ccd_mode")->view()[0];
+    if(uses_local_ccd())
+    {
+        if(m_iteration_policy != "paper")
+            throw SimEngineException("Local conservative CCD requires MAS-PNCG paper policy.");
+        m_global_vertices = &require<GlobalVertexManager>();
+        m_surface         = &require<GlobalSimplicialSurfaceManager>();
+        m_contact_manager = find<GlobalContactManager>();
+        m_trajectory = find<SimplexTrajectoryFilter>(QueryOptions{.exact = false});
+        m_half_planes    = find<HalfPlane>();
+        m_plane_vertices = find<HalfPlaneVertexReporter>();
+    }
     m_preconditioned_tol = value("nonlinear_system/mas_pncg/preconditioned_gradient_tol");
     m_restart_threshold = value("nonlinear_system/mas_pncg/restart_threshold");
     m_cos_rotation = std::cos(value("nonlinear_system/mas_pncg/rotation_deg")
@@ -73,9 +93,10 @@ void MASPNCGSolver::do_build()
     if(m_use_fused)
         m_fused = std::make_unique<pncg::FusedOperations>();
     on_init_scene([this] { validate_capabilities(); });
-    logger::info("Nonlinear solver: MAS-PNCG ({}, {} policy, FEM MAS, global CCD); Newton/PCG settings are inactive.",
+    logger::info("Nonlinear solver: MAS-PNCG ({}, {} policy, FEM MAS, {} CCD); Newton/PCG settings are inactive.",
                  m_update_mode,
-                 m_iteration_policy);
+                 m_iteration_policy,
+                 m_ccd_mode);
 }
 
 void MASPNCGSolver::begin_frame()
@@ -111,7 +132,17 @@ void MASPNCGSolver::begin_frame()
                    {"contact_update_columns", 0},
                    {"rejected_trials", 0},
                    {"nonfinite_trials", 0},
-                   {"ccd_mode", "global"},
+                   {"ccd_mode", m_ccd_mode},
+                   {"local_ccd_steps", 0},
+                   {"local_ccd_candidate_pairs", 0},
+                   {"local_ccd_pair_fallbacks", 0},
+                   {"local_ccd_clamped_vertices", 0},
+                   {"local_ccd_non_descent_steps", 0},
+                   {"local_ccd_min_fraction", 1.0},
+                   {"local_ccd_last_max_fraction", 1.0},
+                   {"local_ccd_last_actual_slope", 0.0},
+                   {"local_ccd_global_guard_reductions", 0},
+                   {"local_ccd_min_global_guard_fraction", 1.0},
                    {"gradient_initial", 0.0},
                    {"gradient_final", 0.0},
                    {"max_local_residual_ratio", 0.0}};
@@ -188,6 +219,131 @@ void MASPNCGSolver::begin_frame()
         vector->resize_discard(n);
     m_p.fill(0);
     m_old_z.fill(0);
+    if(uses_local_ccd())
+    {
+        m_trial_direction.resize_discard(n);
+        resize_output(m_vertex_fractions, fem.xs.size());
+        m_ccd_counts.resize_discard(3);
+    }
+}
+
+bool MASPNCGSolver::uses_local_ccd() const noexcept
+{
+    return m_ccd_mode == "local_conservative";
+}
+
+void MASPNCGSolver::limit_local_ccd()
+{
+    Timer      timer{"MAS-PNCG Local Conservative CCD"};
+    const auto base = m_mas->nonlinear_base(m_epoch);
+    UIPC_ASSERT(base.valid(), "Local CCD requires a current MAS partition snapshot.");
+    resize_output(m_domain_fractions, base.domain_count + base.real_vertex_count);
+    m_domain_fractions.fill(1);
+    m_ccd_counts.fill(0);
+    const auto positions     = m_global_vertices->positions();
+    const auto displacements = m_global_vertices->displacements();
+    const auto thicknesses   = m_global_vertices->thicknesses();
+    const auto vertices      = m_surface->surf_vertices();
+    const auto edges         = m_surface->surf_edges();
+    const auto triangles     = m_surface->surf_triangles();
+    if(m_trajectory)
+    {
+        constexpr Float eta = 0.1;  // Native standard IPC simplex safety margin.
+        auto launch_pairs = [&](auto kernel, auto pairs)
+        {
+            int n = pairs.size();
+            if(n)
+                kernel<<<cuda_tool::best_grid_dim(n, kernel), cuda_tool::best_block_dim(kernel)>>>(
+                    pairs,
+                    vertices,
+                    edges,
+                    triangles,
+                    positions,
+                    displacements,
+                    thicknesses,
+                    base,
+                    m_fem->is_fixed(),
+                    m_domain_fractions.view(),
+                    m_ccd_counts.view(),
+                    m_vertex_offset,
+                    eta);
+            increment(m_stats, "local_ccd_candidate_pairs", n);
+        };
+        launch_pairs(pncg::local_ccd_pairs_kernel<true>, m_trajectory->candidate_PTs());
+        launch_pairs(pncg::local_ccd_pairs_kernel<false>, m_trajectory->candidate_EEs());
+    }
+    if(m_half_planes && m_plane_vertices && m_contact_manager && vertices.size())
+    {
+        auto kernel = pncg::local_ccd_planes_kernel;
+        kernel<<<cuda_tool::best_grid_dim(vertices.size(), kernel), cuda_tool::best_block_dim(kernel)>>>(
+            vertices,
+            positions,
+            displacements,
+            thicknesses,
+            m_global_vertices->contact_element_ids(),
+            m_global_vertices->subscene_element_ids(),
+            m_contact_manager->contact_mask_tabular().viewer(),
+            m_contact_manager->subscene_mask_tabular().viewer(),
+            m_half_planes->positions(),
+            m_half_planes->normals(),
+            base,
+            m_fem->is_fixed(),
+            m_domain_fractions.view(),
+            m_ccd_counts.view(),
+            m_vertex_offset,
+            m_plane_vertices->vertex_offset());
+    }
+    if(base.real_vertex_count)
+    {
+        auto kernel = pncg::local_ccd_scale_kernel;
+        kernel<<<cuda_tool::best_grid_dim(base.real_vertex_count, kernel), cuda_tool::best_block_dim(kernel)>>>(
+            m_direction.cview(),
+            m_trial_direction.view(),
+            base,
+            m_fem->is_fixed(),
+            m_domain_fractions.cview(),
+            m_vertex_fractions.view(),
+            m_ccd_counts.view());
+        cuda_tool::DeviceReduce().Min(m_vertex_fractions.data(), m_sum.data(), base.real_vertex_count);
+        cuda_tool::DeviceReduce().Max(m_vertex_fractions.data(), m_max.data(), base.real_vertex_count);
+    }
+    else
+    {
+        m_sum = 1;
+        m_max = 1;
+    }
+    IndexT counts[3] = {};
+    m_ccd_counts.cview().copy_to(counts);
+    const Float min_fraction = m_sum;
+    const Float max_fraction = m_max;
+    increment(m_stats, "local_ccd_steps");
+    increment(m_stats, "local_ccd_pair_fallbacks", counts[0]);
+    increment(m_stats, "local_ccd_clamped_vertices", counts[1]);
+    m_stats["local_ccd_min_fraction"] =
+        std::min(m_stats["local_ccd_min_fraction"].get<Float>(), min_fraction);
+    m_stats["local_ccd_last_max_fraction"] = max_fraction;
+    if(counts[2] || !std::isfinite(min_fraction) || min_fraction <= 0)
+        throw SimEngineException("MAS-PNCG local CCD has no positive finite candidate step.");
+    // Preserve raw m_direction for Algorithm 1's history. All actual motion
+    // consumers receive the separate trial through the normal FEM scatter.
+    m_slope = m_system->ctx().dot(m_system->nonlinear_gradient(),
+                                  m_trial_direction.cview());
+    if(!std::isfinite(m_slope))
+        throw SimEngineException("MAS-PNCG local CCD produced a nonfinite directional derivative.");
+    m_stats["local_ccd_last_actual_slope"] = m_slope;
+    if(m_slope >= 0)
+        increment(m_stats, "local_ccd_non_descent_steps");
+    m_system->scatter_nonlinear_direction(m_trial_direction.cview());
+}
+
+void MASPNCGSolver::record_local_ccd_guard(Float fraction)
+{
+    if(!uses_local_ccd())
+        return;
+    if(fraction < 1)
+        increment(m_stats, "local_ccd_global_guard_reductions");
+    m_stats["local_ccd_min_global_guard_fraction"] =
+        std::min(m_stats["local_ccd_min_global_guard_fraction"].get<Float>(), fraction);
 }
 
 void MASPNCGSolver::validate_capabilities()
@@ -338,7 +494,29 @@ bool MASPNCGSolver::evaluate(bool rebuild)
         m_base.col_indices().copy_from(matrix.col_indices());
         m_base.values().copy_from(matrix.values());
         if(!m_mas->capture_nonlinear_base(++m_epoch))
-            throw SimEngineException("MAS-PNCG could not capture an SPD double MAS baseline.");
+        {
+            const auto& diagnostic = m_mas->nonlinear_capture_diagnostic();
+            m_stats["baseline_capture_failure"] = {{"stage", diagnostic.stage_name()},
+                                                   {"reason", diagnostic.reason_name()},
+                                                   {"epoch", diagnostic.epoch},
+                                                   {"level", diagnostic.level},
+                                                   {"domain", diagnostic.domain},
+                                                   {"index", diagnostic.index},
+                                                   {"row", diagnostic.row},
+                                                   {"column", diagnostic.column},
+                                                   {"value", diagnostic.value},
+                                                   {"threshold", diagnostic.threshold}};
+            throw SimEngineException(fmt::format("MAS-PNCG could not capture an SPD double MAS baseline: stage={}, reason={}, level={}, domain={}, index={}, row={}, column={}, value={}, threshold={}.",
+                                                 diagnostic.stage_name(),
+                                                 diagnostic.reason_name(),
+                                                 diagnostic.level,
+                                                 diagnostic.domain,
+                                                 diagnostic.index,
+                                                 diagnostic.row,
+                                                 diagnostic.column,
+                                                 diagnostic.value,
+                                                 diagnostic.threshold));
+        }
         export_contacts();
         capture_contacts();
         m_have_history = false;

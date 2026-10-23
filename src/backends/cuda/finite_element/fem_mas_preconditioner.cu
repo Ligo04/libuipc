@@ -19,7 +19,10 @@ namespace uipc::backend::cuda
 {
 namespace
 {
-    namespace eigen = cuda_tool::eigen;
+    namespace eigen         = cuda_tool::eigen;
+    using CaptureDiagnostic = MASPreconditionerEngine::CaptureDiagnostic;
+    using CaptureStage      = MASPreconditionerEngine::CaptureStage;
+    using CaptureReason     = MASPreconditionerEngine::CaptureReason;
 
     __global__ void assemble_diag_inv_for_unpartitioned_kernel(
         cuda_tool::CBCOOMatrixView<Float, 3> triplet,
@@ -64,31 +67,30 @@ namespace
         }
     }
 
-    __global__ void FEMMASPreconditioner_validate_nonlinear_diag_kernel(
-        cuda_tool::CBufferView<Matrix3x3> inverses,
-        cuda_tool::CBufferView<int>       unpartitioned,
-        cuda_tool::BufferView<IndexT>     status,
-        int                               n)
+    __device__ CaptureDiagnostic diagnose_nonlinear_diagonal(const Matrix3x3& A, int i)
     {
-        int i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i >= n || unpartitioned(i) != 1)
-            return;
-        const auto& A     = inverses(i);
-        double      scale = 0.0;
+        CaptureDiagnostic result;
+        result.stage = CaptureStage::Unpartitioned;
+        result.index = i;
+        double scale = 0.0;
         for(int row = 0; row < 3; ++row)
             for(int col = 0; col < 3; ++col)
             {
                 if(!isfinite(A(row, col)))
                 {
-                    atomicExch(status.data(), IndexT{1});
-                    return;
+                    result.reason = CaptureReason::NonfiniteMatrix;
+                    result.row    = row;
+                    result.column = col;
+                    result.value  = A(row, col);
+                    return result;
                 }
                 scale = fmax(scale, fabs(A(row, col)));
             }
         if(!(scale > 0.0))
         {
-            atomicExch(status.data(), IndexT{1});
-            return;
+            result.reason = CaptureReason::ZeroScale;
+            result.value  = scale;
+            return result;
         }
         double L[3][3] = {};
         for(int row = 0; row < 3; ++row)
@@ -96,8 +98,12 @@ namespace
             {
                 if(fabs(A(row, col) - A(col, row)) > 1e-10 * scale)
                 {
-                    atomicExch(status.data(), IndexT{1});
-                    return;
+                    result.reason    = CaptureReason::AsymmetricMatrix;
+                    result.row       = row;
+                    result.column    = col;
+                    result.value     = fabs(A(row, col) - A(col, row));
+                    result.threshold = 1e-10 * scale;
+                    return result;
                 }
                 double value = 0.5 * (A(row, col) + A(col, row));
                 for(int k = 0; k < col; ++k)
@@ -106,14 +112,47 @@ namespace
                 {
                     if(!isfinite(value) || !(value > 1e-14 * scale))
                     {
-                        atomicExch(status.data(), IndexT{1});
-                        return;
+                        result.reason    = CaptureReason::CholeskyPivot;
+                        result.row       = row;
+                        result.column    = col;
+                        result.value     = value;
+                        result.threshold = 1e-14 * scale;
+                        return result;
                     }
                     L[row][col] = sqrt(value);
                 }
                 else
                     L[row][col] = value / L[col][col];
             }
+        return result;
+    }
+
+    __global__ void FEMMASPreconditioner_validate_nonlinear_diag_kernel(
+        cuda_tool::CBufferView<Matrix3x3> inverses,
+        cuda_tool::CBufferView<int>       unpartitioned,
+        cuda_tool::BufferView<IndexT>     first_failure,
+        int                               n)
+    {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if(i >= n || unpartitioned(i) != 1)
+            return;
+        if(diagnose_nonlinear_diagonal(inverses(i), i).failed())
+            atomicMin(first_failure.data(), static_cast<IndexT>(i));
+    }
+
+    __global__ void FEMMASPreconditioner_select_nonlinear_diag_kernel(
+        cuda_tool::CBufferView<Matrix3x3>        inverses,
+        cuda_tool::CBufferView<IndexT>           first_failure,
+        cuda_tool::BufferView<CaptureDiagnostic> selected,
+        SizeT                                    epoch,
+        int                                      n)
+    {
+        CaptureDiagnostic result;
+        int               i = first_failure(0);
+        if(i < n)
+            result = diagnose_nonlinear_diagonal(inverses(i), i);
+        result.epoch = epoch;
+        selected(0)  = result;
     }
 
     __global__ void FEMMASPreconditioner_apply_nonlinear_diag_kernel(
@@ -519,21 +558,51 @@ void FEMMASPreconditioner::do_apply(GlobalLinearSystem::ApplyPreconditionerInfo&
 
 bool FEMMASPreconditioner::capture_nonlinear_base(SizeT epoch)
 {
-    m_nonlinear_ready = false;
-    m_nonlinear_epoch = MASPreconditionerEngine::invalid_epoch;
+    m_nonlinear_ready            = false;
+    m_nonlinear_epoch            = MASPreconditionerEngine::invalid_epoch;
+    m_nonlinear_diagnostic       = {};
+    m_nonlinear_diagnostic.epoch = epoch;
     if(epoch == MASPreconditionerEngine::invalid_epoch)
+    {
+        m_nonlinear_diagnostic.stage  = CaptureStage::Host;
+        m_nonlinear_diagnostic.reason = CaptureReason::InvalidEpoch;
         return false;
+    }
+    if(!finite_element_method)
+    {
+        m_nonlinear_diagnostic.stage  = CaptureStage::Host;
+        m_nonlinear_diagnostic.reason = CaptureReason::Uninitialized;
+        return false;
+    }
     m_nonlinear_vertex_count = static_cast<int>(finite_element_method->xs().size());
     if(m_has_partition && !engine.capture_nonlinear_base(epoch))
+    {
+        m_nonlinear_diagnostic = engine.nonlinear_capture_diagnostic();
         return false;
+    }
     if(m_has_unpartitioned)
     {
         if(diag_inv.size() != m_nonlinear_vertex_count)
+        {
+            m_nonlinear_diagnostic.stage  = CaptureStage::Unpartitioned;
+            m_nonlinear_diagnostic.reason = CaptureReason::InvalidDiagonalSize;
+            m_nonlinear_diagnostic.value  = diag_inv.size();
+            m_nonlinear_diagnostic.threshold = m_nonlinear_vertex_count;
             return false;
+        }
+        if(unpartitioned_flags.size() < m_nonlinear_vertex_count)
+        {
+            m_nonlinear_diagnostic.stage  = CaptureStage::Unpartitioned;
+            m_nonlinear_diagnostic.reason = CaptureReason::InvalidMappingSize;
+            m_nonlinear_diagnostic.value  = unpartitioned_flags.size();
+            m_nonlinear_diagnostic.threshold = m_nonlinear_vertex_count;
+            return false;
+        }
         nonlinear_diag_inv.resize_discard(diag_inv.size());
         nonlinear_diag_inv.view().copy_from(diag_inv.cview());
         nonlinear_status.resize_discard(1);
-        nonlinear_status.fill(IndexT{0});
+        nonlinear_status.fill(static_cast<IndexT>(m_nonlinear_vertex_count));
+        nonlinear_diagnostic.resize_discard(1);
         int n = m_nonlinear_vertex_count;
         if(n > 0)
         {
@@ -544,11 +613,16 @@ bool FEMMASPreconditioner::capture_nonlinear_base(SizeT epoch)
                 nonlinear_status.view(),
                 n);
         }
+        FEMMASPreconditioner_select_nonlinear_diag_kernel<<<1, 1>>>(
+            nonlinear_diag_inv.cview(),
+            nonlinear_status.cview(),
+            nonlinear_diagnostic.view(),
+            epoch,
+            n);
         CUDA_TOOL_CHECK(cudaGetLastError());
-        IndexT failed = 1;
-        nonlinear_status.cview().copy_to(&failed);
+        nonlinear_diagnostic.cview().copy_to(&m_nonlinear_diagnostic);
         CUDA_TOOL_CHECK(cudaStreamSynchronize(nullptr));
-        if(failed != 0)
+        if(m_nonlinear_diagnostic.failed())
             return false;
     }
     else
