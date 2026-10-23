@@ -153,6 +153,10 @@ record it here in the same commit.**
   solver selection through Scene config, analogous to the existing fused-PCG
   selector. Keep the default Newton configuration unchanged.
 
+- 2026-10-23 MAS-PNCG alignment: use arXiv:2604.19892v1 for the trial step,
+  restart timing and stopping criterion. Retain direct local solves and reuse
+  fused reductions, vector updates and CUDA Graph execution for PNCG itself.
+
 - 2026-10-03 audit follow-up: prioritize the fourth proposed stage, a matching
   source/runtime performance baseline followed by measured optimizations. Defer
   the first three audit-remediation stages; do not fold their correctness,

@@ -1,5 +1,20 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
+MAS-PNCG paper policy (2026-10-23): the opt-in `iteration_policy="paper"`
+aligns the unit trial, next-iteration orthogonality restart and fresh-rebuild
+preconditioned-gradient termination with Algorithm 1 of arXiv:2604.19892v1.
+The default `strict` policy retains Armijo and independent residual stopping.
+Both policies retain global CCD; per-subdomain conservative CCD remains open.
+Focused configuration, operator and runtime tests plus operator sanitizer pass.
+Example88 has not passed the full 250-frame run: the initial paper-policy
+attempts completed 26 frames, then failed allocating collision-candidate buffers.
+A later repeat with no competing compute application in 66 monitoring samples
+completed 31 frames and failed MAS baseline validation at frame 32, without
+OOM or budget exhaustion. The aggregate validation flag does not identify the
+failing level/domain or distinguish numerical, mapping and capacity checks.
+See the [paper-policy evidence](performance/2026-10-23-mas-pncg-paper-policy.md)
+for the latest repeat, source hashes and exact validation boundaries.
+
 MAS-PNCG initial native implementation (2026-10-21): select through
 `nonlinear_system/solver="mas_pncg"`; Newton/fused-PCG defaults are unchanged.
 The FEM implementation provides immutable MAS/base snapshots, baseline-relative

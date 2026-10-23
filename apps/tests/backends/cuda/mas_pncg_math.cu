@@ -482,3 +482,27 @@ TEST_CASE("MAS-PNCG local residuals ignore fixed and unrelated vertices", "[cuda
     REQUIRE(small[1] == extended[1]);
 }
 }  // namespace
+
+namespace
+{
+TEST_CASE("MAS-PNCG zero-gradient detection preserves nonzero components below norm resolution",
+          "[cuda][mas_pncg][paper]")
+{
+    ct::DeviceDenseVector<Float> gradient;
+    gradient.resize_discard(6);
+    std::vector<Float> values{0, 0, 0, 1e-170, 0, 0};
+    gradient.buffer_view().copy_from(values.data());
+    std::vector<IndexT>   flags{0, 0};
+    auto                  fixed = upload(flags);
+    ct::DeviceVar<IndexT> nonzero(0);
+    pncg::nonzero_gradient_kernel<<<1, 32>>>(
+        gradient.cview(), fixed.cview(), nonzero.view());
+    REQUIRE(static_cast<IndexT>(nonzero) == 1);
+    flags[1] = 1;
+    fixed.view().copy_from(flags.data());
+    nonzero = 0;
+    pncg::nonzero_gradient_kernel<<<1, 32>>>(
+        gradient.cview(), fixed.cview(), nonzero.view());
+    REQUIRE(static_cast<IndexT>(nonzero) == 0);
+}
+}  // namespace

@@ -127,6 +127,23 @@ calling a run graph-enabled. A failed capture falls back to the same uncaptured
 kernels. This does not capture the entire nonlinear iteration or remove all
 host/device synchronization.
 
+The iteration policy is selectable independently:
+
+```python
+config["nonlinear_system"]["mas_pncg"]["iteration_policy"] = "paper"
+config["nonlinear_system"]["mas_pncg"]["preconditioned_gradient_tol"] = 1e-5
+```
+
+The default `strict` policy retains Armijo and independent residual convergence.
+The optional `paper` policy follows MAS-PNCG Algorithm 1: unit initial trial,
+CCD restriction, next-iteration orthogonality restart, and a fresh-rebuild
+preconditioned-gradient norm test after accepting the step. Check
+`convergence_criterion`, `convergence_checked_on_rebuild` and
+`independent_residual_converged`. Global CCD remains the implemented collision
+mode. Set the existing `max_base_age=0` to disable additional periodic rebuilds.
+See the [paper-policy record](performance/2026-10-23-mas-pncg-paper-policy.md)
+for the paper/source audit, exact scope, tests and Example88 results.
+
 The operator tests include independent CPU residual/direction oracles, graph
 replay after producer updates, allocation/shape/scalar invalidation, and the
 one-dimensional fallback when historical curvature overflows. The Python

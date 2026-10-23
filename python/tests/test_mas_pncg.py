@@ -84,6 +84,9 @@ def test_mas_pncg_config_and_animated_force_clear(tmp_path, update_mode, materia
         stats = engine.frame_stats()
         assert stats["completed"] and stats["converged"]
         assert stats["nonlinear_solver"] == "mas_pncg"
+        assert stats["iteration_policy"] == "strict"
+        assert stats["independent_residual_converged"]
+        assert stats["convergence_criterion"] == "independent_residual"
         assert stats["update_mode"] == update_mode
         assert stats["newton_iterations"] == stats["linear_solver_iterations"] == 0
         assert stats["max_local_residual_ratio"] <= 1
@@ -173,7 +176,7 @@ def test_mas_pncg_mollified_edge_contacts_preserve_incremental_history(tmp_path)
     moving_vertices = np.array([[-0.5, 0.2, 0.01], [0.5, 0.2, -0.01], [0.0, 0.5, 0.0]])
     for fused, graph in ((0, 0), (1, 0), (1, 1)):
         config = Scene.default_config()
-        config["gravity"] = [0.0, 0.0, 0.0]
+        config["gravity"] = [[0.0], [0.0], [0.0]]
         config["contact"]["d_hat"] = 0.3
         config["contact"]["d_hat_relative"] = 0.0
         config["nonlinear_system"]["solver"] = "mas_pncg"
@@ -268,3 +271,187 @@ def test_mas_pncg_keeps_newton_mas_selection_available(tmp_path, linear_solver):
         positions = np.array(slot.geometry().positions().view()).reshape(-1, 3)
         expected = initial + [0, -0.00098 * frame * (frame + 1) / 2, 0]
         np.testing.assert_allclose(positions, expected, atol=1e-8, rtol=0)
+
+
+def _mas_pncg_paper_config(fused, graph):
+    config = Scene.default_config()
+    config["nonlinear_system"]["solver"] = "mas_pncg"
+    pncg = config["nonlinear_system"]["mas_pncg"]
+    pncg["iteration_policy"] = "paper"
+    pncg["use_fused_kernels"] = fused
+    pncg["use_cuda_graph"] = graph
+    return config
+
+
+def _assert_mas_pncg_paper_stats(stats, fused, graph):
+    assert stats["nonlinear_solver"] == "mas_pncg"
+    assert stats["iteration_policy"] == "paper"
+    assert stats["newton_iterations"] == stats["linear_solver_iterations"] == 0
+    assert stats["fused_kernels"] == bool(fused)
+    assert stats["cuda_graph_enabled"] == bool(graph)
+    assert stats["cuda_graph_fallbacks"] == 0
+    assert isinstance(stats["independent_residual_converged"], bool)
+    assert isinstance(stats["convergence_checked_on_rebuild"], bool)
+    assert stats["energy_increase_steps"] >= 0
+    assert stats["orthogonality_restarts"] >= 0
+    assert stats["numerical_retries"] >= 0
+    for name in (
+        "gradient_initial",
+        "gradient_final",
+        "max_local_residual_ratio",
+        "preconditioned_gradient_norm",
+        "preconditioned_gradient_tolerance",
+    ):
+        assert np.isfinite(stats[name]), (name, stats)
+    assert stats["preconditioned_gradient_tolerance"] > 0
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
+@pytest.mark.parametrize("fixed", [False, True])
+@pytest.mark.parametrize("fused,graph", [(0, 0), (1, 0), (1, 1)])
+def test_mas_pncg_paper_preserves_resting_and_fixed_states(tmp_path, fixed, fused, graph):
+    config = _mas_pncg_paper_config(fused, graph)
+    config["contact"]["enable"] = False
+    if not fixed:
+        config["gravity"] = [[0.0], [0.0], [0.0]]
+    scene = Scene(config)
+    if not fixed:
+        np.testing.assert_array_equal(
+            np.array(scene.config().find("gravity").view()).reshape(3), np.zeros(3)
+        )
+    engine = Engine("cuda", str(tmp_path / f"resting-{fixed}-{fused}-{graph}"))
+    world = World(engine)
+    initial = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    mesh = tetmesh(initial, np.array([[0, 1, 2, 3]], dtype=np.int32))
+    label_surface(mesh)
+    label_triangle_orient(mesh)
+    StableNeoHookean().apply_to(mesh, ElasticModuli.youngs_poisson(1e4, 0.3))
+    view(mesh.vertices().find(builtin.is_fixed))[:] = int(fixed)
+    slot, _ = scene.objects().create("resting-tet").geometries().create(mesh)
+    world.init(scene)
+    assert world.is_valid()
+    for _ in range(3):
+        world.advance()
+        stats = engine.frame_stats()
+        assert world.is_valid(), stats
+        _assert_mas_pncg_paper_stats(stats, fused, graph)
+        assert stats["completed"] and stats["converged"], stats
+        assert stats["independent_residual_converged"]
+        if fixed:
+            assert stats["convergence_criterion"] == "zero_gradient"
+            assert stats["accepted_steps"] == 0
+            assert stats["gradient_final"] == 0
+        else:
+            criterion = stats["convergence_criterion"]
+            assert criterion in ("zero_gradient", "preconditioned_gradient")
+            if criterion == "zero_gradient":
+                assert stats["gradient_final"] == 0
+            else:
+                assert stats["accepted_steps"] > 0
+                assert stats["convergence_checked_on_rebuild"]
+                assert stats["preconditioned_gradient_norm"] <= (
+                    stats["preconditioned_gradient_tolerance"]
+                )
+        world.retrieve()
+        positions = np.array(slot.geometry().positions().view()).reshape(-1, 3)
+        if fixed:
+            np.testing.assert_array_equal(positions, initial)
+        else:
+            np.testing.assert_allclose(positions, initial, atol=1e-12, rtol=0)
+
+
+def _paper_tet_plane(scene):
+    initial = np.array(
+        [[0.0, 0.006, 0.0], [0.1, 0.006, 0.0],
+         [0.0, 0.106, 0.0], [0.0, 0.006, 0.1]]
+    )
+    scene.contact_tabular().default_model(0.0, 1e4)
+    mesh = tetmesh(initial, np.array([[0, 1, 2, 3]], dtype=np.int32))
+    label_surface(mesh)
+    label_triangle_orient(mesh)
+    StableNeoHookean().apply_to(
+        mesh, ElasticModuli.youngs_poisson(1e4, 0.3), mass_density=1000.0
+    )
+    view(mesh.vertices().find(builtin.velocity))[:] = [[0.05], [-0.1], [0.0]]
+    obj = scene.objects().create("tet-and-plane")
+    slot, _ = obj.geometries().create(mesh)
+    obj.geometries().create(ground(0))
+    return slot, initial
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
+def test_mas_pncg_paper_rebuild_convergence_matches_execution_modes(tmp_path):
+    trajectories = {}
+    for fused, graph in ((0, 0), (1, 0), (1, 1)):
+        config = _mas_pncg_paper_config(fused, graph)
+        config["contact"]["d_hat"] = 0.01
+        config["contact"]["d_hat_relative"] = 0.0
+        pncg = config["nonlinear_system"]["mas_pncg"]
+        pncg["gradient_atol"] = 1e-16
+        pncg["gradient_rtol"] = 1e-16
+        pncg["max_base_age"] = 4
+        scene = Scene(config)
+        slot, initial = _paper_tet_plane(scene)
+        engine = Engine("cuda", str(tmp_path / f"rebuild-{fused}-{graph}"))
+        world = World(engine)
+        world.init(scene)
+        assert world.is_valid()
+        frames = []
+        converged_before_residual = False
+        for _ in range(4):
+            world.advance()
+            stats = engine.frame_stats()
+            assert world.is_valid(), stats
+            _assert_mas_pncg_paper_stats(stats, fused, graph)
+            assert stats["completed"] and stats["converged"], stats
+            assert stats["convergence_criterion"] == "preconditioned_gradient", stats
+            assert stats["convergence_checked_on_rebuild"]
+            assert stats["accepted_steps"] > 0
+            assert stats["preconditioned_gradient_tolerance"] == pytest.approx(1e-5)
+            assert 0 < stats["preconditioned_gradient_norm"] <= 1e-5
+            assert not stats["hit_newton_limit"]
+            assert not stats["hit_line_search_limit"]
+            assert (stats["cuda_graph_replays"] > 0) == bool(graph)
+            converged_before_residual |= not stats["independent_residual_converged"]
+            world.retrieve()
+            positions = np.array(slot.geometry().positions().view()).reshape(-1, 3)
+            assert np.isfinite(positions).all()
+            assert (positions[:, 1] > 0).all()
+            frames.append(positions)
+        assert converged_before_residual
+        assert not np.allclose(frames[-1], initial, atol=1e-6, rtol=0)
+        trajectories[(fused, graph)] = np.stack(frames)
+    for mode in ((1, 0), (1, 1)):
+        np.testing.assert_allclose(
+            trajectories[mode], trajectories[(0, 0)], atol=1e-7, rtol=0
+        )
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(skip_cuda_on_macos, reason=skip_cuda_on_macos_reason)
+@pytest.mark.parametrize("fused,graph", [(0, 0), (1, 0), (1, 1)])
+def test_mas_pncg_paper_budget_exhaustion_is_not_convergence(tmp_path, fused, graph):
+    config = _mas_pncg_paper_config(fused, graph)
+    config["contact"]["d_hat"] = 0.01
+    config["contact"]["d_hat_relative"] = 0.0
+    config["nonlinear_system"]["mas_pncg"]["max_iter"] = 1
+    config["nonlinear_system"]["mas_pncg"]["preconditioned_gradient_tol"] = 1e-30
+    scene = Scene(config)
+    _paper_tet_plane(scene)
+    engine = Engine("cuda", str(tmp_path / f"budget-{fused}-{graph}"))
+    world = World(engine)
+    world.init(scene)
+    assert world.is_valid()
+    world.advance()
+    stats = engine.frame_stats()
+    _assert_mas_pncg_paper_stats(stats, fused, graph)
+    assert not world.is_valid()
+    assert not stats["completed"] and not stats["converged"]
+    assert stats["convergence_criterion"] == "not_converged"
+    assert stats["hit_newton_limit"]
+    assert stats["accepted_steps"] == stats["nonlinear_iterations"] == 1
+    assert stats["preconditioned_gradient_norm"] > 1e-30

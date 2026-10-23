@@ -499,10 +499,7 @@ void SimEngine::advance()
                         // TODO: maybe better condition like Wolfe condition/Armijo condition in the future
                         bool energy_decrease =
                             m_mas_pncg_solver ?
-                                std::isfinite(E) && std::isfinite(alpha) && alpha > 0
-                                    && E <= E0
-                                                + 1e-4 * alpha
-                                                      * m_mas_pncg_solver->slope() :
+                                m_mas_pncg_solver->accepts_energy(E0, E, alpha) :
                                 (E <= E0);
 
                         // Check Inversion
@@ -534,6 +531,7 @@ void SimEngine::advance()
                                                                  E0,
                                                                  last_E));
                         }
+                        m_mas_pncg_solver->record_energy(E0, last_E);
                         m_mas_pncg_solver->accept(alpha);
                     }
                     else
@@ -567,7 +565,7 @@ void SimEngine::advance()
                 if(!m_frame_converged)
                 {
                     m_frame_hit_newton_limit = true;
-                    throw SimEngineException("MAS-PNCG exhausted its direction budget before independent residual convergence.");
+                    throw SimEngineException("MAS-PNCG exhausted its direction budget before the selected convergence criterion was met.");
                 }
             }
 

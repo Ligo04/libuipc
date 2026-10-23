@@ -213,7 +213,8 @@ struct DeviceDirection
     pncg::DirectionResult run(pncg::FusedOperations& operations,
                               bool                   history,
                               bool                   graph,
-                              Float                  threshold = 0.3)
+                              Float                  threshold = 0.3,
+                              bool                   paper     = false)
     {
         return operations.direction(g.cview(),
                                     z.cview(),
@@ -226,7 +227,8 @@ struct DeviceDirection
                                     history,
                                     threshold,
                                     direction.view(),
-                                    graph);
+                                    graph,
+                                    paper);
     }
 };
 
@@ -621,5 +623,44 @@ TEST_CASE("MAS-PNCG fused empty direction is a stationary invalid direction", "[
     REQUIRE(operations.graph_captures() == 1);
     REQUIRE(operations.graph_replays() == 1);
     REQUIRE(operations.graph_fallbacks() == 0);
+}
+}  // namespace pncg_fused_test
+
+namespace pncg_fused_test
+{
+TEST_CASE("MAS-PNCG paper direction schedules the next restart without discarding this step",
+          "[cuda][mas_pncg][fused][paper]")
+{
+    DirectionInput input(5, 3);
+    input.old_z = input.z;
+    DeviceDirection device(input);
+    for(bool graph : {false, true})
+    {
+        pncg::FusedOperations operations;
+        for(bool history : {false, true})
+        {
+            auto actual = device.run(operations, history, graph, 0.3, true);
+            auto expected =
+                direction_reference(input, input.g.size(), input.contacts.size(), history);
+            require_direction(actual, download(device.direction), expected, history);
+            REQUIRE(actual.restart_next == 1);
+            require_close(actual.restart_ratio, 1);
+            require_close(actual.preconditioned_norm, input.z.norm());
+        }
+    }
+    pncg::FusedOperations operations;
+    REQUIRE(device.run(operations, true, true, 0.3, false).valid == 0);
+    REQUIRE(operations.graph_captures() == 1);
+    REQUIRE(device.run(operations, true, true, 0.3, true).valid == 1);
+    REQUIRE(operations.graph_captures() == 2);
+    REQUIRE(device.run(operations, true, true, 0.3, true).valid == 1);
+    REQUIRE(operations.graph_captures() == 2);
+    REQUIRE(device.run(operations, true, true, 0.3, false).valid == 0);
+    REQUIRE(operations.graph_captures() == 3);
+    device.old_z.buffer_view().fill(0);
+    auto initial = device.run(operations, false, false, 0.3, true);
+    REQUIRE(initial.valid == 1);
+    REQUIRE(initial.restart_next == 0);
+    REQUIRE(initial.restart_ratio == 0);
 }
 }  // namespace pncg_fused_test

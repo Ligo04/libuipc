@@ -1,5 +1,29 @@
 # Handoff — Current State of the Repo
 
+> **MAS-PNCG paper policy (2026-10-23)**: `codex/mas-pncg` adds an opt-in
+> `iteration_policy="paper"` and positive absolute `preconditioned_gradient_tol`
+> (default `1e-5 m`). It follows MAS-PNCG Algorithm 1, schedules orthogonality
+> restarts for the next accepted-state iteration, retains raw direction history,
+> accepts finite CCD-constrained unit trials and stops on the pre-step norm from
+> a fresh rebuild. The native `strict` policy remains default; independent
+> residual success is reported for both policies. Global CCD and mixed MAS
+> precision are unchanged. This supersedes the separate archived experiment
+> against the older PNCG-IPC method.
+>
+> CUDA 13.4 / RTX 5090 checks: 25 operator cases / 6,550 assertions, 7 strict
+> scene cases / 1,300 assertions, 2 config cases / 3,028 assertions, 25 Python
+> config tests and 26 Python CUDA tests passed. Operator memcheck, racecheck and
+> synccheck report zero errors/hazards. Full aggregate simulation, other GPUs,
+> CMake runtime validation and remote CI were not run for this change.
+> Example88 repeats completed 26 frames before allocation failure; a subsequent
+> repeat with no competing compute process in 66 samples completed 31/250 and
+> failed aggregate MAS baseline validation at frame 32 without OOM or budget
+> exhaustion. Frame 28 passed only the paper criterion. See the
+> [paper-policy record](performance/2026-10-23-mas-pncg-paper-policy.md) for
+> partial captures, candidate-buffer allocation evidence and the latest repeat.
+> Sources and runtime hashes live in `output/mas-pncg-policy-20261023/`.
+> The original checkout's sample and packaging edits remain untouched.
+
 > **Optional native MAS-PNCG (2026-10-21)**: developed in the isolated managed
 > worktree on `codex/mas-pncg`, based on `c283e98a`; the original checkout and
 > its unrelated sample/packaging edits are preserved. Select with

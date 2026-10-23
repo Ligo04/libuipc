@@ -54,12 +54,15 @@ void MASPNCGSolver::do_build()
     { return config.find<IndexT>(name)->view()[0]; };
     auto value = [&](const char* name)
     { return config.find<Float>(name)->view()[0]; };
-    m_max_iter          = index("nonlinear_system/mas_pncg/max_iter");
-    m_top_k             = index("nonlinear_system/mas_pncg/top_k");
-    m_max_age           = index("nonlinear_system/mas_pncg/max_base_age");
-    m_rtol              = value("nonlinear_system/mas_pncg/gradient_rtol");
-    m_atol              = value("nonlinear_system/mas_pncg/gradient_atol");
-    m_velocity_tol      = value("nonlinear_system/mas_pncg/velocity_tol");
+    m_max_iter     = index("nonlinear_system/mas_pncg/max_iter");
+    m_top_k        = index("nonlinear_system/mas_pncg/top_k");
+    m_max_age      = index("nonlinear_system/mas_pncg/max_base_age");
+    m_rtol         = value("nonlinear_system/mas_pncg/gradient_rtol");
+    m_atol         = value("nonlinear_system/mas_pncg/gradient_atol");
+    m_velocity_tol = value("nonlinear_system/mas_pncg/velocity_tol");
+    m_iteration_policy =
+        config.find<std::string>("nonlinear_system/mas_pncg/iteration_policy")->view()[0];
+    m_preconditioned_tol = value("nonlinear_system/mas_pncg/preconditioned_gradient_tol");
     m_restart_threshold = value("nonlinear_system/mas_pncg/restart_threshold");
     m_cos_rotation = std::cos(value("nonlinear_system/mas_pncg/rotation_deg")
                               * std::acos(-1.0) / 180.0);
@@ -70,8 +73,9 @@ void MASPNCGSolver::do_build()
     if(m_use_fused)
         m_fused = std::make_unique<pncg::FusedOperations>();
     on_init_scene([this] { validate_capabilities(); });
-    logger::info("Nonlinear solver: MAS-PNCG ({}, FEM MAS, global CCD, Armijo acceptance); Newton/PCG settings are inactive.",
-                 m_update_mode);
+    logger::info("Nonlinear solver: MAS-PNCG ({}, {} policy, FEM MAS, global CCD); Newton/PCG settings are inactive.",
+                 m_update_mode,
+                 m_iteration_policy);
 }
 
 void MASPNCGSolver::begin_frame()
@@ -80,6 +84,16 @@ void MASPNCGSolver::begin_frame()
         throw SimEngineException("MAS-PNCG cannot advance an incomplete frame; create a fresh Engine/World from a valid state.");
     m_stats     = {{"nonlinear_solver", "mas_pncg"},
                    {"update_mode", m_update_mode},
+                   {"iteration_policy", m_iteration_policy},
+                   {"convergence_criterion", "not_converged"},
+                   {"independent_residual_converged", false},
+                   {"preconditioned_gradient_norm", 0.0},
+                   {"preconditioned_gradient_tolerance", m_preconditioned_tol},
+                   {"convergence_checked_on_rebuild", false},
+                   {"orthogonality_restarts", 0},
+                   {"numerical_retries", 0},
+                   {"restart_ratio", 0.0},
+                   {"energy_increase_steps", 0},
                    {"nonlinear_iterations", 0},
                    {"accepted_steps", 0},
                    {"base_rebuilds", 0},
@@ -108,13 +122,16 @@ void MASPNCGSolver::begin_frame()
         m_frame_replays   = m_fused->graph_replays();
         m_frame_fallbacks = m_fused->graph_fallbacks();
     }
-    m_have_history    = false;
-    m_reference_ready = false;
-    m_retry_used      = false;
-    m_age             = 0;
-    m_dt              = world().scene().config().find<Float>("dt")->view()[0];
-    m_vertex_offset   = m_vertices->vertex_offset();
-    m_dof_offset      = m_subsystem->dof_offset();
+    m_have_history         = false;
+    m_reference_ready      = false;
+    m_retry_used           = false;
+    m_age                  = 0;
+    m_started_with_rebuild = m_pending_restart = m_stop_after_accept =
+        m_zero_gradient                        = false;
+    m_preconditioned_norm                      = 0;
+    m_dt            = world().scene().config().find<Float>("dt")->view()[0];
+    m_vertex_offset = m_vertices->vertex_offset();
+    m_dof_offset    = m_subsystem->dof_offset();
     if(m_dof_offset != 0 || m_subsystem->dof_count() != m_system->dof_count())
         throw SimEngineException("MAS-PNCG requires an exclusively FEM generalized layout.");
 
@@ -199,6 +216,9 @@ void MASPNCGSolver::objective_changed()
     m_need_base       = true;
     m_have_history    = false;
     m_reference_ready = false;
+    m_pending_restart = m_stop_after_accept = false;
+    if(m_iteration_policy == "paper")
+        m_old_z.fill(0);
 }
 
 bool MASPNCGSolver::needs_base() const
@@ -307,6 +327,7 @@ bool MASPNCGSolver::build_updates()
 
 bool MASPNCGSolver::evaluate(bool rebuild)
 {
+    m_started_with_rebuild = rebuild;
     if(rebuild)
     {
         m_system->rebuild_nonlinear_base();
@@ -347,10 +368,12 @@ bool MASPNCGSolver::evaluate(bool rebuild)
 
 void MASPNCGSolver::update_residual()
 {
-    int n = m_fem->xs().size();
+    m_zero_gradient = false;
+    int n           = m_fem->xs().size();
     if(!n)
     {
         m_residual = m_local_ratio = m_kinetic_correction = 0;
+        m_zero_gradient                                   = true;
         return;
     }
     if(m_use_fused)
@@ -401,15 +424,63 @@ void MASPNCGSolver::update_residual()
         m_reference_ready           = true;
         m_stats["gradient_initial"] = m_residual;
     }
+    if(m_iteration_policy == "paper" && m_kinetic_correction == 0)
+    {
+        m_error    = 0;
+        auto check = pncg::nonzero_gradient_kernel;
+        int  count = m_system->nonlinear_gradient().size();
+        check<<<cuda_tool::best_grid_dim(count, check), cuda_tool::best_block_dim(check)>>>(
+            m_system->nonlinear_gradient(), m_fem->is_fixed(), m_error.view());
+        m_zero_gradient = static_cast<IndexT>(m_error) == 0;
+    }
     m_stats["gradient_final"]           = m_residual;
     m_stats["max_local_residual_ratio"] = m_local_ratio;
 }
 
 bool MASPNCGSolver::stationary(bool targets_reached)
 {
-    return targets_reached && m_local_ratio <= 1
-           && m_residual <= std::max(m_atol * m_scale, m_rtol * m_initial_residual)
-           && m_kinetic_correction <= m_velocity_tol * m_dt;
+    bool residual_converged =
+        targets_reached && m_local_ratio <= 1
+        && m_residual <= std::max(m_atol * m_scale, m_rtol * m_initial_residual)
+        && m_kinetic_correction <= m_velocity_tol * m_dt;
+    m_stats["independent_residual_converged"] = residual_converged;
+    m_stats["convergence_criterion"]          = "not_converged";
+    if(m_iteration_policy == "strict")
+    {
+        if(residual_converged)
+            m_stats["convergence_criterion"] = "independent_residual";
+        return residual_converged;
+    }
+    if(!targets_reached)
+        return false;
+    if(m_zero_gradient)
+    {
+        m_stats["convergence_criterion"] = "zero_gradient";
+        return true;
+    }
+    if(m_stop_after_accept)
+    {
+        m_stats["convergence_criterion"] = "preconditioned_gradient";
+        return true;
+    }
+    return false;
+}
+
+bool MASPNCGSolver::accepts_energy(Float initial, Float trial, Float fraction) const
+{
+    if(!std::isfinite(initial) || !std::isfinite(trial)
+       || !std::isfinite(fraction) || fraction <= 0)
+        return false;
+    return m_iteration_policy == "paper" ? fraction <= 1 :
+                                           trial <= initial + 1e-4 * fraction * m_slope;
+}
+
+void MASPNCGSolver::record_energy(Float initial, Float trial)
+{
+    m_stats["last_energy_before"] = initial;
+    m_stats["last_energy_after"]  = trial;
+    if(trial > initial)
+        increment(m_stats, "energy_increase_steps");
 }
 
 bool MASPNCGSolver::apply_preconditioner()
@@ -473,6 +544,7 @@ bool MASPNCGSolver::apply_preconditioner()
 MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
 {
     increment(m_stats, "nonlinear_iterations");
+    m_pending_restart = false;
     if(!apply_preconditioner())
         return DirectionStatus::Restart;
     auto g = m_system->nonlinear_gradient();
@@ -492,10 +564,21 @@ MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
                                                m_have_history,
                                                m_restart_threshold,
                                                m_direction.view(),
-                                               m_use_graph);
+                                               m_use_graph,
+                                               m_iteration_policy == "paper");
         if(!result.valid)
             return DirectionStatus::Restart;
         m_slope = result.slope;
+        if(m_iteration_policy == "paper")
+        {
+            if(!std::isfinite(result.preconditioned_norm)
+               || !std::isfinite(result.restart_ratio))
+                return DirectionStatus::Restart;
+            m_preconditioned_norm = result.preconditioned_norm;
+            m_pending_restart     = result.restart_next;
+            m_stats["preconditioned_gradient_norm"] = m_preconditioned_norm;
+            m_stats["restart_ratio"]                = result.restart_ratio;
+        }
         m_system->scatter_nonlinear_direction(m_direction.cview());
         increment(m_stats, result.used_history ? "two_d_steps" : "one_d_steps");
         increment(m_stats, "contact_update_columns", result.update_columns);
@@ -504,7 +587,17 @@ MASPNCGSolver::DirectionStatus MASPNCGSolver::compute_direction()
     Float gz = m_system->ctx().dot(g, m_z.cview());
     if(!std::isfinite(gz) || gz <= 0)
         return DirectionStatus::Restart;
-    if(m_have_history)
+    if(m_iteration_policy == "paper")
+    {
+        m_preconditioned_norm = std::sqrt(m_system->ctx().dot(m_z, m_z));
+        Float ratio = std::abs(m_system->ctx().dot(g, m_old_z.cview())) / gz;
+        if(!std::isfinite(m_preconditioned_norm) || !std::isfinite(ratio))
+            return DirectionStatus::Restart;
+        m_pending_restart                       = ratio > m_restart_threshold;
+        m_stats["preconditioned_gradient_norm"] = m_preconditioned_norm;
+        m_stats["restart_ratio"]                = ratio;
+    }
+    else if(m_have_history)
     {
         Float ratio = std::abs(m_system->ctx().dot(g, m_old_z.cview())) / gz;
         if(!std::isfinite(ratio) || ratio > m_restart_threshold)
@@ -567,21 +660,24 @@ bool MASPNCGSolver::retry()
     m_need_base    = true;
     m_have_history = false;
     increment(m_stats, "restarts");
+    increment(m_stats, "numerical_retries");
     return true;
 }
 
 void MASPNCGSolver::accept(Float fraction)
 {
-    int n = m_direction.size();
+    const bool  paper            = m_iteration_policy == "paper";
+    const Float history_fraction = paper ? 1.0 : fraction;
+    int         n                = m_direction.size();
     if(m_use_fused)
-        m_fused->accept(m_direction.cview(), m_z.cview(), m_p.view(), m_old_z.view(), fraction);
+        m_fused->accept(m_direction.cview(), m_z.cview(), m_p.view(), m_old_z.view(), history_fraction);
     else
     {
         if(n)
         {
             auto k = pncg::scale_kernel;
             k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k)>>>(
-                m_direction.cview(), m_p.view(), fraction);
+                m_direction.cview(), m_p.view(), history_fraction);
         }
         m_old_z = m_z;
     }
@@ -590,6 +686,19 @@ void MASPNCGSolver::accept(Float fraction)
     ++m_age;
     m_stats["base_age"] = m_age;
     increment(m_stats, "accepted_steps");
+    if(paper)
+    {
+        // Algorithm 1 tests the pre-step norm only on a fresh-rebuild iteration.
+        m_stop_after_accept = m_started_with_rebuild
+                              && m_preconditioned_norm <= m_preconditioned_tol;
+        m_stats["convergence_checked_on_rebuild"] = m_started_with_rebuild;
+        if(m_pending_restart && !m_stop_after_accept)
+        {
+            m_need_base = true;
+            increment(m_stats, "orthogonality_restarts");
+            increment(m_stats, "restarts");
+        }
+    }
 }
 
 void MASPNCGSolver::fail()
@@ -611,6 +720,7 @@ void MASPNCGSolver::recover()
     m_need_base       = true;
     m_have_history    = false;
     m_reference_ready = false;
+    m_pending_restart = m_stop_after_accept = m_zero_gradient = false;
 }
 
 Json MASPNCGSolver::frame_stats() const

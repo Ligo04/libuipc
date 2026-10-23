@@ -155,6 +155,19 @@ static SceneConfigContract make_scene_config_contract()
         "Maximum direction attempts including restart retries.",
         {"src/backends/cuda/nonlinear_system"},
         Json{{"minimum", 1}});
+    add("nonlinear_system/mas_pncg/iteration_policy",
+        std::string{"strict"},
+        "string",
+        "Select strict Armijo acceptance and independent residual convergence, or the MAS-PNCG paper iteration and fresh-rebuild preconditioned-gradient convergence.",
+        {"src/backends/cuda/nonlinear_system", "src/backends/cuda/engine"},
+        Json{{"enum", Json::array({"strict", "paper"})}});
+    add("nonlinear_system/mas_pncg/preconditioned_gradient_tol",
+        Float{1.0e-5},
+        "number",
+        "Absolute L2 tolerance for P*g before an accepted fresh-rebuild step in the MAS-PNCG paper policy.",
+        {"src/backends/cuda/nonlinear_system"},
+        Json{{"exclusiveMinimum", 0.0}},
+        "m");
     add("nonlinear_system/mas_pncg/update_mode",
         std::string{"incremental"},
         "string",

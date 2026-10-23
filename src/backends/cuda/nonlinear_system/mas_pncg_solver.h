@@ -39,11 +39,13 @@ class MASPNCGSolver final : public SimSystem
     bool            retry();
     void            accept(Float fraction);
     void            rejected_trial(bool nonfinite);
-    void            fail();
-    void            recover();
-    IndexT          max_iter() const noexcept { return m_max_iter; }
-    Float           slope() const noexcept { return m_slope; }
-    Json            frame_stats() const;
+    bool   accepts_energy(Float initial, Float trial, Float fraction) const;
+    void   record_energy(Float initial, Float trial);
+    void   fail();
+    void   recover();
+    IndexT max_iter() const noexcept { return m_max_iter; }
+    Float  slope() const noexcept { return m_slope; }
+    Json   frame_stats() const;
 
   private:
     void do_build() override;
@@ -72,26 +74,33 @@ class MASPNCGSolver final : public SimSystem
     Float                                  m_atol              = 1e-8;
     Float                                  m_velocity_tol      = 0.05;
     std::string                            m_update_mode;
-    bool                                   m_use_fused = true;
-    bool                                   m_use_graph = true;
+    std::string                            m_iteration_policy;
+    Float                                  m_preconditioned_tol = 1e-5;
+    bool                                   m_use_fused          = true;
+    bool                                   m_use_graph          = true;
     std::unique_ptr<pncg::FusedOperations> m_fused;
     SizeT  m_frame_captures = 0, m_frame_replays = 0, m_frame_fallbacks = 0;
-    bool   m_need_base          = true;
-    bool   m_have_history       = false;
-    bool   m_reference_ready    = false;
-    bool   m_retry_used         = false;
-    bool   m_failed             = false;
-    SizeT  m_epoch              = 0;
-    IndexT m_age                = 0;
-    Float  m_slope              = 0;
-    Float  m_initial_residual   = 0;
-    Float  m_residual           = 0;
-    Float  m_local_ratio        = 0;
-    Float  m_kinetic_correction = 0;
-    Float  m_scale              = 1;
-    Float  m_dt                 = 0.01;
-    IndexT m_vertex_offset      = 0;
-    IndexT m_dof_offset         = 0;
+    bool   m_need_base            = true;
+    bool   m_have_history         = false;
+    bool   m_reference_ready      = false;
+    bool   m_retry_used           = false;
+    bool   m_failed               = false;
+    bool   m_started_with_rebuild = false;
+    bool   m_pending_restart      = false;
+    bool   m_stop_after_accept    = false;
+    bool   m_zero_gradient        = false;
+    Float  m_preconditioned_norm  = 0;
+    SizeT  m_epoch                = 0;
+    IndexT m_age                  = 0;
+    Float  m_slope                = 0;
+    Float  m_initial_residual     = 0;
+    Float  m_residual             = 0;
+    Float  m_local_ratio          = 0;
+    Float  m_kinetic_correction   = 0;
+    Float  m_scale                = 1;
+    Float  m_dt                   = 0.01;
+    IndexT m_vertex_offset        = 0;
+    IndexT m_dof_offset           = 0;
     Json   m_stats;
 
     cuda_tool::DeviceBCOOMatrix<Float, 3> m_base;

@@ -18,12 +18,15 @@ struct DirectionSums
 {
     Float  gz = 0, old_gz = 0, a = 0, b = 0, c = 0, gp = 0;
     IndexT invalid = 0, columns = 0;
+    Float  z_squared_norm = 0;
 };
 
 struct DirectionResult
 {
     Float  mu = 0, nu = 0, slope = 0;
     IndexT valid = 0, used_history = 0, update_columns = 0;
+    Float  preconditioned_norm = 0, restart_ratio = 0;
+    IndexT restart_next = 0;
 };
 
 namespace fused
@@ -52,7 +55,8 @@ namespace fused
                     a.c + b.c,
                     a.gp + b.gp,
                     a.invalid | b.invalid,
-                    a.columns + b.columns};
+                    a.columns + b.columns,
+                    a.z_squared_norm + b.z_squared_norm};
         }
     };
 
@@ -116,6 +120,7 @@ namespace fused
                                           cuda_tool::CVarView<IndexT> update_count,
                                           int  vertex_offset,
                                           bool history,
+                                          bool defer_restart,
                                           BufferView<DirectionSums> partials)
     {
         const int     i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -124,12 +129,15 @@ namespace fused
         {
             value.gz = g(i) * z(i);
             value.a  = z(i) * hz(i);
+            if(history || defer_restart)
+                value.old_gz = g(i) * old_z(i);
+            if(defer_restart)
+                value.z_squared_norm = z(i) * z(i);
             if(history)
             {
-                value.old_gz = g(i) * old_z(i);
-                value.b      = z(i) * hp(i);
-                value.c      = p(i) * hp(i);
-                value.gp     = g(i) * p(i);
+                value.b  = z(i) * hp(i);
+                value.c  = p(i) * hp(i);
+                value.gp = g(i) * p(i);
             }
         }
         if(i < *update_count)
@@ -157,15 +165,23 @@ namespace fused
     }
 
     static __global__ void solve_subspace(cuda_tool::CVarView<DirectionSums> sums,
-                                          bool                     history,
-                                          Float                    threshold,
+                                          bool  history,
+                                          Float threshold,
+                                          bool  defer_restart,
                                           VarView<DirectionResult> result)
     {
         DirectionResult out{};
-        const auto      s  = *sums;
-        out.update_columns = s.columns;
+        const auto      s       = *sums;
+        out.update_columns      = s.columns;
+        out.preconditioned_norm = sqrt(s.z_squared_norm);
+        if(!s.invalid && isfinite(s.gz) && s.gz > 0)
+        {
+            out.restart_ratio = fabs(s.old_gz) / s.gz;
+            out.restart_next  = out.restart_ratio > threshold;
+        }
         if(!s.invalid && isfinite(s.gz) && s.gz > 0
-           && (!history || (isfinite(s.old_gz) && fabs(s.old_gz) / s.gz <= threshold)))
+           && (defer_restart || !history
+               || (isfinite(s.old_gz) && fabs(s.old_gz) / s.gz <= threshold)))
         {
             // The same direct 2x2 solve as the host reference; no inner PCG.
             const auto solution = solve_pncg_subspace(s.a, s.b, s.c, s.gz, s.gp, history);
@@ -333,7 +349,8 @@ class FusedOperations
                               bool                            history,
                               Float                           threshold,
                               DenseVectorView<Float>          direction,
-                              bool                            graph)
+                              bool                            graph,
+                              bool defer_restart = false)
     {
         const int blocks = block_count(std::max<SizeT>(g.size(), updates.size()));
         const int slope_blocks = block_count(g.size());
@@ -359,7 +376,7 @@ class FusedOperations
                             {static_cast<SizeT>(g.size()),
                              static_cast<SizeT>(blocks),
                              static_cast<SizeT>(vertex_offset)},
-                            {threshold}};
+                            {threshold, Float(defer_restart)}};
         m_direction_graph[history].run(
             graph,
             key,
@@ -377,11 +394,15 @@ class FusedOperations
                         m_active_updates.cview(),
                         vertex_offset,
                         history,
+                        defer_restart,
                         m_dot_partials.view());
                 fused::finish<<<1, fused::block_size, 0, stream>>>(
                     m_dot_partials.cview(), m_sums.view(), fused::DirectionOp{});
-                fused::solve_subspace<<<1, 1, 0, stream>>>(
-                    m_sums.cview(), history, threshold, m_direction.view());
+                fused::solve_subspace<<<1, 1, 0, stream>>>(m_sums.cview(),
+                                                           history,
+                                                           threshold,
+                                                           defer_restart,
+                                                           m_direction.view());
                 if(slope_blocks)
                     fused::direction_and_slope<<<slope_blocks, fused::block_size, 0, stream>>>(
                         g,

@@ -580,6 +580,15 @@ static __global__ void scale_kernel(CDenseVectorView<Float> x, DenseVectorView<F
         y(i) = scale * x(i);
 }
 
+static __global__ void nonzero_gradient_kernel(CDenseVectorView<Float> g,
+                                               CBufferView<IndexT>     fixed,
+                                               VarView<IndexT>         nonzero)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < g.size() && !fixed(i / 3) && g(i) != 0)
+        atomicOr(nonzero.data(), IndexT{1});
+}
+
 static __global__ void residual_kernel(CDenseVectorView<Float> g,
                                        CBufferView<Float>      mass,
                                        CBufferView<IndexT>     fixed,
