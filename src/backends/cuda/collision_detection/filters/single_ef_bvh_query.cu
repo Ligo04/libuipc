@@ -439,7 +439,8 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                               PrimitiveBounds                edges,
                               PrimitiveBounds                triangles,
                               InfoStacklessBVH::QueryBuffer& pts,
-                              InfoStacklessBVH::QueryBuffer& ees)
+                              InfoStacklessBVH::QueryBuffer& ees,
+                              bool reuse_bvh_topology)
 {
     UIPC_ASSERT(pt_pred.alpha == ee_pred.alpha && pt_pred.alpha >= 0.0,
                 "Single EF PT and EE queries must share a nonnegative alpha");
@@ -462,7 +463,8 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
         points, edges, ee_pred, pt_pred.Vs, m_edge_vertices, m_owned_vertices, m_query_boxes, m_query_bids, m_query_cids, m_query_segments);
     make_leaf_proxies<<<(leaf_count + 255) / 256, 256>>>(
         points, edges, triangles, m_triangle_vertices, m_owned_edges, m_leaf_boxes, m_leaf_bids, m_leaf_cids);
-    triangle_bvh.build(m_leaf_boxes, m_leaf_bids, m_leaf_cids);
+    if(!reuse_bvh_topology || !triangle_bvh.refit(m_leaf_boxes, m_leaf_bids, m_leaf_cids))
+        triangle_bvh.build(m_leaf_boxes, m_leaf_bids, m_leaf_cids);
 
     const SizeT pair_limit = std::numeric_limits<IndexT>::max() - 1;
     const auto  chunk_size =
@@ -490,7 +492,9 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                                           {},
                                           predicate,
                                           AcceptEdgeFace{},
-                                          m_ef_pairs);
+                                          m_ef_pairs,
+                                          true,
+                                          reuse_bvh_topology);
             };
             // Swept edges are bilinear patches. Use only their full swept AABB,
             // with the original lightweight tag predicate and no static slab.

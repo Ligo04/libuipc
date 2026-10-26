@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: trajectory BVH refit, retained query ordering and
+ * corresponding reuse/invalidation logic.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.h>
 #include <cuda_tool/cub.h>
 #include <cuda_tool/cuda_tool.h>
@@ -1243,7 +1268,8 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
                                                    info.d_hats(),
                                                    alpha};
 
-    if(method == CandidateMethod::Baseline || codimVs.size() > 0)
+    if((method == CandidateMethod::Baseline || codimVs.size() > 0)
+       && (!info.reuse_bvh_topology() || !lbvh_E.refit(edge_aabbs, edge_bids, edge_cids)))
         lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
 
     auto launch_allp_codimp = [&](bool rebuild_query)
@@ -1255,7 +1281,8 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
                                  node_pred,
                                  allp_codimp_pred,
                                  candidate_AllP_CodimP_pairs,
-                                 rebuild_query);
+                                 rebuild_query,
+                                 info.reuse_bvh_topology());
     };
     auto launch_codimp_alle = [&](bool rebuild_query)
     {
@@ -1266,7 +1293,8 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
                             node_pred,
                             codimp_alle_pred,
                             candidate_CodimP_AllE_pairs,
-                            rebuild_query);
+                            rebuild_query,
+                            info.reuse_bvh_topology());
     };
     auto launch_alle_alle = [&]
     {
@@ -1274,13 +1302,22 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
     };
     auto launch_allp_allt = [&](bool rebuild_query)
     {
-        lbvh_T.launch_query(
-            point_aabbs, point_bids, point_cids, cmts, node_pred, allp_allt_pred, candidate_AllP_AllT_pairs, rebuild_query);
+        lbvh_T.launch_query(point_aabbs,
+                            point_bids,
+                            point_cids,
+                            cmts,
+                            node_pred,
+                            allp_allt_pred,
+                            candidate_AllP_AllT_pairs,
+                            rebuild_query,
+                            info.reuse_bvh_topology());
     };
 
     if(codimVs.size() > 0)
     {
-        lbvh_CodimP.build(codim_point_aabbs, codim_point_bids, codim_point_cids);
+        if(!info.reuse_bvh_topology()
+           || !lbvh_CodimP.refit(codim_point_aabbs, codim_point_bids, codim_point_cids))
+            lbvh_CodimP.build(codim_point_aabbs, codim_point_bids, codim_point_cids);
         launch_allp_codimp(true);
         launch_codimp_alle(true);
     }
@@ -1303,7 +1340,8 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
                              {edge_aabbs, edge_bids, edge_cids},
                              {triangle_aabbs, triangle_bids, triangle_cids},
                              candidate_AllP_AllT_pairs,
-                             candidate_AllE_AllE_pairs);
+                             candidate_AllE_AllE_pairs,
+                             info.reuse_bvh_topology());
     if(used_single_ef && codimVs.size() == 0)
     {
         candidate_AllP_CodimP_pairs.m_size = 0;
@@ -1313,9 +1351,12 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
     }
     if(!used_single_ef)
     {
-        if(method == CandidateMethod::SingleEF && codimVs.size() == 0)
+        if(method == CandidateMethod::SingleEF && codimVs.size() == 0
+           && (!info.reuse_bvh_topology() || !lbvh_E.refit(edge_aabbs, edge_bids, edge_cids)))
             lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
-        lbvh_T.build(triangle_aabbs, triangle_bids, triangle_cids);
+        if(!info.reuse_bvh_topology()
+           || !lbvh_T.refit(triangle_aabbs, triangle_bids, triangle_cids))
+            lbvh_T.build(triangle_aabbs, triangle_bids, triangle_cids);
         launch_alle_alle();
         launch_allp_allt(true);
     }

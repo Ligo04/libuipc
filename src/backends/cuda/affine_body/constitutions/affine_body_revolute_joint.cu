@@ -1,5 +1,5 @@
 #include <numbers>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 #include <utils/matrix_assembler.h>
 #include <time_integrator/time_integrator.h>
 #include <affine_body/inter_affine_body_constitution.h>
@@ -195,7 +195,11 @@ namespace
         // Fill Body Hessian
         Matrix6x6 ddEddF;
         RJ::ddEaxisddFaxis<Float>(ddEddF, K, F);
-        make_spd(ddEddF);
+        constexpr int                       SharedLanePitch = 32;
+        __shared__ Float                    shared_h[6 * 6 * SharedLanePitch];
+        FixedBankSoAMap<6, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+        H_workspace = ddEddF;
+        make_spd_fixed_bank_shared_upper_fma<6>(H_workspace, ddEddF);
 
         // Map Hessian back to ABD space: H24 = J^T * ddEddF * J
         Matrix24x24 H24;
@@ -381,7 +385,11 @@ namespace
         Matrix12x12 H01;
         DRJ::ddEddF01<Float>(H01, kappa, F01_q, theta_tilde);
         // H01 SPD to ensure the Hessian is positive definite
-        make_spd(H01);
+        constexpr int    SharedLanePitch = 16;
+        __shared__ Float shared_h[12 * 12 * SharedLanePitch];
+        FixedBankSoAMap<12, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+        H_workspace = H01;
+        make_spd_fixed_bank_shared_upper_fma<12>(H_workspace, H01);
         Matrix24x24 J01T_H01_J01;
         DRJ::J01T_H01_J01<Float>(J01T_H01_J01,
                                  H01,
@@ -592,8 +600,13 @@ namespace
             Matrix12x12 ddx_ddF;
             ERJ::ddDeltaTheta_ddF(ddx_ddF, F, F_prev);
 
-            Matrix12x12 H_F = dE_dx * ddx_ddF;
-            make_spd(H_F);
+            Matrix12x12      H_F             = dE_dx * ddx_ddF;
+            constexpr int    SharedLanePitch = 16;
+            __shared__ Float shared_h[12 * 12 * SharedLanePitch];
+            FixedBankSoAMap<12, SharedLanePitch> H_workspace(shared_h
+                                                             + threadIdx.x);
+            H_workspace = H_F;
+            make_spd_fixed_bank_shared_upper_fma<12>(H_workspace, H_F);
 
             Matrix24x24 JT_H_J;
             ERJ::JT_H_J<Float>(JT_H_J, H_F, lb, rb, lb, rb);
@@ -912,7 +925,8 @@ Edge             = ({}, {}))",
         if(n > 0)
         {
             auto k = affine_body_revolute_joint_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            constexpr int BlockSize = 32;
+            k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
                 body_ids.cview(),
                 rest_positions.cview(),
                 strength_ratio.cview(),
@@ -1340,7 +1354,8 @@ class AffineBodyDrivingRevoluteJoint : public InterAffineBodyConstraint
         if(n > 0)
         {
             auto k = affine_body_driving_revolute_joint_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            constexpr int BlockSize = 16;
+            k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
                 revolute_joint->body_ids.cview(),
                 revolute_joint->l_basis.cview(),
                 revolute_joint->r_basis.cview(),
@@ -1683,7 +1698,8 @@ class AffineBodyRevoluteJointLimit final : public InterAffineBodyConstitution
         if(n > 0)
         {
             auto k = affine_body_revolute_joint_limit_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            constexpr int BlockSize = 16;
+            k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
                 revolute_joint->body_ids.cview(),
                 revolute_joint->l_basis.cview(),
                 revolute_joint->r_basis.cview(),

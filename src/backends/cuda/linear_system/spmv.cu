@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: fused sparse-matrix/vector multiplication and
+ * dot-product launch paths.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <linear_system/spmv.h>
 #include <cuda_tool/cub.h>
 #include <cuda_tool/cuda_tool.h>
@@ -38,6 +63,11 @@ struct Flags
 
 namespace
 {
+    constexpr int RbkSymSpmvDotBlockDim = 32;
+    static_assert(RbkSymSpmvDotBlockDim >= 32);
+    static_assert(RbkSymSpmvDotBlockDim <= 1024);
+    static_assert(RbkSymSpmvDotBlockDim % 32 == 0);
+
     // y = b * y, shared by sym_spmv / rbk_spmv / rbk_sym_spmv / rbk_sym_spmv_dot
     __global__ void Spmv_scale_y_kernel(Float b, cuda_tool::DenseVectorView<Float> y, int n)
     {
@@ -342,28 +372,49 @@ namespace
         }
     }
 
+    template <bool Pipelined>
     __global__ void Spmv_rbk_sym_spmv_dot_kernel(Float a,
                                                  cuda_tool::CBCOOMatrixView<Float, 3> A,
                                                  cuda_tool::CDenseVectorView<Float> x,
                                                  cuda_tool::DenseVectorView<Float> y,
                                                  cuda_tool::Dense<Float> d_dot,
-                                                 cuda_tool::CDense<IndexT> d_triplet_count)
+                                                 cuda_tool::CDense<IndexT> d_triplet_count,
+                                                 Float*        next_y,
+                                                 int           next_y_size,
+                                                 Float*        next_dot,
+                                                 const IndexT* converged)
     {
+        auto global_thread_id   = blockDim.x * blockIdx.x + threadIdx.x;
+        auto thread_id_in_block = threadIdx.x;
+
+        if constexpr(Pipelined)
+        {
+            // Every thread observes the same stream-ordered scalar. Returning
+            // here is therefore uniform across the block and cannot strand a
+            // later collective.
+            if(*converged != 0)
+                return;
+
+            for(int i = global_thread_id; i < next_y_size;
+                i += gridDim.x * blockDim.x)
+                next_y[i] = Float{0};
+            if(global_thread_id == 0)
+                *next_dot = Float{0};
+        }
+
         // count lives on device: a graph capturing this kernel then stays
         // valid when the matrix nnz changes within the reserved capacity
         const int     triplet_count = (int)(*d_triplet_count);
         constexpr int warp_size     = 32;
-        constexpr int block_dim     = 256;
+        constexpr int block_dim     = RbkSymSpmvDotBlockDim;
         constexpr int N             = 3;
         using T                     = Float;
 
         using WarpReduceInt   = cub::WarpReduce<int, warp_size>;
         using WarpReduceFloat = cub::WarpReduce<Float, warp_size>;
 
-        auto global_thread_id   = blockDim.x * blockIdx.x + threadIdx.x;
-        auto thread_id_in_block = threadIdx.x;
-        auto warp_id            = thread_id_in_block / warp_size;
-        auto lane_id            = thread_id_in_block & (warp_size - 1);
+        auto warp_id = thread_id_in_block / warp_size;
+        auto lane_id = thread_id_in_block & (warp_size - 1);
 
         __shared__ union
         {
@@ -444,22 +495,8 @@ namespace
 
         dot_local = WarpReduceFloat(temp_storage_float[warp_id]).Sum(dot_local);
 
-        // two-level reduction: one atomicAdd per BLOCK, not per warp —
-        // ~9k same-address atomic doubles serialized ~20-30us per call
-        __shared__ Float s_dot_partials[block_dim / warp_size];
-        if(lane_id == 0)
-            s_dot_partials[warp_id] = dot_local;
-        __syncthreads();
-        if(thread_id_in_block < warp_size)
-        {
-            Float partial = (thread_id_in_block < block_dim / warp_size) ?
-                                s_dot_partials[thread_id_in_block] :
-                                Float{0};
-            __syncwarp();
-            partial = WarpReduceFloat(temp_storage_float[0]).Sum(partial);
-            if(thread_id_in_block == 0)
-                atomicAdd(d_dot.data(), partial);
-        }
+        if(lane_id == 0 && dot_local != Float{0})
+            atomicAdd(d_dot.data(), dot_local);
     }
 }  // namespace
 
@@ -580,13 +617,48 @@ void Spmv::rbk_sym_spmv_dot(Float                                a,
     // grid covers the reserved capacity: blocks beyond the current
     // (device-side) count exit through the is_valid guard with zero work,
     // so the launch shape need not change when the count does
-    constexpr int block_dim = 256;
+    constexpr int block_dim = RbkSymSpmvDotBlockDim;
     int block_count = (int)((triplet_capacity + block_dim - 1) / block_dim);
 
     if(block_count > 0)
     {
-        Spmv_rbk_sym_spmv_dot_kernel<<<block_count, block_dim, 0, stream>>>(
-            a, A, x, y, d_dot.viewer(), d_triplet_count);
+        Spmv_rbk_sym_spmv_dot_kernel<false><<<block_count, block_dim, 0, stream>>>(
+            a, A, x, y, d_dot.viewer(), d_triplet_count, nullptr, 0, nullptr, nullptr);
+    }
+}
+
+void Spmv::rbk_sym_spmv_dot_pipelined(Float                                a,
+                                      cuda_tool::CBCOOMatrixView<Float, 3> A,
+                                      cuda_tool::CDenseVectorView<Float>   x,
+                                      cuda_tool::DenseVectorView<Float>    y,
+                                      cuda_tool::VarView<Float>         d_dot,
+                                      cuda_tool::DenseVectorView<Float> next_y,
+                                      cuda_tool::VarView<Float>   next_dot,
+                                      cuda_tool::CVarView<IndexT> converged,
+                                      cuda_tool::CDense<IndexT> d_triplet_count,
+                                      SizeT        triplet_capacity,
+                                      cudaStream_t stream)
+{
+    constexpr int block_dim = RbkSymSpmvDotBlockDim;
+    int block_count = (int)((triplet_capacity + block_dim - 1) / block_dim);
+
+    // Keep the clear contract valid for an empty-capacity matrix as well.
+    if(block_count == 0 && next_y.size() != 0)
+        block_count = 1;
+
+    if(block_count > 0)
+    {
+        Spmv_rbk_sym_spmv_dot_kernel<true>
+            <<<block_count, block_dim, 0, stream>>>(a,
+                                                    A,
+                                                    x,
+                                                    y,
+                                                    d_dot.viewer(),
+                                                    d_triplet_count,
+                                                    next_y.data(),
+                                                    (int)next_y.size(),
+                                                    next_dot.data(),
+                                                    converged.data());
     }
 }
 

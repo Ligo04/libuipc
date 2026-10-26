@@ -375,7 +375,8 @@ void check_mesh(Mesh& mesh, SizeT chunk, bool check_cpu = true)
                          mesh.edge_bounds.view(),
                          mesh.triangle_bounds.view(),
                          pts,
-                         ees));
+                         ees,
+                         true));
     CHECK(read_pairs(pts, false) == actual_pt);
     CHECK(read_pairs(ees, true) == actual_ee);
 }
@@ -771,7 +772,8 @@ void check_swept_candidates(Mesh&                       mesh,
                              mesh.edge_bounds.view(),
                              mesh.triangle_bounds.view(),
                              pts,
-                             ees));
+                             ees,
+                             true));
         const auto expected_pt = read_pairs(baseline_pt, false);
         const auto expected_ee = read_pairs(baseline_ee, true);
         const auto actual_pt   = read_pairs(pts, false);

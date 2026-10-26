@@ -115,6 +115,20 @@ tree has `triangle_count + standalone_edge_count` leaves and
 fallback-tree memory can remain allocated after a fallback pass; tree count
 alone does not predict whole-step runtime or peak memory.
 
+The combined optimization honors IPC's topology reuse schedule for both
+methods. The first outer DCD of each frame builds the trees; subsequent
+Newton iterations rebuild every eight iterations and otherwise refit current
+bounds and body/contact metadata. Trajectory CCD also requests refit. Single EF
+applies this to its proxy tree, and mixed scenes update the PP/PE trees only
+when needed. An incompatible cache falls back to a full build. Compatible
+query buffers may retain their Morton permutation; predicates still read the
+current bounds and primitive data. Swept candidate tests exercise successive
+CCD alphas followed by DCD with topology and query-order reuse enabled.
+
+The shared-EVD material benchmark results were measured on the optimization
+branch at `abad8290`; they do not measure the combined Single-EF simulation
+throughput.
+
 ## Focused validation
 
 With CUDA tests enabled:
@@ -125,6 +139,15 @@ xmake run backend_cuda '[single_ef_bvh]'
 xmake run backend_cuda 'compiled collision filters match the scene schema'
 xmake run core 'scene_config_schema_and_validation'
 ```
+
+Use a Compute Sanitizer version matching the CUDA compiler. CUDA 13.4
+binaries were checked with Compute Sanitizer 2026.3 and
+`--report-api-errors explicit`, retaining explicit CUDA API failures and the
+memory, race and synchronization checks. Its default `extended` mode also
+reports duplicate template-kernel names instantiated in both the CUDA test
+executable and backend library; the original optimization branch produces
+this diagnostic too. Retain those extended-mode logs separately rather than
+interpreting them as invalid memory accesses.
 
 The focused tests compare candidate sets and multiplicity with the existing
 two-tree queries and exhaustive CPU enumeration. They include more than 64

@@ -1,8 +1,9 @@
+#include <utils/remaining_material_launch.h>
 #include <inter_primitive_effect_system/inter_primitive_constitution.h>
 #include <inter_primitive_effect_system/constitutions/soft_vertex_edge_stitch_function.h>
 #include <uipc/builtin/attribute_name.h>
 #include <utils/matrix_assembler.h>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 #include <Eigen/Dense>
 #include <cuda_tool/cuda_tool.h>
 
@@ -39,7 +40,7 @@ namespace
         Es(I)      = E_val * Vdt2;
     }
 
-    template <SizeT StencilSize, SizeT HalfHessianSize>
+    template <bool GradientOnly, SizeT StencilSize, SizeT HalfHessianSize>
     __global__ void SoftVertexEdgeStitch_do_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Vector3i>          topos,
         cuda_tool::CBufferView<Vector3>           xs,
@@ -51,7 +52,6 @@ namespace
         cuda_tool::DoubletVectorView<Float, 3>    G3s,
         cuda_tool::TripletMatrixView<Float, 3, 3> H3x3s,
         Float                                     dt,
-        bool                                      gradient_only,
         int                                       n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -73,18 +73,65 @@ namespace
         DoubletVectorAssembler VA{G3s};
         VA.segment<StencilSize>(I * StencilSize).write(tri, G);
 
-        if(gradient_only)
-            return;
+        if constexpr(!GradientOnly)
+        {
 
-        Matrix9x9 H;
-        NH::ddEddX(H, lambdas(I), mus(I), X, IBs(I));
-        make_spd(H);
-        H *= Vdt2;
+            Matrix9x9 H;
+            NH::ddEddX(H, lambdas(I), mus(I), X, IBs(I));
+            constexpr int    SharedLanePitch = 32;
+            __shared__ Float shared_h[9 * 9 * SharedLanePitch];
+            FixedBankSoAMap<9, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+            H_workspace = H;
+            Vector<Float, 9> eigen_values;
+            selfadjoint_evd_fixed_bank_shared<9>(H_workspace, eigen_values);
 
-        TripletMatrixAssembler MA{H3x3s};
-        MA.half_block<StencilSize>(I * HalfHessianSize).write(tri, H);
+            TripletMatrixAssembler MA{H3x3s};
+            MA.half_block<StencilSize>(I * HalfHessianSize)
+                .write_psd_from_eigendecomposition(tri, H_workspace, eigen_values, Vdt2);
+        }
     }
 }  // namespace
+
+void launch_soft_vertex_edge_stitch_gradient_hessian(const SoftVertexEdgeStitchGradientHessianLaunchInfo& info)
+{
+    int n = static_cast<int>(info.topos.size());
+    if(n <= 0)
+        return;
+    if(info.gradient_only)
+    {
+        auto k = SoftVertexEdgeStitch_do_compute_gradient_hessian_kernel<true, 3, 6>;
+        const int block_size = info.block_size > 0 ? info.block_size : 32;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(info.topos,
+                                                                         info.xs,
+                                                                         info.mus,
+                                                                         info.lambdas,
+                                                                         info.IBs,
+                                                                         info.rest_areas,
+                                                                         info.thick,
+                                                                         info.G3s,
+                                                                         info.H3x3s,
+                                                                         info.dt,
+                                                                         n);
+    }
+    else
+    {
+        auto k = SoftVertexEdgeStitch_do_compute_gradient_hessian_kernel<false, 3, 6>;
+        const int BlockSize = info.block_size > 0 ? info.block_size : 32;
+        UIPC_ASSERT(BlockSize <= 32, "Full CTA exceeds the fixed-bank workspace lane pitch.");
+        k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(info.topos,
+                                                                      info.xs,
+                                                                      info.mus,
+                                                                      info.lambdas,
+                                                                      info.IBs,
+                                                                      info.rest_areas,
+                                                                      info.thick,
+                                                                      info.G3s,
+                                                                      info.H3x3s,
+                                                                      info.dt,
+                                                                      n);
+    }
+}
+
 
 class SoftVertexEdgeStitch : public InterPrimitiveConstitution
 {
@@ -308,30 +355,19 @@ class SoftVertexEdgeStitch : public InterPrimitiveConstitution
 
     void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        using namespace cuda_tool;
-        namespace NH = sym::soft_vertex_edge_stitch;
-
         gradients = info.gradients();
         hessians  = info.hessians();
-
-        auto k = SoftVertexEdgeStitch_do_compute_gradient_hessian_kernel<StencilSize, HalfHessianSize>;
-        int n = (int)topos.size();
-        if(n > 0)
-        {
-            k<<<best_grid_dim(n, k), best_block_dim(k), 0, nullptr>>>(
-                topos.cview(),
-                info.positions().cviewer(),
-                mus.cview(),
-                lambdas.cview(),
-                inv_Bs.cview(),
-                rest_areas.cview(),
-                thicknesses.cview(),
-                info.gradients().viewer(),
-                info.hessians().viewer(),
-                info.dt(),
-                info.gradient_only(),
-                n);
-        }
+        launch_soft_vertex_edge_stitch_gradient_hessian({topos.cview(),
+                                                         info.positions().cviewer(),
+                                                         mus.cview(),
+                                                         lambdas.cview(),
+                                                         inv_Bs.cview(),
+                                                         rest_areas.cview(),
+                                                         thicknesses.cview(),
+                                                         info.gradients().viewer(),
+                                                         info.hessians().viewer(),
+                                                         info.dt(),
+                                                         info.gradient_only()});
     }
 };
 

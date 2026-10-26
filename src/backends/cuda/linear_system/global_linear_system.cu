@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: fused SpMV/dot and preconditioner dispatch,
+ * blockwise assembly, layout generation and unsupported-layout fallback.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <linear_system/global_linear_system.h>
 #include <linear_system/diag_linear_subsystem.h>
 #include <linear_system/off_diag_linear_subsystem.h>
@@ -8,12 +33,135 @@
 #include <fstream>
 #include <sim_engine.h>
 #include <backends/common/backend_path_tool.h>
+#include <cub/block/block_reduce.cuh>
 #include <Eigen/Sparse>
 #include <utils/matrix_market.h>
 
 namespace uipc::backend::cuda
 {
 REGISTER_SIM_SYSTEM(GlobalLinearSystem);
+
+namespace
+{
+    constexpr int FusedPcgBlockSize = 256;
+
+    __global__ void fused_pcg_update_xr_segment_kernel(
+        cuda_tool::DenseVectorView<Float>  x,
+        cuda_tool::CDenseVectorView<Float> p,
+        cuda_tool::DenseVectorView<Float>  r,
+        cuda_tool::CDenseVectorView<Float> Ap,
+        cuda_tool::CDense<Float>           rz,
+        cuda_tool::CDense<Float>           pAp,
+        cuda_tool::CDense<IndexT>          converged,
+        int                                n)
+    {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if(i >= n || *converged != 0)
+            return;
+
+        const Float alpha = *rz / *pAp;
+        x(i) += alpha * p(i);
+        r(i) -= alpha * Ap(i);
+    }
+
+    __global__ void fused_pcg_dot_segment_kernel(cuda_tool::CDenseVectorView<Float> r,
+                                                 cuda_tool::CDenseVectorView<Float> z,
+                                                 cuda_tool::Dense<Float> rz_new,
+                                                 cuda_tool::CDense<IndexT> converged,
+                                                 int n)
+    {
+        using BlockReduce = cub::BlockReduce<Float, FusedPcgBlockSize>;
+        __shared__ typename BlockReduce::TempStorage storage;
+
+        const int   i     = blockIdx.x * blockDim.x + threadIdx.x;
+        const Float value = (i < n && *converged == 0) ? r(i) * z(i) : Float{0};
+        const Float sum   = BlockReduce(storage).Sum(value);
+        if(threadIdx.x == 0 && sum != Float{0})
+            atomicAdd(rz_new.data(), sum);
+    }
+
+    __global__ void fused_pcg_identity_update_apply_dot_kernel(
+        cuda_tool::DenseVectorView<Float>  x,
+        cuda_tool::CDenseVectorView<Float> p,
+        cuda_tool::DenseVectorView<Float>  r,
+        cuda_tool::CDenseVectorView<Float> Ap,
+        cuda_tool::DenseVectorView<Float>  z,
+        cuda_tool::CDense<Float>           rz,
+        cuda_tool::CDense<Float>           pAp,
+        cuda_tool::Dense<Float>            rz_new,
+        cuda_tool::CDense<IndexT>          converged,
+        int                                n)
+    {
+        using BlockReduce = cub::BlockReduce<Float, FusedPcgBlockSize>;
+        __shared__ typename BlockReduce::TempStorage storage;
+
+        const int i     = blockIdx.x * blockDim.x + threadIdx.x;
+        Float     value = 0;
+        if(i < n && *converged == 0)
+        {
+            const Float alpha = *rz / *pAp;
+            x(i) += alpha * p(i);
+            const Float r_new = r(i) - alpha * Ap(i);
+            r(i)              = r_new;
+            z(i)              = r_new;
+            value             = r_new * r_new;
+        }
+
+        const Float sum = BlockReduce(storage).Sum(value);
+        if(threadIdx.x == 0 && sum != Float{0})
+            atomicAdd(rz_new.data(), sum);
+    }
+
+    void launch_fused_pcg_update_xr_segment(cuda_tool::DenseVectorView<Float> x,
+                                            cuda_tool::CDenseVectorView<Float> p,
+                                            cuda_tool::DenseVectorView<Float> r,
+                                            cuda_tool::CDenseVectorView<Float> Ap,
+                                            cuda_tool::CVarView<Float> rz,
+                                            cuda_tool::CVarView<Float> pAp,
+                                            cuda_tool::CVarView<IndexT> converged,
+                                            cudaStream_t stream)
+    {
+        const int n = (int)x.size();
+        if(n == 0)
+            return;
+        const int grid_size = (n + FusedPcgBlockSize - 1) / FusedPcgBlockSize;
+        fused_pcg_update_xr_segment_kernel<<<grid_size, FusedPcgBlockSize, 0, stream>>>(
+            x, p, r, Ap, rz.cviewer(), pAp.cviewer(), converged.cviewer(), n);
+    }
+
+    void launch_fused_pcg_dot_segment(cuda_tool::CDenseVectorView<Float> r,
+                                      cuda_tool::CDenseVectorView<Float> z,
+                                      cuda_tool::VarView<Float>          rz_new,
+                                      cuda_tool::CVarView<IndexT> converged,
+                                      cudaStream_t                stream)
+    {
+        const int n = (int)r.size();
+        if(n == 0)
+            return;
+        const int grid_size = (n + FusedPcgBlockSize - 1) / FusedPcgBlockSize;
+        fused_pcg_dot_segment_kernel<<<grid_size, FusedPcgBlockSize, 0, stream>>>(
+            r, z, rz_new.viewer(), converged.cviewer(), n);
+    }
+
+    void launch_fused_pcg_identity_update_apply_dot(GlobalLinearSystem::FusedPcgUpdateApplyDotInfo& info)
+    {
+        const int n = (int)info.x().size();
+        if(n == 0)
+            return;
+        const int grid_size = (n + FusedPcgBlockSize - 1) / FusedPcgBlockSize;
+        fused_pcg_identity_update_apply_dot_kernel<<<grid_size, FusedPcgBlockSize, 0, info.stream()>>>(
+            info.x(),
+            info.p(),
+            info.r(),
+            info.Ap(),
+            info.z(),
+            info.rz().cviewer(),
+            info.pAp().cviewer(),
+            info.rz_new().viewer(),
+            info.converged().cviewer(),
+            n);
+    }
+}  // namespace
 
 SizeT GlobalLinearSystem::dof_count() const
 {
@@ -192,6 +340,7 @@ void GlobalLinearSystem::Impl::init()
     for(auto precond : local_preconditioner_view)
     {
         auto index = precond->m_subsystem->m_index;
+        local_preconditioner_owners_unique &= !diag_span[index].has_local_preconditioner;
         diag_span[index].has_local_preconditioner = true;
     }
 
@@ -298,6 +447,7 @@ bool GlobalLinearSystem::Impl::_update_subsystem_extent()
     if(dof_count_changed)
     {
         diag_dof_offsets_counts.scan();
+        ++dof_layout_generation;
     }
     total_dof = diag_dof_offsets_counts.total_count();
     if(x.capacity() < total_dof)
@@ -509,6 +659,97 @@ void GlobalLinearSystem::Impl::apply_preconditioner(cuda_tool::DenseVectorView<F
     }
 }
 
+bool GlobalLinearSystem::Impl::fused_pcg_update_apply_dot(
+    cuda_tool::DenseVectorView<Float>  x,
+    cuda_tool::CDenseVectorView<Float> p,
+    cuda_tool::DenseVectorView<Float>  r,
+    cuda_tool::CDenseVectorView<Float> Ap,
+    cuda_tool::DenseVectorView<Float>  z,
+    cuda_tool::CVarView<Float>         rz,
+    cuda_tool::CVarView<Float>         pAp,
+    cuda_tool::VarView<Float>          rz_new,
+    cuda_tool::CVarView<IndexT>        converged,
+    cudaStream_t                       stream)
+{
+    // A global preconditioner may couple arbitrary segments. Multiple local
+    // preconditioners on one subsystem must also keep the reference sequence:
+    // update x/r once, apply all preconditioners, then take one dot product.
+    // Reject fusion before any hook or kernel can partially update the vectors.
+    if(global_preconditioner || !local_preconditioner_owners_unique)
+        return false;
+
+    UIPC_ASSERT(x.size() == p.size() && x.size() == r.size()
+                    && x.size() == Ap.size() && x.size() == z.size(),
+                "fused PCG vectors must have matching sizes");
+
+    // Block replay supplies a zeroed ping-pong accumulation slot. Each local
+    // subsystem adds its contribution; the direction kernel clears the slot
+    // that the next iteration will consume.
+    const auto diag_dof_counts  = diag_dof_offsets_counts.counts();
+    const auto diag_dof_offsets = diag_dof_offsets_counts.offsets();
+
+    for(auto& preconditioner : local_preconditioners.view())
+    {
+        const auto index  = preconditioner->m_subsystem->m_index;
+        const auto offset = diag_dof_offsets[index];
+        const auto count  = diag_dof_counts[index];
+
+        FusedPcgUpdateApplyDotInfo fused_info{this};
+        fused_info.m_x         = x.subview(offset, count);
+        fused_info.m_p         = p.subview(offset, count);
+        fused_info.m_r         = r.subview(offset, count);
+        fused_info.m_Ap        = Ap.subview(offset, count);
+        fused_info.m_z         = z.subview(offset, count);
+        fused_info.m_rz        = rz;
+        fused_info.m_pAp       = pAp;
+        fused_info.m_rz_new    = rz_new;
+        fused_info.m_converged = converged;
+        fused_info.m_stream    = stream;
+
+        if(preconditioner->fused_pcg_update_apply_dot(fused_info))
+            continue;
+
+        launch_fused_pcg_update_xr_segment(fused_info.x(),
+                                           fused_info.p(),
+                                           fused_info.r(),
+                                           fused_info.Ap(),
+                                           fused_info.rz(),
+                                           fused_info.pAp(),
+                                           fused_info.converged(),
+                                           stream);
+
+        ApplyPreconditionerInfo apply_info{this};
+        apply_info.m_z         = fused_info.z();
+        apply_info.m_r         = fused_info.r();
+        apply_info.m_converged = converged;
+        apply_info.m_stream    = stream;
+        preconditioner->apply(apply_info);
+
+        launch_fused_pcg_dot_segment(fused_info.r(), fused_info.z(), rz_new, converged, stream);
+    }
+
+    for(auto index : no_precond_diag_subsystem_indices)
+    {
+        const auto offset = diag_dof_offsets[index];
+        const auto count  = diag_dof_counts[index];
+
+        FusedPcgUpdateApplyDotInfo fused_info{this};
+        fused_info.m_x         = x.subview(offset, count);
+        fused_info.m_p         = p.subview(offset, count);
+        fused_info.m_r         = r.subview(offset, count);
+        fused_info.m_Ap        = Ap.subview(offset, count);
+        fused_info.m_z         = z.subview(offset, count);
+        fused_info.m_rz        = rz;
+        fused_info.m_pAp       = pAp;
+        fused_info.m_rz_new    = rz_new;
+        fused_info.m_converged = converged;
+        fused_info.m_stream    = stream;
+        launch_fused_pcg_identity_update_apply_dot(fused_info);
+    }
+
+    return true;
+}
+
 void GlobalLinearSystem::Impl::spmv(Float                              a,
                                     cuda_tool::CDenseVectorView<Float> x,
                                     Float                              b,
@@ -535,6 +776,27 @@ void GlobalLinearSystem::Impl::spmv_dot(cuda_tool::CDenseVectorView<Float> x,
                             triplet_count_dev.cviewer(),
                             bcoo_A.triplet_capacity(),
                             stream);
+}
+
+void GlobalLinearSystem::Impl::spmv_dot_pipelined(cuda_tool::CDenseVectorView<Float> x,
+                                                  cuda_tool::DenseVectorView<Float> y,
+                                                  cuda_tool::VarView<Float> d_dot,
+                                                  cuda_tool::DenseVectorView<Float> next_y,
+                                                  cuda_tool::VarView<Float> next_dot,
+                                                  cuda_tool::CVarView<IndexT> converged,
+                                                  cudaStream_t stream)
+{
+    spmver.rbk_sym_spmv_dot_pipelined(1.0,
+                                      bcoo_A.cview(),
+                                      x,
+                                      y,
+                                      d_dot,
+                                      next_y,
+                                      next_dot,
+                                      converged,
+                                      triplet_count_dev.cviewer(),
+                                      bcoo_A.triplet_capacity(),
+                                      stream);
 }
 
 bool GlobalLinearSystem::Impl::accuracy_statisfied(cuda_tool::DenseVectorView<Float> r)

@@ -5,6 +5,7 @@ target("backend_cuda")
     -- Share the backend's kernel registry when inline CUDA helpers cross the DSO boundary.
     add_links("cudart")
     add_files("**.cu", "**.cpp")
+    add_includedirs(path.join(os.projectdir(), "src"))
     if has_config("dev") then
         add_rules("clangd")
     end

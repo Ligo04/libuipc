@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: blockwise ABD Hessian emission and fused
+ * preconditioner integration.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <affine_body/abd_linear_subsystem.h>
 #include <sim_engine.h>
 #include <kernel_cout.h>
@@ -11,6 +36,8 @@
 #include <affine_body/affine_body_kinetic.h>
 #include <affine_body/affine_body_constitution.h>
 #include <utils/report_extent_check.h>
+#include <cstdint>
+#include <limits>
 
 namespace uipc::backend::cuda
 {
@@ -29,6 +56,95 @@ UIPC_GENERIC void zero_out_lower(Matrix12x12& H)
 namespace
 {
     using namespace cuda_tool;  // for eigen:: / view aliases used inside kernel bodies
+
+    template <typename T>
+    void loose_resize(cuda_tool::DeviceBuffer<T>& buffer, SizeT size, Float reserve_ratio)
+    {
+        if(buffer.capacity() < size)
+            buffer.reserve_discard(static_cast<SizeT>(size * reserve_ratio));
+        buffer.resize_discard(size);
+    }
+
+    inline UIPC_GENERIC std::uint64_t pack_body_pair(IndexT left, IndexT right, int col_bits)
+    {
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(left)) << col_bits)
+               | static_cast<std::uint32_t>(right);
+    }
+
+    inline UIPC_GENERIC IndexT body_pair_left(std::uint64_t key, int col_bits)
+    {
+        return static_cast<IndexT>(key >> col_bits);
+    }
+
+    inline UIPC_GENERIC IndexT body_pair_right(std::uint64_t key, int col_bits)
+    {
+        const auto mask = (std::uint64_t{1} << col_bits) - std::uint64_t{1};
+        return static_cast<IndexT>(key & mask);
+    }
+
+    __global__ void abd_dytopo_build_body_pair_keys_kernel(
+        cuda_tool::CTripletMatrixView<Float, 3, 3> hessians,
+        cuda_tool::CBufferView<IndexT>             v2b,
+        cuda_tool::BufferView<std::uint64_t>       keys,
+        cuda_tool::BufferView<IndexT>              receiver_indices,
+        IndexT                                     vertex_offset,
+        int                                        body_pair_col_bits,
+        int                                        n)
+    {
+        int I = blockIdx.x * blockDim.x + threadIdx.x;
+        if(I >= n)
+            return;
+
+        const auto& [g_i, g_j, H3x3] = hessians(I);
+        const auto i                 = g_i - vertex_offset;
+        const auto j                 = g_j - vertex_offset;
+        const auto body_i            = v2b(i);
+        const auto body_j            = v2b(j);
+        const auto left              = min(body_i, body_j);
+        const auto right             = max(body_i, body_j);
+
+        UIPC_KERNEL_ASSERT(left >= 0 && right >= left,
+                           "ABD DyTopo body pair must be ordered and nonnegative");
+        keys(I)             = pack_body_pair(left, right, body_pair_col_bits);
+        receiver_indices(I) = I;
+        (void)H3x3;
+    }
+
+    __global__ void abd_dytopo_body_pair_block_counts_kernel(
+        cuda_tool::CBufferView<std::uint64_t> unique_keys,
+        cuda_tool::BufferView<int>            block_counts,
+        int                                   body_pair_col_bits,
+        int                                   n)
+    {
+        int I = blockIdx.x * blockDim.x + threadIdx.x;
+        if(I >= n)
+            return;
+        const auto key = unique_keys(I);
+        // An off-diagonal 12x12 body pair contributes all sixteen 3x3
+        // blocks. A diagonal body pair contributes the ten upper blocks;
+        // the lower six were discarded by ge2sym in the legacy path.
+        block_counts(I) = body_pair_left(key, body_pair_col_bits)
+                                  == body_pair_right(key, body_pair_col_bits) ?
+                              10 :
+                              16;
+    }
+
+    __global__ void abd_dytopo_body_pair_total_block_count_kernel(
+        cuda_tool::CBufferView<int> block_counts,
+        cuda_tool::CBufferView<int> block_offsets,
+        cuda_tool::Dense<int>       total_count,
+        int                         n)
+    {
+        if(blockIdx.x == 0 && threadIdx.x == 0)
+            *total_count = n == 0 ? 0 : block_offsets(n - 1) + block_counts(n - 1);
+    }
+
+    inline UIPC_GENERIC int same_body_upper_block_slot(int block_i, int block_j)
+    {
+        // Row starts are 0, 4, 7, 9 for the upper triangle of a 4x4
+        // block matrix.
+        return block_i * 3 - block_i * (block_i - 1) / 2 + block_j;
+    }
 
     __global__ void abd_linear_subsystem_assemble_kinetic_shape_k1_kernel(
         cuda_tool::CBufferView<IndexT>    is_fixed,
@@ -231,8 +347,6 @@ namespace
         auto& J_i = Js(i);
         auto& J_j = Js(j);
 
-        Matrix12x12 H12x12;
-
         // We know half contact hessian i <= j
         // but we don't know body_i and body_j order
         // so test and swap if necessary
@@ -244,46 +358,176 @@ namespace
             R = body_i;
         }
 
-        if(is_fixed(body_i) || is_fixed(body_j))
+        const bool has_fixed = is_fixed(body_i) || is_fixed(body_j);
+        for(IndexT block_i = 0; block_i < 4; ++block_i)
         {
-            H12x12.setZero();
+            for(IndexT block_j = 0; block_j < 4; ++block_j)
+            {
+                Matrix3x3 block = Matrix3x3::Zero();
+                if(!has_fixed)
+                {
+                    if(body_i < body_j)
+                    {
+                        block = ABDJacobi::JT_H_J_block(J_i.T(), H3x3, J_j, block_i, block_j);
+                    }
+                    else if(body_i > body_j)
+                    {
+                        block = ABDJacobi::JT_H_J_block(
+                            J_j.T(), H3x3.transpose(), J_i, block_i, block_j);
+                    }
+                    else if(i != j)
+                    {
+                        block = ABDJacobi::JT_H_J_block(J_i.T(), H3x3, J_j, block_i, block_j)
+                                + ABDJacobi::JT_H_J_block(
+                                    J_j.T(), H3x3.transpose(), J_i, block_i, block_j);
+                    }
+                    else
+                    {
+                        block = ABDJacobi::JT_H_J_block(J_i.T(), H3x3, J_j, block_i, block_j);
+                    }
+                }
+
+                if(body_i == body_j && !has_fixed)
+                {
+                    for(IndexT row = 0; row < 3; ++row)
+                        for(IndexT col = 0; col < 3; ++col)
+                            atomicAdd(&diag_hessian(body_i)(3 * block_i + row, 3 * block_j + col),
+                                      block(row, col));
+                }
+
+                // A same-body contribution is symmetric after both vertex
+                // orders are accumulated. Keep the raw triplet contract: the
+                // lower 3x3 blocks are explicit zero entries.
+                if(body_i == body_j && block_i > block_j)
+                    block.setZero();
+
+                dst(I * 16 + block_i * 4 + block_j).write(L * 4 + block_i, R * 4 + block_j, block);
+            }
+        }
+    }
+
+    // One CUDA block owns one ordered body pair. Its sixteen warps each
+    // reduce one 3x3 block of the corresponding 12x12 body-pair matrix.
+    // Same-body lower blocks are retained long enough to update the complete
+    // diagonal Hessian, but only the ten upper blocks enter the global
+    // triplet stream, matching the legacy ge2sym contract.
+    __global__ void abd_linear_subsystem_aggregate_dytopo_body_pairs_kernel(
+        cuda_tool::CTripletMatrixView<Float, 3, 3> dytopo_effect_hessian,
+        cuda_tool::TripletMatrixView<Float, 3>     dst,
+        cuda_tool::CBufferView<IndexT>             sorted_receiver_indices,
+        cuda_tool::CBufferView<std::uint64_t>      unique_body_pair_keys,
+        cuda_tool::CBufferView<int>                body_pair_counts,
+        cuda_tool::CBufferView<int>                body_pair_offsets,
+        cuda_tool::CBufferView<int>                body_pair_block_offsets,
+        cuda_tool::CBufferView<IndexT>             v2b,
+        cuda_tool::CBufferView<ABDJacobi>          Js,
+        cuda_tool::CBufferView<IndexT>             is_fixed,
+        cuda_tool::BufferView<Matrix12x12>         diag_hessian,
+        IndexT                                     vertex_offset,
+        int                                        body_pair_col_bits,
+        int                                        pair_count)
+    {
+        constexpr int warp_size = 32;
+
+        const int pair_index  = blockIdx.x;
+        const int block_index = threadIdx.x / warp_size;
+        const int lane_index  = threadIdx.x & (warp_size - 1);
+        if(pair_index >= pair_count || block_index >= 16)
+            return;
+
+        const auto pair_key  = unique_body_pair_keys(pair_index);
+        const auto left      = body_pair_left(pair_key, body_pair_col_bits);
+        const auto right     = body_pair_right(pair_key, body_pair_col_bits);
+        const auto block_i   = block_index / 4;
+        const auto block_j   = block_index % 4;
+        const bool same_body = left == right;
+        const bool has_fixed = is_fixed(left) || is_fixed(right);
+
+        Matrix3x3 sum = Matrix3x3::Zero();
+        if(!has_fixed)
+        {
+            const int pair_offset = body_pair_offsets(pair_index);
+            const int pair_size   = body_pair_counts(pair_index);
+            for(int k = lane_index; k < pair_size; k += warp_size)
+            {
+                const auto receiver_index = sorted_receiver_indices(pair_offset + k);
+                const auto& [g_i, g_j, H3x3] = dytopo_effect_hessian(receiver_index);
+
+                const auto i      = g_i - vertex_offset;
+                const auto j      = g_j - vertex_offset;
+                const auto body_i = v2b(i);
+                const auto body_j = v2b(j);
+                Matrix3x3  block;
+
+                if(body_i < body_j)
+                {
+                    block = ABDJacobi::JT_H_J_block(Js(i).T(), H3x3, Js(j), block_i, block_j);
+                }
+                else if(body_i > body_j)
+                {
+                    block = ABDJacobi::JT_H_J_block(
+                        Js(j).T(), H3x3.transpose(), Js(i), block_i, block_j);
+                }
+                else if(i != j)
+                {
+                    block = ABDJacobi::JT_H_J_block(Js(i).T(), H3x3, Js(j), block_i, block_j)
+                            + ABDJacobi::JT_H_J_block(
+                                Js(j).T(), H3x3.transpose(), Js(i), block_i, block_j);
+                }
+                else
+                {
+                    block = ABDJacobi::JT_H_J_block(Js(i).T(), H3x3, Js(j), block_i, block_j);
+                }
+                sum += block;
+            }
+
+#pragma unroll
+            for(int delta = warp_size / 2; delta > 0; delta /= 2)
+            {
+#pragma unroll
+                for(int row = 0; row < 3; ++row)
+                {
+#pragma unroll
+                    for(int col = 0; col < 3; ++col)
+                    {
+                        sum(row, col) +=
+                            __shfl_down_sync(0xFFFFFFFFu, sum(row, col), delta);
+                    }
+                }
+            }
+        }
+
+        if(lane_index != 0)
+            return;
+
+        if(same_body)
+        {
+            if(!has_fixed)
+            {
+#pragma unroll
+                for(int row = 0; row < 3; ++row)
+                {
+#pragma unroll
+                    for(int col = 0; col < 3; ++col)
+                    {
+                        diag_hessian(left)(3 * block_i + row, 3 * block_j + col) +=
+                            sum(row, col);
+                    }
+                }
+            }
+
+            if(block_i > block_j)
+                return;
+
+            const int output_index = body_pair_block_offsets(pair_index)
+                                     + same_body_upper_block_slot(block_i, block_j);
+            dst(output_index).write(left * 4 + block_i, right * 4 + block_j, sum);
         }
         else
         {
-            if(body_i < body_j)
-            {
-                H12x12 = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j);
-            }
-            else if(body_i > body_j)
-            {
-                H12x12 = ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i);
-            }
-            else  // body_i == body_j
-            {
-                // Two vertices from the same body
-                if(i != j)
-                {
-                    H12x12 = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j)
-                             + ABDJacobi::JT_H_J(J_j.T(), H3x3.transpose(), J_i);
-                }
-                else  // i == j
-                {
-                    H12x12 = ABDJacobi::JT_H_J(J_i.T(), H3x3, J_j);
-                }
-
-                // Fill diagonal hessian for diag-inv preconditioner
-                eigen::atomic_add(diag_hessian(body_i), H12x12);
-
-                // Since body_i == body_j, we only fill the upper triangle part
-                zero_out_lower(H12x12);
-            }
+            const int output_index = body_pair_block_offsets(pair_index) + block_index;
+            dst(output_index).write(left * 4 + block_i, right * 4 + block_j, sum);
         }
-
-        TripletMatrixUnpacker MU{dst};
-        MU.block<4, 4>(I * 4 * 4)  // triplet range of [I*16, (I+1)*16)
-            .write(L * 4,          // begin row
-                   R * 4,          // begin col
-                   H12x12);
     }
 
     __global__ void abd_linear_subsystem_retrieve_solution_kernel(
@@ -395,6 +639,103 @@ void ABDLinearSubsystem::Impl::receive_init_dof_info(WorldVisitor& w,
     UIPC_ASSERT(offset == info.dof_offset() + info.dof_count(), "dof size mismatch");
 }
 
+SizeT ABDLinearSubsystem::Impl::_prepare_dytopo_body_pair_aggregation()
+{
+    using namespace cuda_tool;
+
+    const SizeT receiver_count =
+        dytopo_effect_receiver ? dytopo_effect_receiver->hessians().triplet_count() : 0;
+    dytopo_prepared_receiver_count = receiver_count;
+    dytopo_unique_body_pair_count  = 0;
+    dytopo_aggregated_block_count  = 0;
+
+    if(receiver_count == 0)
+        return 0;
+
+    UIPC_ASSERT(receiver_count <= static_cast<SizeT>(std::numeric_limits<int>::max()),
+                "ABD DyTopo receiver count {} exceeds the CUDA kernel index range",
+                receiver_count);
+    UIPC_ASSERT(abd().body_count()
+                    <= static_cast<SizeT>(std::numeric_limits<IndexT>::max()),
+                "ABD body count {} exceeds the IndexT range",
+                abd().body_count());
+
+    std::uint32_t max_body_id =
+        abd().body_count() > 0 ? static_cast<std::uint32_t>(abd().body_count() - 1) : 0;
+    int col_bits = 1;
+    while(max_body_id >>= 1)
+        ++col_bits;
+    dytopo_body_pair_col_bits = col_bits;
+
+    loose_resize(dytopo_body_pair_keys_input, receiver_count, reserve_ratio);
+    loose_resize(dytopo_body_pair_keys, receiver_count, reserve_ratio);
+    loose_resize(dytopo_receiver_indices_input, receiver_count, reserve_ratio);
+    loose_resize(dytopo_receiver_indices, receiver_count, reserve_ratio);
+
+    auto k = abd_dytopo_build_body_pair_keys_kernel;
+    int  n = static_cast<int>(receiver_count);
+    k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+        dytopo_effect_receiver->hessians(),
+        abd().vertex_id_to_body_id.cview(),
+        dytopo_body_pair_keys_input.view(),
+        dytopo_receiver_indices_input.view(),
+        affine_body_vertex_reporter->vertex_offset(),
+        dytopo_body_pair_col_bits,
+        n);
+
+    DeviceRadixSort().SortPairs(dytopo_body_pair_keys_input.data(),
+                                dytopo_body_pair_keys.data(),
+                                dytopo_receiver_indices_input.data(),
+                                dytopo_receiver_indices.data(),
+                                static_cast<int>(receiver_count),
+                                0,
+                                2 * dytopo_body_pair_col_bits);
+
+    loose_resize(dytopo_unique_body_pair_keys, receiver_count, reserve_ratio);
+    loose_resize(dytopo_body_pair_counts, receiver_count, reserve_ratio);
+    DeviceRunLengthEncode().Encode(dytopo_body_pair_keys.data(),
+                                   dytopo_unique_body_pair_keys.data(),
+                                   dytopo_body_pair_counts.data(),
+                                   dytopo_unique_body_pair_count_dev.data(),
+                                   static_cast<int>(receiver_count));
+
+    const int pair_count = dytopo_unique_body_pair_count_dev;
+    UIPC_ASSERT(pair_count >= 0, "ABD DyTopo body-pair run count must be nonnegative");
+    dytopo_unique_body_pair_count = static_cast<SizeT>(pair_count);
+    dytopo_unique_body_pair_keys.resize_discard(pair_count);
+    dytopo_body_pair_counts.resize_discard(pair_count);
+    loose_resize(dytopo_body_pair_offsets, pair_count, reserve_ratio);
+    loose_resize(dytopo_body_pair_block_counts, pair_count, reserve_ratio);
+    loose_resize(dytopo_body_pair_block_offsets, pair_count, reserve_ratio);
+
+    DeviceScan().ExclusiveSum(dytopo_body_pair_counts.data(),
+                              dytopo_body_pair_offsets.data(),
+                              pair_count);
+
+    auto k2 = abd_dytopo_body_pair_block_counts_kernel;
+    if(pair_count > 0)
+        k2<<<cuda_tool::best_grid_dim(pair_count, k2), cuda_tool::best_block_dim(k2), 0, nullptr>>>(
+            dytopo_unique_body_pair_keys.cview(),
+            dytopo_body_pair_block_counts.view(),
+            dytopo_body_pair_col_bits,
+            pair_count);
+
+    DeviceScan().ExclusiveSum(dytopo_body_pair_block_counts.data(),
+                              dytopo_body_pair_block_offsets.data(),
+                              pair_count);
+    abd_dytopo_body_pair_total_block_count_kernel<<<1, 1>>>(
+        dytopo_body_pair_block_counts.cview(),
+        dytopo_body_pair_block_offsets.cview(),
+        dytopo_aggregated_block_count_dev.viewer(),
+        pair_count);
+
+    const int block_count = dytopo_aggregated_block_count_dev;
+    UIPC_ASSERT(block_count >= 0, "ABD DyTopo aggregated block count must be nonnegative");
+    dytopo_aggregated_block_count = static_cast<SizeT>(block_count);
+
+    return dytopo_aggregated_block_count;
+}
+
 void ABDLinearSubsystem::Impl::report_extent(GlobalLinearSystem::DiagExtentInfo& info)
 {
     // 1. Gradient Count
@@ -436,13 +777,12 @@ void ABDLinearSubsystem::Impl::report_extent(GlobalLinearSystem::DiagExtentInfo&
     }
 
 
+    SizeT dytopo_H3x3_count = 0;
     if(dytopo_effect_receiver && !info.gradient_only())
-    {
-        H12x12_count += dytopo_effect_receiver->hessians().triplet_count();
-    }
+        dytopo_H3x3_count = _prepare_dytopo_body_pair_aggregation();
 
 
-    auto H3x3_count = H12x12_count * (4 * 4);
+    auto H3x3_count = H12x12_count * (4 * 4) + dytopo_H3x3_count;
 
     if(info.gradient_only())
     {
@@ -632,24 +972,39 @@ void ABDLinearSubsystem::Impl::_assemble_dytopo_effect(IndexT& offset,
     if(dytopo_effect_receiver)
         dytopo_effect_hessian_count = dytopo_effect_receiver->hessians().triplet_count();
 
-    auto H3x3_count         = dytopo_effect_hessian_count * (4 * 4);
+    if(dytopo_effect_hessian_count)
+    {
+        UIPC_ASSERT(dytopo_prepared_receiver_count == dytopo_effect_hessian_count,
+                    "ABD DyTopo body-pair preparation is stale: prepared {}, assembling {}",
+                    dytopo_prepared_receiver_count,
+                    dytopo_effect_hessian_count);
+    }
+
+    auto H3x3_count         = dytopo_aggregated_block_count;
     auto dytopo_effect_H3x3 = info.hessians().subview(offset, H3x3_count);
 
     if(dytopo_effect_hessian_count)
     {
         // Half Contact Hessian
         // ref: https://github.com/spiriMirror/libuipc/issues/272
-        auto k = abd_linear_subsystem_assemble_dytopo_effect_k2_kernel;
-        int  n = (int)dytopo_effect_hessian_count;
-        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-            dytopo_effect_receiver->hessians(),
-            dytopo_effect_H3x3,
-            abd().vertex_id_to_body_id.cview(),
-            abd().vertex_id_to_J.cview(),
-            abd().body_id_to_is_fixed.cview(),
-            diag_hessian.view(),
-            vertex_offset,
-            n);
+        constexpr int block_dim = 16 * 32;
+        const int pair_count = static_cast<int>(dytopo_unique_body_pair_count);
+        if(pair_count > 0)
+            abd_linear_subsystem_aggregate_dytopo_body_pairs_kernel<<<pair_count, block_dim, 0, nullptr>>>(
+                dytopo_effect_receiver->hessians(),
+                dytopo_effect_H3x3,
+                dytopo_receiver_indices.cview(),
+                dytopo_unique_body_pair_keys.cview(),
+                dytopo_body_pair_counts.cview(),
+                dytopo_body_pair_offsets.cview(),
+                dytopo_body_pair_block_offsets.cview(),
+                abd().vertex_id_to_body_id.cview(),
+                abd().vertex_id_to_J.cview(),
+                abd().body_id_to_is_fixed.cview(),
+                diag_hessian.view(),
+                vertex_offset,
+                dytopo_body_pair_col_bits,
+                pair_count);
     }
 
     offset += H3x3_count;

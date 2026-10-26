@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: direct-store output and specialized vector passes
+ * for the supported MAS layout.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <type_define.h>
 #include <Eigen/Dense>
 #include <linear_system/local_preconditioner.h>
@@ -466,6 +491,27 @@ class FEMMASPreconditioner : public LocalPreconditioner
                                              diag_inv.size(),
                                              info.stream());
         }
+    }
+
+    virtual bool do_fused_pcg_update_apply_dot(GlobalLinearSystem::FusedPcgUpdateApplyDotInfo& info) override
+    {
+        // The fused engine owns one update and one dot contribution for every
+        // FEM degree of freedom. Mixed MAS/diagonal coverage must retain the
+        // reference update -> apply both -> dot sequence.
+        if(!m_has_partition || !engine.is_initialized() || m_has_unpartitioned)
+            return false;
+
+        engine.fused_pcg_update_apply_dot(info.x(),
+                                          info.p(),
+                                          info.r(),
+                                          info.Ap(),
+                                          info.z(),
+                                          info.rz(),
+                                          info.pAp(),
+                                          info.rz_new(),
+                                          info.converged(),
+                                          info.stream());
+        return true;
     }
 };
 

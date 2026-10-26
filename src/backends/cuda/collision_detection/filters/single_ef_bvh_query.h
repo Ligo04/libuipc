@@ -32,7 +32,8 @@ class SingleEFBVHQuery
                 PrimitiveBounds                                   edges,
                 PrimitiveBounds                                   triangles,
                 InfoStacklessBVH::QueryBuffer&                    pts,
-                InfoStacklessBVH::QueryBuffer&                    ees);
+                InfoStacklessBVH::QueryBuffer&                    ees,
+                bool reuse_bvh_topology = false);
 
     SizeT max_chunk_edges = std::numeric_limits<IndexT>::max();
 

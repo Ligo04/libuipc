@@ -1,9 +1,36 @@
+/*
+ * NVIDIA contributions: interfaces supporting the blockwise ABD assembly
+ * path.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 #include <linear_system/diag_linear_subsystem.h>
 #include <affine_body/affine_body_dynamics.h>
 #include <affine_body/abd_dytopo_effect_receiver.h>
 #include <affine_body/affine_body_vertex_reporter.h>
 #include <utils/offset_count_collection.h>
+
+#include <cstdint>
 
 namespace uipc::backend::cuda
 {
@@ -98,6 +125,7 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         void _assemble_kinetic_shape(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
         void _assemble_reporters(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
         void _assemble_dytopo_effect(IndexT& offset, GlobalLinearSystem::DiagInfo& info);
+        SizeT _prepare_dytopo_body_pair_aggregation();
 
         void  accuracy_check(GlobalLinearSystem::AccuracyInfo& info);
         void  retrieve_solution(GlobalLinearSystem::SolutionInfo& info);
@@ -123,6 +151,26 @@ class ABDLinearSubsystem final : public DiagLinearSubsystem
         cuda_tool::DeviceBuffer<Vector12>    body_id_to_shape_gradient;
         cuda_tool::DeviceBuffer<Matrix12x12> body_id_to_kinetic_hessian;
         cuda_tool::DeviceBuffer<Vector12>    body_id_to_kinetic_gradient;
+
+        // DyTopo receiver entries are stably grouped by the ordered body pair
+        // before assembly. One aggregate then replaces all contact blocks for
+        // that pair, so the global MatrixConverter never sees the 16x
+        // receiver expansion.
+        cuda_tool::DeviceBuffer<std::uint64_t> dytopo_body_pair_keys_input;
+        cuda_tool::DeviceBuffer<std::uint64_t> dytopo_body_pair_keys;
+        cuda_tool::DeviceBuffer<IndexT>        dytopo_receiver_indices_input;
+        cuda_tool::DeviceBuffer<IndexT>        dytopo_receiver_indices;
+        cuda_tool::DeviceBuffer<std::uint64_t> dytopo_unique_body_pair_keys;
+        cuda_tool::DeviceBuffer<int>           dytopo_body_pair_counts;
+        cuda_tool::DeviceBuffer<int>           dytopo_body_pair_offsets;
+        cuda_tool::DeviceBuffer<int>           dytopo_body_pair_block_counts;
+        cuda_tool::DeviceBuffer<int>           dytopo_body_pair_block_offsets;
+        cuda_tool::DeviceVar<int> dytopo_unique_body_pair_count_dev;
+        cuda_tool::DeviceVar<int> dytopo_aggregated_block_count_dev;
+        SizeT                     dytopo_prepared_receiver_count = 0;
+        SizeT                     dytopo_unique_body_pair_count  = 0;
+        SizeT                     dytopo_aggregated_block_count  = 0;
+        int                       dytopo_body_pair_col_bits      = 1;
 
         // diag hessian for preconditioner
         cuda_tool::DeviceBuffer<Matrix12x12> diag_hessian;
