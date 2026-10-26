@@ -1,0 +1,34 @@
+{
+  "arap": {
+    "gradient": 32,
+    "full": 0
+  },
+  "edge_stitch": {
+    "gradient": 32,
+    "full": 0
+  },
+  "fixed_joint": {
+    "gradient": 32,
+    "full": 0
+  },
+  "point_stitch": {
+    "gradient": 32,
+    "full": 32
+  },
+  "rod": {
+    "gradient": 0,
+    "full": 0
+  },
+  "spring": {
+    "gradient": 32,
+    "full": 32
+  },
+  "strain_bending": {
+    "gradient": 128,
+    "full": 32
+  },
+  "triangle_stitch": {
+    "gradient": 0,
+    "full": 0
+  }
+}

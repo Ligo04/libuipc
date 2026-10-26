@@ -1,3 +1,4 @@
+#include <utils/remaining_material_launch.h>
 #include <finite_element/codim_1d_constitution.h>
 #include <finite_element/codim_1d_constitution_diff_parm_reporter.h>
 #include <finite_element/constitutions/hookean_spring_1d_function.h>
@@ -7,7 +8,7 @@
 #include <utils/codim_thickness.h>
 #include <utils/matrix_assembler.h>
 #include <numbers>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 
 namespace uipc::backend::cuda
 {
@@ -48,6 +49,7 @@ namespace
         energies(I) = E * Vdt2;
     }
 
+    template <bool GradientOnly>
     __global__ void HookeanSpring1D_do_compute_gradient_hessian_kernel(
         cuda_tool::DoubletVectorView<Float, 3> G3s,
         cuda_tool::TripletMatrixView<Float, 3> H3x3s,
@@ -58,7 +60,6 @@ namespace
         cuda_tool::CBufferView<Vector3>        xs,
         Float                                  dt,
         double                                 Pi,
-        bool                                   gradient_only,
         int                                    n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -81,17 +82,62 @@ namespace
         DoubletVectorAssembler VA{G3s};
         VA.segment<StencilSize>(I * StencilSize).write(idx, G);
 
-        if(!gradient_only)
+        if constexpr(!GradientOnly)
         {
             Matrix6x6 H;
             NS::ddEddX(H, kappa, X, L0);
             H *= Vdt2;
-            make_spd(H);
+            constexpr int    SharedLanePitch = 32;
+            __shared__ Float shared_h[6 * 6 * SharedLanePitch];
+            FixedBankSoAMap<6, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+            H_workspace = H;
+            Vector<Float, 6> eigen_values;
+            selfadjoint_evd_fixed_bank_shared<6>(H_workspace, eigen_values);
             TripletMatrixAssembler MA{H3x3s};
-            MA.half_block<StencilSize>(I * HalfHessianSize).write(idx, H);
+            MA.half_block<StencilSize>(I * HalfHessianSize)
+                .write_psd_from_eigendecomposition(idx, H_workspace, eigen_values);
         }
     }
 }  // namespace
+
+void launch_hookean_spring_1d_gradient_hessian(const HookeanSpring1DGradientHessianLaunchInfo& info)
+{
+    int n = static_cast<int>(info.indices.size());
+    if(n <= 0)
+        return;
+    if(info.gradient_only)
+    {
+        auto      k = HookeanSpring1D_do_compute_gradient_hessian_kernel<true>;
+        const int block_size = info.block_size > 0 ? info.block_size : 32;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(info.G3s,
+                                                                         info.H3x3s,
+                                                                         info.kappas,
+                                                                         info.rest_lengths,
+                                                                         info.thicknesses,
+                                                                         info.indices,
+                                                                         info.xs,
+                                                                         info.dt,
+                                                                         info.Pi,
+                                                                         n);
+    }
+    else
+    {
+        auto      k = HookeanSpring1D_do_compute_gradient_hessian_kernel<false>;
+        const int BlockSize = info.block_size > 0 ? info.block_size : 32;
+        UIPC_ASSERT(BlockSize <= 32, "Full CTA exceeds the fixed-bank workspace lane pitch.");
+        k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(info.G3s,
+                                                                      info.H3x3s,
+                                                                      info.kappas,
+                                                                      info.rest_lengths,
+                                                                      info.thicknesses,
+                                                                      info.indices,
+                                                                      info.xs,
+                                                                      info.dt,
+                                                                      info.Pi,
+                                                                      n);
+    }
+}
+
 
 class HookeanSpring1D final : public Codim1DConstitution
 {
@@ -170,23 +216,16 @@ class HookeanSpring1D final : public Codim1DConstitution
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto k = HookeanSpring1D_do_compute_gradient_hessian_kernel;
-        int  n = (int)info.indices().size();
-        if(n > 0)
-        {
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                info.gradients(),
-                info.hessians(),
-                kappas.cview(),
-                info.rest_lengths(),
-                info.thicknesses(),
-                info.indices(),
-                info.xs(),
-                info.dt(),
-                std::numbers::pi,
-                info.gradient_only(),
-                n);
-        }
+        launch_hookean_spring_1d_gradient_hessian({info.gradients(),
+                                                   info.hessians(),
+                                                   kappas.cview(),
+                                                   info.rest_lengths(),
+                                                   info.thicknesses(),
+                                                   info.indices(),
+                                                   info.xs(),
+                                                   info.dt(),
+                                                   std::numbers::pi,
+                                                   info.gradient_only()});
     }
 };
 

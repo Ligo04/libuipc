@@ -1,5 +1,5 @@
 #pragma once
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 #include <type_define.h>
 
 namespace uipc::backend::cuda
@@ -60,12 +60,14 @@ UIPC_DEVICE UIPC_INLINE void compute_absolute_distance_derivative(Eigen::Vector<
                          t_bar.segment<3>(3));
 }
 
+template <typename Workspace>
 UIPC_DEVICE UIPC_INLINE void compute_absolute_distance_hessian(Eigen::Matrix<Float, 24, 24>& out_H,
                                                                const Float& dE_dx,
                                                                const Vector6& C_bar,
                                                                const Vector6& t_bar,
                                                                const Vector12& q_i,
-                                                               const Vector12& q_j)
+                                                               const Vector12& q_j,
+                                                               Workspace& workspace)
 {
     Vector9 F01_q;
     namespace DPJ = uipc::backend::cuda::sym::affine_body_driving_prismatic_joint;
@@ -81,7 +83,8 @@ UIPC_DEVICE UIPC_INLINE void compute_absolute_distance_hessian(Eigen::Matrix<Flo
     Matrix9x9 ddx_ddF;
     DPJ::ddxdF01(ddx_ddF, F01_q);
     Matrix9x9 H_D = dE_dx * ddx_ddF;
-    make_spd(H_D);
+    workspace     = H_D;
+    make_spd_fixed_bank_shared_upper_fma<9>(workspace, H_D);
 
     Eigen::Matrix<Float, 24, 24> JT_H_J;
     DPJ::J01T_H01_J01<Float>(JT_H_J,

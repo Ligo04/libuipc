@@ -1,8 +1,9 @@
+#include <utils/remaining_material_launch.h>
 #include <inter_primitive_effect_system/inter_primitive_constitution.h>
 #include <inter_primitive_effect_system/constitutions/soft_vertex_stitch_function.h>
 #include <uipc/builtin/attribute_name.h>
 #include <utils/matrix_assembler.h>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 
 namespace uipc::backend::cuda
 {
@@ -36,7 +37,7 @@ namespace
         }
     }
 
-    template <SizeT StencilSize, SizeT HalfHessianSize>
+    template <bool GradientOnly, SizeT StencilSize, SizeT HalfHessianSize>
     __global__ void SoftVertexStitch_do_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Vector2i>          topos,
         cuda_tool::CBufferView<Vector3>           xs,
@@ -45,7 +46,6 @@ namespace
         cuda_tool::DoubletVectorView<Float, 3>    G3s,
         cuda_tool::TripletMatrixView<Float, 3, 3> H3x3s,
         Float                                     dt,
-        bool                                      gradient_only,
         int                                       n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -62,17 +62,22 @@ namespace
         Float   L0  = rest_lengths(I);
         Vector3 dx  = X.head<3>() - X.tail<3>();
 
-        Vector6   G;
-        Matrix6x6 H;
-
+        Vector6 G;
         if(L0 == 0.0)
         {
-            // Harmonic energy: E = 0.5 * k * ||dx||^2
-            // G = k * [dx; -dx],  H = k * [[I,-I],[-I,I]]
             G.head<3>() = Kt2 * dx;
             G.tail<3>() = -Kt2 * dx;
+        }
+        else
+            SVS::dEdX(G, Kt2, X, L0);
 
-            if(!gradient_only)
+        DoubletVectorAssembler VA{G3s};
+        VA.segment<StencilSize>(I * StencilSize).write(PP, G);
+
+        if constexpr(!GradientOnly)
+        {
+            Matrix6x6 H;
+            if(L0 == 0.0)
             {
                 Matrix3x3 blk       = Kt2 * Matrix3x3::Identity();
                 H.block<3, 3>(0, 0) = blk;
@@ -80,27 +85,43 @@ namespace
                 H.block<3, 3>(3, 0) = -blk;
                 H.block<3, 3>(3, 3) = blk;
             }
-        }
-        else
-        {
-            SVS::dEdX(G, Kt2, X, L0);
-            if(!gradient_only)
-            {
+            else
                 SVS::ddEddX(H, Kt2, X, L0);
-            }
+            constexpr int    SharedLanePitch = 32;
+            __shared__ Float shared_h[6 * 6 * SharedLanePitch];
+            FixedBankSoAMap<6, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+            H_workspace = H;
+            Vector<Float, 6> eigen_values;
+            selfadjoint_evd_fixed_bank_shared<6>(H_workspace, eigen_values);
+            TripletMatrixAssembler MA{H3x3s};
+            MA.half_block<StencilSize>(I * HalfHessianSize)
+                .write_psd_from_eigendecomposition(PP, H_workspace, eigen_values);
         }
-
-        DoubletVectorAssembler VA{G3s};
-        VA.segment<StencilSize>(I * StencilSize).write(PP, G);
-
-        if(gradient_only)
-            return;
-
-        make_spd(H);
-        TripletMatrixAssembler MA{H3x3s};
-        MA.half_block<StencilSize>(I * HalfHessianSize).write(PP, H);
     }
 }  // namespace
+
+void launch_soft_vertex_stitch_gradient_hessian(const SoftVertexStitchGradientHessianLaunchInfo& info)
+{
+    int n = static_cast<int>(info.topos.size());
+    if(n <= 0)
+        return;
+    if(info.gradient_only)
+    {
+        auto k = SoftVertexStitch_do_compute_gradient_hessian_kernel<true, 2, 3>;
+        const int block_size = info.block_size > 0 ? info.block_size : 32;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.topos, info.xs, info.kappas, info.rest_lengths, info.G3s, info.H3x3s, info.dt, n);
+    }
+    else
+    {
+        auto k = SoftVertexStitch_do_compute_gradient_hessian_kernel<false, 2, 3>;
+        const int BlockSize = info.block_size > 0 ? info.block_size : 32;
+        UIPC_ASSERT(BlockSize <= 32, "Full CTA exceeds the fixed-bank workspace lane pitch.");
+        k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
+            info.topos, info.xs, info.kappas, info.rest_lengths, info.G3s, info.H3x3s, info.dt, n);
+    }
+}
+
 
 class SoftVertexStitch : public InterPrimitiveConstitution
 {
@@ -247,27 +268,16 @@ class SoftVertexStitch : public InterPrimitiveConstitution
 
     void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        using namespace cuda_tool;
-        namespace SVS = sym::soft_vertex_stitch;
-
         gradients = info.gradients();
         hessians  = info.hessians();
-
-        auto k = SoftVertexStitch_do_compute_gradient_hessian_kernel<StencilSize, HalfHessianSize>;
-        int n = (int)topos.size();
-        if(n > 0)
-        {
-            k<<<best_grid_dim(n, k), best_block_dim(k), 0, nullptr>>>(
-                topos.cview(),
-                info.positions().cviewer(),
-                kappas.cview(),
-                rest_lengths.cview(),
-                info.gradients().viewer(),
-                info.hessians().viewer(),
-                info.dt(),
-                info.gradient_only(),
-                n);
-        }
+        launch_soft_vertex_stitch_gradient_hessian({topos.cview(),
+                                                    info.positions().cviewer(),
+                                                    kappas.cview(),
+                                                    rest_lengths.cview(),
+                                                    info.gradients().viewer(),
+                                                    info.hessians().viewer(),
+                                                    info.dt(),
+                                                    info.gradient_only()});
     }
 };
 

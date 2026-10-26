@@ -6,7 +6,7 @@
 #include <time_integrator/time_integrator.h>
 #include <uipc/builtin/attribute_name.h>
 #include <utils/offset_count_collection.h>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 #include <utils/matrix_assembler.h>
 #include <uipc/common/enumerate.h>
 #include <affine_body/utils.h>
@@ -230,7 +230,11 @@ namespace
         PJ::ddE01ddF01(H01, kappa, F01);
 
         // Ensure H01 is SPD
-        make_spd(H01);
+        constexpr int                       SharedLanePitch = 32;
+        __shared__ Float                    shared_h[9 * 9 * SharedLanePitch];
+        FixedBankSoAMap<9, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+        H_workspace = H01;
+        make_spd_fixed_bank_shared_upper_fma<9>(H_workspace, H01);
 
         Matrix24x24 J01T_H01_J01;
         PJ::J01T_H01_J01<Float>(J01T_H01_J01,
@@ -445,7 +449,11 @@ namespace
         // Hessian
         Matrix9x9 H01;
         DPJ::ddE01ddF01(H01, kappa, F01_q, d_tidle);
-        make_spd(H01);
+        constexpr int                       SharedLanePitch = 32;
+        __shared__ Float                    shared_h[9 * 9 * SharedLanePitch];
+        FixedBankSoAMap<9, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+        H_workspace = H01;
+        make_spd_fixed_bank_shared_upper_fma<9>(H_workspace, H01);
         Matrix24x24 J01T_H01_J01;
         DPJ::J01T_H01_J01<Float>(J01T_H01_J01,
                                  H01,
@@ -617,7 +625,10 @@ namespace
 
         if(dE_dx != 0.0f)
         {
-            compute_absolute_distance_hessian(H, dE_dx, C_bar, t_bar, qk, ql);
+            constexpr int    SharedLanePitch = 32;
+            __shared__ Float shared_h[9 * 9 * SharedLanePitch];
+            FixedBankSoAMap<9, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+            compute_absolute_distance_hessian(H, dE_dx, C_bar, t_bar, qk, ql, H_workspace);
         }
 
         TripletMatrixAssembler TMA{H12x12s};
@@ -962,7 +973,8 @@ class AffineBodyPrismaticJoint final : public InterAffineBodyConstitution
         if(n > 0)
         {
             auto k = affine_body_prismatic_joint_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            constexpr int BlockSize = 32;
+            k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
                 body_ids.cview(),
                 rest_cs.cview(),
                 rest_ts.cview(),
@@ -1304,7 +1316,8 @@ class AffineBodyDrivingPrismaticJoint : public InterAffineBodyConstraint
         if(n > 0)
         {
             auto k = affine_body_driving_prismatic_joint_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            constexpr int BlockSize = 32;
+            k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
                 prismatic_joint->body_ids.cview(),
                 is_constrained.cview(),
                 is_passive.cview(),
@@ -1687,7 +1700,8 @@ class AffineBodyPrismaticJointLimit final : public InterAffineBodyConstitution
         if(n > 0)
         {
             auto k = affine_body_prismatic_joint_limit_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            constexpr int BlockSize = 32;
+            k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(
                 prismatic_joint->body_ids.cview(),
                 prismatic_joint->rest_cs.cview(),
                 prismatic_joint->rest_ts.cview(),

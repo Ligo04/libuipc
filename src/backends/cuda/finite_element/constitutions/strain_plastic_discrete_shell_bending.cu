@@ -1,3 +1,4 @@
+#include <utils/remaining_material_launch.h>
 #include <finite_element/finite_element_extra_constitution.h>
 #include <finite_element/finite_element_method.h>
 #include <time_integrator/time_integrator.h>
@@ -5,7 +6,8 @@
 #include <finite_element/constitutions/strain_plastic_discrete_shell_bending_function.h>
 #include <limits>
 #include <numbers>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
+#include <utils/four_vertex_translation_free_spd.h>
 #include <utils/matrix_assembler.h>
 #include <utils/dump_utils.h>
 #include <kernel_cout.h>
@@ -81,6 +83,7 @@ namespace
         energies(I) = E * V_bar * dt * dt;
     }
 
+    template <bool GradientOnly>
     __global__ void StrainPlasticDiscreteShellBending_do_compute_gradient_hessian_kernel(
         cuda_tool::BufferView<Vector4i>        stencils,
         cuda_tool::BufferView<Float>           bending_stiffnesses,
@@ -92,7 +95,6 @@ namespace
         cuda_tool::DoubletVectorView<Float, 3> G3s,
         cuda_tool::TripletMatrixView<Float, 3> H3x3s,
         Float                                  dt,
-        bool                                   gradient_only,
         int                                    n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -112,23 +114,35 @@ namespace
 
         Float Vdt2 = V_bar * dt * dt;
 
-        Vector12    G12;
-        Matrix12x12 H12x12;
+        Vector12 G12;
 
         PDSB::dEdx(G12, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa);
         G12 *= Vdt2;
         DoubletVectorAssembler DVA{G3s};
         DVA.segment<StencilSize>(I * StencilSize).write(stencil, G12);
 
-        if(gradient_only)
-            return;
+        if constexpr(!GradientOnly)
+        {
 
-        PDSB::ddEddx(H12x12, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa);
-        H12x12 *= Vdt2;
-        make_spd(H12x12);
+            Matrix12x12 H12x12;
 
-        TripletMatrixAssembler TMA{H3x3s};
-        TMA.half_block<StencilSize>(I * HalfHessianSize).write(stencil, H12x12);
+            PDSB::ddEddx(H12x12, x0, x1, x2, x3, L0, h_bar, theta_bar, kappa);
+            H12x12 *= Vdt2;
+            constexpr int    SharedLanePitch = 16;
+            __shared__ Float shared_h[12 * 12 * SharedLanePitch];
+            FixedBankSoAMap<12, SharedLanePitch> H_workspace(shared_h
+                                                             + threadIdx.x);
+            H_workspace = H12x12;
+            Vector<Float, 12> eigen_values;
+            // The dihedral energy is invariant to a common translation of
+            // its four vertices. Project the nine relative degrees of freedom.
+            selfadjoint_evd_four_vertex_translation_free_fixed_bank<SharedLanePitch>(
+                H_workspace, eigen_values);
+
+            TripletMatrixAssembler TMA{H3x3s};
+            TMA.half_block<StencilSize>(I * HalfHessianSize)
+                .write_psd_from_eigendecomposition(stencil, H_workspace, eigen_values);
+        }
     }
 
     __global__ void StrainPlasticDiscreteShellBendingTimeIntegrator_do_update_state_kernel(
@@ -164,6 +178,48 @@ namespace
         }
     }
 }  // namespace
+
+void launch_strain_plastic_bending_gradient_hessian(const StrainPlasticBendingGradientHessianLaunchInfo& info)
+{
+    int n = static_cast<int>(info.stencils.size());
+    if(n <= 0)
+        return;
+    if(info.gradient_only)
+    {
+        auto k = StrainPlasticDiscreteShellBending_do_compute_gradient_hessian_kernel<true>;
+        const int block_size = info.block_size > 0 ? info.block_size : 32;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.stencils,
+            info.bending_stiffnesses,
+            info.theta_bars,
+            info.h_bars,
+            info.V_bars,
+            info.L0s,
+            info.xs,
+            info.G3s,
+            info.H3x3s,
+            info.dt,
+            n);
+    }
+    else
+    {
+        auto k = StrainPlasticDiscreteShellBending_do_compute_gradient_hessian_kernel<false>;
+        const int BlockSize = info.block_size > 0 ? info.block_size : 16;
+        UIPC_ASSERT(BlockSize <= 16, "Full CTA exceeds the fixed-bank workspace lane pitch.");
+        k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(info.stencils,
+                                                                      info.bending_stiffnesses,
+                                                                      info.theta_bars,
+                                                                      info.h_bars,
+                                                                      info.V_bars,
+                                                                      info.L0s,
+                                                                      info.xs,
+                                                                      info.G3s,
+                                                                      info.H3x3s,
+                                                                      info.dt,
+                                                                      n);
+    }
+}
+
 
 class StrainPlasticDiscreteShellBending final : public FiniteElementExtraConstitution
 {
@@ -382,24 +438,17 @@ class StrainPlasticDiscreteShellBending final : public FiniteElementExtraConstit
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto k = StrainPlasticDiscreteShellBending_do_compute_gradient_hessian_kernel;
-        int n = (int)stencils.size();
-        if(n > 0)
-        {
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                stencils.view(),
-                bending_stiffnesses.view(),
-                theta_bars.view(),
-                h_bars.view(),
-                V_bars.view(),
-                rest_lengths.view(),
-                info.xs(),
-                info.gradients(),
-                info.hessians(),
-                info.dt(),
-                info.gradient_only(),
-                n);
-        }
+        launch_strain_plastic_bending_gradient_hessian({stencils.view(),
+                                                        bending_stiffnesses.view(),
+                                                        theta_bars.view(),
+                                                        h_bars.view(),
+                                                        V_bars.view(),
+                                                        rest_lengths.view(),
+                                                        info.xs(),
+                                                        info.gradients(),
+                                                        info.hessians(),
+                                                        info.dt(),
+                                                        info.gradient_only()});
     }
 };
 REGISTER_SIM_SYSTEM(StrainPlasticDiscreteShellBending);

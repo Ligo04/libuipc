@@ -41,9 +41,9 @@ namespace sym::arap_3d
 
         T kv = kappa * v;
 
-        gradients.segment<3>(0) = kv * dPsi_dF.col(0);
-        gradients.segment<3>(3) = kv * dPsi_dF.col(1);
-        gradients.segment<3>(6) = kv * dPsi_dF.col(2);
+        gradients.template segment<3>(0) = kv * dPsi_dF.col(0);
+        gradients.template segment<3>(3) = kv * dPsi_dF.col(1);
+        gradients.template segment<3>(6) = kv * dPsi_dF.col(2);
     }
 
     // Function to flatten a matrix into a vector

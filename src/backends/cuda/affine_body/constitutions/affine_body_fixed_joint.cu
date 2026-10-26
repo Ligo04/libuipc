@@ -1,7 +1,9 @@
+#include <utils/remaining_material_launch.h>
 #include <affine_body/inter_affine_body_constitution.h>
 #include <affine_body/constitutions/affine_body_fixed_joint_function.h>
 #include <uipc/builtin/attribute_name.h>
 #include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 #include <utils/matrix_assembler.h>
 
 namespace uipc::backend::cuda
@@ -61,6 +63,7 @@ namespace
         Es(I) = Er_val + Et_val;
     }
 
+    template <bool GradientOnly>
     __global__ void affine_body_fixed_joint_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Vector2i>            body_ids,
         cuda_tool::CBufferView<Vector6>             rest_cs,
@@ -72,7 +75,6 @@ namespace
         cuda_tool::CBufferView<Vector12>            qs,
         cuda_tool::DoubletVectorView<Float, 12>     G12s,
         cuda_tool::TripletMatrixView<Float, 12>     H12x12s,
-        bool                                        gradient_only,
         SizeT                                       HalfHessianSize,
         int                                         n)
     {
@@ -133,11 +135,15 @@ namespace
         Vector2i               indices = {bids(0), bids(1)};
         DVA.segment<2>(2 * I).write(indices, G);
 
-        if(!gradient_only)
+        if constexpr(!GradientOnly)
         {
             Matrix9x9 ddEdFr_val;
             FJ::ddEdFr(ddEdFr_val, kappa, Fr_val);
-            make_spd(ddEdFr_val);
+            constexpr int    SharedLanePitch = 32;
+            __shared__ Float shared_h[9 * 9 * SharedLanePitch];
+            FixedBankSoAMap<9, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+            H_workspace = ddEdFr_val;
+            make_spd_fixed_bank_shared_upper_fma<9>(H_workspace, ddEdFr_val);
 
             Matrix24x24 JrT_Hr_Jr_val;
             FJ::JrT_Hr_Jr<Float>(JrT_Hr_Jr_val,
@@ -165,6 +171,50 @@ namespace
         }
     }
 }  // namespace
+
+void launch_affine_body_fixed_joint_gradient_hessian(const AffineBodyFixedJointGradientHessianLaunchInfo& info)
+{
+    int n = static_cast<int>(info.body_ids.size());
+    if(n <= 0)
+        return;
+    if(info.gradient_only)
+    {
+        auto k = affine_body_fixed_joint_compute_gradient_hessian_kernel<true>;
+        const int block_size = info.block_size > 0 ? info.block_size : 128;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.body_ids,
+            info.rest_cs,
+            info.rest_ts,
+            info.rest_ns,
+            info.rest_bs,
+            info.strength_ratio,
+            info.body_masses,
+            info.qs,
+            info.G12s,
+            info.H12x12s,
+            info.HalfHessianSize,
+            n);
+    }
+    else
+    {
+        auto k = affine_body_fixed_joint_compute_gradient_hessian_kernel<false>;
+        const int BlockSize = info.block_size > 0 ? info.block_size : 32;
+        UIPC_ASSERT(BlockSize <= 32, "Full CTA exceeds the fixed-bank workspace lane pitch.");
+        k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(info.body_ids,
+                                                                      info.rest_cs,
+                                                                      info.rest_ts,
+                                                                      info.rest_ns,
+                                                                      info.rest_bs,
+                                                                      info.strength_ratio,
+                                                                      info.body_masses,
+                                                                      info.qs,
+                                                                      info.G12s,
+                                                                      info.H12x12s,
+                                                                      info.HalfHessianSize,
+                                                                      n);
+    }
+}
+
 
 class AffineBodyFixedJoint final : public InterAffineBodyConstitution
 {
@@ -339,26 +389,18 @@ class AffineBodyFixedJoint final : public InterAffineBodyConstitution
 
     void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto gradient_only = info.gradient_only();
-        int  n             = (int)body_ids.size();
-        if(n > 0)
-        {
-            auto k = affine_body_fixed_joint_compute_gradient_hessian_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                body_ids.cview(),
-                rest_cs.cview(),
-                rest_ts.cview(),
-                rest_ns.cview(),
-                rest_bs.cview(),
-                strength_ratios.cview(),
-                info.body_masses(),
-                info.qs(),
-                info.gradients(),
-                info.hessians(),
-                gradient_only,
-                HalfHessianSize,
-                n);
-        }
+        launch_affine_body_fixed_joint_gradient_hessian({body_ids.cview(),
+                                                         rest_cs.cview(),
+                                                         rest_ts.cview(),
+                                                         rest_ns.cview(),
+                                                         rest_bs.cview(),
+                                                         strength_ratios.cview(),
+                                                         info.body_masses(),
+                                                         info.qs(),
+                                                         info.gradients(),
+                                                         info.hessians(),
+                                                         info.gradient_only(),
+                                                         HalfHessianSize});
     };
 
     U64 get_uid() const noexcept override { return ConstitutionUID; }

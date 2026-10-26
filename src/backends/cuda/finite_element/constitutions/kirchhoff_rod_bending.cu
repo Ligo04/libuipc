@@ -1,8 +1,9 @@
+#include <utils/remaining_material_launch.h>
 #include <finite_element/finite_element_extra_constitution.h>
 #include <uipc/builtin/attribute_name.h>
 #include <finite_element/constitutions/kirchhoff_rod_bending_function.h>
 #include <numbers>
-#include <utils/make_spd.h>
+#include <utils/fixed_bank_soa_evd.h>
 #include <utils/matrix_assembler.h>
 
 #include <kernel_cout.h>
@@ -52,6 +53,7 @@ namespace
         energies(I) = E;
     }
 
+    template <bool GradientOnly>
     __global__ void KirchhoffRodBending_do_compute_gradient_hessian_kernel(
         cuda_tool::BufferView<Vector3i>        hinges,
         cuda_tool::BufferView<Float>           bending_stiffnesses,
@@ -62,7 +64,6 @@ namespace
         cuda_tool::TripletMatrixView<Float, 3> H3x3s,
         Float                                  dt,
         Float                                  Pi,
-        bool                                   gradient_only,
         int                                    n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -93,18 +94,64 @@ namespace
         DoubletVectorAssembler DVA{G3s};
         DVA.segment<StencilSize>(I * StencilSize).write(hinge, G);
 
-        if(gradient_only)
-            return;
+        if constexpr(!GradientOnly)
+        {
 
-        Matrix9x9 H;
-        KRB::ddEddX(H, k, X, L0, r, Pi);
+            Matrix9x9 H;
+            KRB::ddEddX(H, k, X, L0, r, Pi);
 
-        H *= dt2;
-        make_spd(H);
-        TripletMatrixAssembler TMA{H3x3s};
-        TMA.half_block<StencilSize>(I * HalfHessianSize).write(hinge, H);
+            H *= dt2;
+            constexpr int    SharedLanePitch = 32;
+            __shared__ Float shared_h[9 * 9 * SharedLanePitch];
+            FixedBankSoAMap<9, SharedLanePitch> H_workspace(shared_h + threadIdx.x);
+            H_workspace = H;
+            Vector<Float, 9> eigen_values;
+            selfadjoint_evd_fixed_bank_shared<9>(H_workspace, eigen_values);
+            TripletMatrixAssembler TMA{H3x3s};
+            TMA.half_block<StencilSize>(I * HalfHessianSize)
+                .write_psd_from_eigendecomposition(hinge, H_workspace, eigen_values);
+        }
     }
 }  // namespace
+
+void launch_kirchhoff_rod_bending_gradient_hessian(const KirchhoffRodBendingGradientHessianLaunchInfo& info)
+{
+    int n = static_cast<int>(info.hinges.size());
+    if(n <= 0)
+        return;
+    if(info.gradient_only)
+    {
+        auto k = KirchhoffRodBending_do_compute_gradient_hessian_kernel<true>;
+        const int block_size = info.block_size > 0 ? info.block_size : 32;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(info.hinges,
+                                                                         info.bending_stiffnesses,
+                                                                         info.thicknesses,
+                                                                         info.xs,
+                                                                         info.x_bars,
+                                                                         info.G3s,
+                                                                         info.H3x3s,
+                                                                         info.dt,
+                                                                         info.Pi,
+                                                                         n);
+    }
+    else
+    {
+        auto k = KirchhoffRodBending_do_compute_gradient_hessian_kernel<false>;
+        const int BlockSize = info.block_size > 0 ? info.block_size : 32;
+        UIPC_ASSERT(BlockSize <= 32, "Full CTA exceeds the fixed-bank workspace lane pitch.");
+        k<<<(n + BlockSize - 1) / BlockSize, BlockSize, 0, nullptr>>>(info.hinges,
+                                                                      info.bending_stiffnesses,
+                                                                      info.thicknesses,
+                                                                      info.xs,
+                                                                      info.x_bars,
+                                                                      info.G3s,
+                                                                      info.H3x3s,
+                                                                      info.dt,
+                                                                      info.Pi,
+                                                                      n);
+    }
+}
+
 
 class KirchhoffRodBending final : public FiniteElementExtraConstitution
 {
@@ -231,25 +278,16 @@ class KirchhoffRodBending final : public FiniteElementExtraConstitution
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        constexpr Float Pi = std::numbers::pi;
-
-        auto k = KirchhoffRodBending_do_compute_gradient_hessian_kernel;
-        int  n = (int)hinges.size();
-        if(n > 0)
-        {
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                hinges.view(),
-                bending_stiffnesses.view(),
-                info.thicknesses(),
-                info.xs(),
-                info.x_bars(),
-                info.gradients(),
-                info.hessians(),
-                info.dt(),
-                Pi,
-                info.gradient_only(),
-                n);
-        }
+        launch_kirchhoff_rod_bending_gradient_hessian({hinges.view(),
+                                                       bending_stiffnesses.view(),
+                                                       info.thicknesses(),
+                                                       info.xs(),
+                                                       info.x_bars(),
+                                                       info.gradients(),
+                                                       info.hessians(),
+                                                       info.dt(),
+                                                       std::numbers::pi,
+                                                       info.gradient_only()});
     }
 };
 
