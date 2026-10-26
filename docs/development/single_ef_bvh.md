@@ -149,6 +149,12 @@ executable and backend library; the original optimization branch produces
 this diagnostic too. Retain those extended-mode logs separately rather than
 interpreting them as invalid memory accesses.
 
+For stress tests with many small asynchronous chunks, synccheck also uses
+`--force-synchronization-limit 64` to bound the checker's tracking memory.
+This option affects only the instrumented run. See the
+[combined optimization validation record](single_ef_bvh_optimization_validation.md)
+for the tested revisions, coverage and tooling limitations.
+
 The focused tests compare candidate sets and multiplicity with the existing
 two-tree queries and exhaustive CPU enumeration. They include more than 64
 nearby triangles, chunk boundaries, reordered surface indices, geometry
