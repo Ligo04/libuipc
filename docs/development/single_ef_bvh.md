@@ -18,6 +18,20 @@ incident edge, and each edge chooses one incident triangle. An edge can
 represent both of its endpoints. The resulting EF pairs produce the existing
 PT and EE candidate formats without duplicates.
 
+Mixed-dimensional scenes extend those proxies without constructing degenerate
+triangles. A vertex without an incident edge owns a point query proxy, and an
+edge without an incident triangle owns a standalone edge leaf. Thus PT covers
+particles and rod vertices against triangles, while EE covers surface edges,
+rod-surface edges and rod-rod edges. Every point still has exactly one query
+owner and every edge exactly one leaf owner; the same `b < e` rule removes EE
+duplicates independently of primitive ordering. Point queries cannot emit EE,
+and edge leaves cannot emit PT.
+
+The original `AllP-CodimP` PP and `CodimP-AllE` PE queries run alongside this
+PT/EE tree. Their predicates, body/contact masks and downstream contact/CCD
+handling are unchanged. Here codimensional vertices have dimension at most
+one; a two-dimensional triangle shell already uses the triangle path.
+
 Both passes query conservative AABB proxies. An edge proxy
 contains its ordinary edge box and the point boxes of its represented vertices.
 A triangle proxy contains its ordinary triangle box and the edge boxes it owns.
@@ -60,13 +74,17 @@ the writable high-water mark shared by DCD and CCD. Smaller or empty DCD results
 do not shrink that range. Growth follows the BVH reserve ratio and keeps the
 logical write capacity within the downstream 32-bit bound.
 
-The normal path has one combined readback after all chunks finish. Expansion
+The PT/EE query has one combined readback after all chunks finish. Expansion
 launches over reusable EF capacity and zeros inactive entries using the device
 EF count, so the scan length is known without an intermediate host readback.
 Scan and fill stay on the GPU, including cross-chunk offsets. The scan processes
 padding as well as valid entries; the extra work depends on retained capacity.
 The outer filter clears unused codimensional-family counters with a device
 kernel before the query, avoiding counter uploads after the final readback.
+In a mixed-dimensional scene, PP/PE queries launch before PT/EE. The pipeline
+then downloads their counts together in its existing four-count readback and
+replays only overflowing PP/PE buffers. Thus the mixed path currently has two
+count readbacks when capacities fit, while a pure triangle scene retains one.
 
 If EF or output capacity is insufficient, writes stay within bounds, the host
 grows the buffers with the BVH reserve ratio, and the entire query is replayed.
@@ -76,8 +94,9 @@ interfaces. This does not make the whole collision pipeline GPU autonomous.
 
 ## Supported scope
 
-Every surface vertex and edge must belong to a triangle. Vertex and undirected
-edge lists must be unique, triangle vertex indices must be valid and distinct,
+At least one triangle is required. Isolated points and edges without incident
+triangles are supported. Vertex and undirected edge lists must be unique,
+triangle vertex indices must be valid and distinct,
 and every triangle edge must be present. Nonmanifold triangle surfaces are
 allowed. Geometry may contain zero-length edges with distinct vertex indices;
 the existing distance predicates still determine acceptance.
@@ -87,9 +106,12 @@ topology. Position and material data stay on the GPU during repeated detection.
 Future support for in-place topology rebuilds must explicitly invalidate this
 cache.
 
-Codimensional vertices and unsupported surface topology use the original
+Scenes without triangles and unsupported surface topology use the original
 informative BVH queries in both DCD and CCD. A supported pure triangle surface
-builds only the proxy triangle tree in both passes. Previously allocated
+builds only the proxy triangle tree in both passes. A mixed scene adds the
+original codimensional-point and edge trees for PP/PE, while its PT/EE proxy
+tree has `triangle_count + standalone_edge_count` leaves and
+`edge_count + isolated_point_count` queries. Previously allocated
 fallback-tree memory can remain allocated after a fallback pass; tree count
 alone does not predict whole-step runtime or peak memory.
 
@@ -110,8 +132,11 @@ nearby triangles, chunk boundaries, reordered surface indices, geometry
 degeneracy, masks and unsupported topology. Swept tests include intermediate
 crossings with separated endpoints, deforming edges, multiple alpha values,
 stationary positive-alpha queries, and DCD reuse after motion. World tests compare positions,
-active-contact counts and energies, and CCD TOI over two frames, including a
-mixed-dimensional fallback scene. They do not establish a performance ranking.
+active-contact counts and energies, and CCD TOI over two frames. Mixed tests
+cover particles, crossing rods and triangle surfaces using Single EF, plus
+pure rods/particles using the fallback. Candidate audits compare all four
+PP/PE/PT/EE families, and TOI audits compare every candidate's value as well
+as the global minimum. They do not establish a performance ranking.
 
 ## Wrecking ball benchmark
 

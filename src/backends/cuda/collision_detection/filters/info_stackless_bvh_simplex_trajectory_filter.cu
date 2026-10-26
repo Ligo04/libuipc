@@ -1243,32 +1243,8 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
                                                    info.d_hats(),
                                                    alpha};
 
-    if(method == CandidateMethod::SingleEF && codimVs.size() == 0)
-    {
-        // Clear unused families before the query's final readback, so no
-        // device work needs another host submission after publishing counts.
-        InfoStacklessBVHSimplexTrajectoryFilter_clear_codim_counts_kernel<<<1, 1>>>(
-            candidate_AllP_CodimP_pairs.m_cpNum.view(),
-            candidate_CodimP_AllE_pairs.m_cpNum.view());
-        if(single_ef.detect(lbvh_T,
-                            allp_allt_pred,
-                            alle_alle_pred,
-                            node_pred,
-                            {point_aabbs, point_bids, point_cids},
-                            {edge_aabbs, edge_bids, edge_cids},
-                            {triangle_aabbs, triangle_bids, triangle_cids},
-                            candidate_AllP_AllT_pairs,
-                            candidate_AllE_AllE_pairs))
-        {
-            candidate_AllP_CodimP_pairs.m_size = 0;
-            candidate_CodimP_AllE_pairs.m_size = 0;
-            audit_detect(info, method, true);
-            return;
-        }
-    }
-
-    lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
-    lbvh_T.build(triangle_aabbs, triangle_bids, triangle_cids);
+    if(method == CandidateMethod::Baseline || codimVs.size() > 0)
+        lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
 
     auto launch_allp_codimp = [&](bool rebuild_query)
     {
@@ -1306,14 +1282,43 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
     {
         lbvh_CodimP.build(codim_point_aabbs, codim_point_bids, codim_point_cids);
         launch_allp_codimp(true);
+        launch_codimp_alle(true);
     }
     else
     {
-        candidate_AllP_CodimP_pairs.m_cpNum.fill(0);
+        InfoStacklessBVHSimplexTrajectoryFilter_clear_codim_counts_kernel<<<1, 1>>>(
+            candidate_AllP_CodimP_pairs.m_cpNum.view(),
+            candidate_CodimP_AllE_pairs.m_cpNum.view());
     }
-    launch_codimp_alle(true);
-    launch_alle_alle();
-    launch_allp_allt(true);
+
+    // Mixed scenes keep the original PP/PE queries. PT/EE share one proxy
+    // tree, including point queries and standalone leaves for wire edges.
+    const bool used_single_ef =
+        method == CandidateMethod::SingleEF
+        && single_ef.detect(lbvh_T,
+                             allp_allt_pred,
+                             alle_alle_pred,
+                             node_pred,
+                             {point_aabbs, point_bids, point_cids},
+                             {edge_aabbs, edge_bids, edge_cids},
+                             {triangle_aabbs, triangle_bids, triangle_cids},
+                             candidate_AllP_AllT_pairs,
+                             candidate_AllE_AllE_pairs);
+    if(used_single_ef && codimVs.size() == 0)
+    {
+        candidate_AllP_CodimP_pairs.m_size = 0;
+        candidate_CodimP_AllE_pairs.m_size = 0;
+        audit_detect(info, method, true);
+        return;
+    }
+    if(!used_single_ef)
+    {
+        if(method == CandidateMethod::SingleEF && codimVs.size() == 0)
+            lbvh_E.build(edge_aabbs, edge_bids, edge_cids);
+        lbvh_T.build(triangle_aabbs, triangle_bids, triangle_cids);
+        launch_alle_alle();
+        launch_allp_allt(true);
+    }
 
     InfoStacklessBVHSimplexTrajectoryFilter_collect_query_counts_kernel<<<1, 1>>>(
         candidate_AllP_CodimP_pairs.m_cpNum.cview(),
@@ -1329,11 +1334,14 @@ void BVHSimplexPipeline::detect(DetectInfo& info, CandidateMethod method)
         launch_allp_codimp(false);
     if(lbvh_E.prepare_query_result(candidate_CodimP_AllE_pairs, host_counts[1]))
         launch_codimp_alle(false);
-    if(lbvh_E.prepare_query_result(candidate_AllE_AllE_pairs, host_counts[2]))
-        launch_alle_alle();
-    if(lbvh_T.prepare_query_result(candidate_AllP_AllT_pairs, host_counts[3]))
-        launch_allp_allt(false);
-    audit_detect(info, method, false);
+    if(!used_single_ef)
+    {
+        if(lbvh_E.prepare_query_result(candidate_AllE_AllE_pairs, host_counts[2]))
+            launch_alle_alle();
+        if(lbvh_T.prepare_query_result(candidate_AllP_AllT_pairs, host_counts[3]))
+            launch_allp_allt(false);
+    }
+    audit_detect(info, method, used_single_ef);
 }
 
 void BVHSimplexPipeline::filter_active(FilterActiveInfo& info)

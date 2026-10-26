@@ -94,6 +94,30 @@ struct Mesh
         dhats.assign(positions.size(), radius);
     }
 
+    void add_codimensional_geometry()
+    {
+        const auto base = static_cast<IndexT>(positions.size());
+        const std::array<Vector3, 5> added = {Vector3{0.2, 0.2, 0.025},
+                                               Vector3{-0.1, 0.2, 0.01},
+                                               Vector3{0.8, 0.2, 0.01},
+                                               Vector3{0.3, -0.1, 0.02},
+                                               Vector3{0.3, 0.8, 0.02}};
+        for(SizeT i = 0; i < added.size(); ++i)
+        {
+            positions.push_back(added[i]);
+            vertices.push_back(base + static_cast<IndexT>(i));
+            bodies.push_back(i % 2);
+            contacts.push_back(i % 2);
+            subscenes.push_back(i % 2);
+            thicknesses.push_back(0.001);
+            dhats.push_back(radius);
+        }
+        // Put wire edges on both sides of the surface-edge indices. EE
+        // coverage must not depend on which primitive happens to be smaller.
+        edges.insert(edges.begin(), Vector2i{base + 1, base + 2});
+        edges.emplace_back(base + 3, base + 4);
+    }
+
     template <size_t N>
     void add_bounds(Bounds&                      out,
                     const std::array<IndexT, N>& ids,
@@ -481,16 +505,59 @@ TEST_CASE("single EF BVH preserves DCD candidates", "[cuda][single_ef_bvh]")
         // Flagged degenerate predicates are compared to the existing GPU path.
         check_mesh(mesh, 1, false);
     }
-    SECTION("wire edge does not publish partial output")
+    SECTION("wire edge connecting surface vertices")
     {
         Mesh mesh(2);
         mesh.edges.emplace_back(1, 4);
-        check_unsupported(mesh);
+        check_mesh(mesh, 1);
     }
-    SECTION("isolated surface vertex does not publish partial output")
+    SECTION("isolated particle near triangle interiors")
     {
         Mesh mesh(2);
+        mesh.positions[0] = Vector3{0.2, 0.2, 0.025};
         mesh.vertices.push_back(0);
+        check_mesh(mesh, 1);
+    }
+    SECTION("particles and wire edges share the PT and EE proxy tree")
+    {
+        Mesh mesh(4);
+        mesh.add_codimensional_geometry();
+        check_mesh(mesh, 1);
+    }
+    SECTION("mixed-dimensional EF capacity overflow and chunk replay")
+    {
+        Mesh mesh(160);
+        mesh.add_codimensional_geometry();
+        check_mesh(mesh, std::numeric_limits<SizeT>::max());
+    }
+    SECTION("mixed-dimensional contact, subscene and self-collision masks")
+    {
+        Mesh mesh(8);
+        mesh.add_codimensional_geometry();
+        mesh.contact_mask = {1, 0, 0, 1};
+        mesh.subscene_mask = {1, 0, 0, 1};
+        mesh.self = {0, 1};
+        const auto expected = mesh.all_pairs();
+        REQUIRE(!expected.first.empty());
+        REQUIRE(!expected.second.empty());
+        check_mesh(mesh, 2);
+    }
+    SECTION("pure codimensional topology does not publish partial output")
+    {
+        Mesh mesh(0);
+        mesh.add_codimensional_geometry();
+        check_unsupported(mesh);
+    }
+    SECTION("duplicate vertex does not publish partial output")
+    {
+        Mesh mesh(2);
+        mesh.vertices.push_back(mesh.vertices.front());
+        check_unsupported(mesh);
+    }
+    SECTION("missing triangle edge does not publish partial output")
+    {
+        Mesh mesh(2);
+        mesh.edges.pop_back();
         check_unsupported(mesh);
     }
     SECTION("empty surface does not publish partial output")
@@ -742,6 +809,29 @@ void check_swept_candidates(Mesh&                       mesh,
 TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][single_ef_bvh]")
 {
     using namespace test_single_ef_bvh;
+    SECTION("particles and rods cross triangle surfaces during the sweep")
+    {
+        Mesh mesh(2);
+        const auto first_codim = mesh.positions.size();
+        mesh.add_codimensional_geometry();
+        std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
+        for(SizeT v = first_codim; v < mesh.positions.size(); ++v)
+        {
+            mesh.positions[v].z() += 1.0;
+            motion[v] = Vector3{0, 0, -2};
+        }
+        check_swept_candidates(mesh, motion, {0.25, 0.5, 1.0});
+    }
+    SECTION("deforming wires and a moving isolated particle")
+    {
+        Mesh mesh(3);
+        const auto first_codim = mesh.positions.size();
+        mesh.add_codimensional_geometry();
+        std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
+        for(SizeT v = first_codim; v < mesh.positions.size(); ++v)
+            motion[v] = Vector3{v % 2 ? 0.1 : -0.1, 0.05, v % 2 ? 0.5 : -0.5};
+        check_swept_candidates(mesh, motion, {0.3, 0.8, 1.0});
+    }
     SECTION("intermediate crossing without initial or final DCD contact")
     {
         Mesh mesh(2);

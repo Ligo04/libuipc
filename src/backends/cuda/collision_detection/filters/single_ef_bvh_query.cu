@@ -44,6 +44,7 @@ namespace
     __global__ void make_query_proxies(SingleEFBVHQuery::PrimitiveBounds points,
                                        SingleEFBVHQuery::PrimitiveBounds edges,
                                        EdgeEdgePredicate     ee_pred,
+                                       CBufferView<IndexT>    vertices,
                                        CBufferView<Vector2i> edge_vertices,
                                        CBufferView<Vector2i> owned_vertices,
                                        BufferView<AABB>      boxes,
@@ -54,6 +55,21 @@ namespace
         const auto i = blockIdx.x * blockDim.x + threadIdx.x;
         if(i >= boxes.size())
             return;
+        if(i >= edges.aabbs.size())
+        {
+            // A point without an incident edge owns one query proxy. It only
+            // emits PT pairs, and never masquerades as a geometric edge.
+            const auto v = owned_vertices(i)[0];
+            boxes(i)     = points.aabbs(v);
+            bids(i)      = points.bids(v);
+            cids(i)      = points.cids(v);
+            if(ee_pred.alpha == 0.0)
+            {
+                const auto p = ee_pred.Ps(vertices(v));
+                segments(i)  = {p, p, 0.0};
+            }
+            return;
+        }
         auto box = edges.aabbs(i);
         for(int slot = 0; slot < 2; ++slot)
         {
@@ -90,6 +106,16 @@ namespace
         const auto i = blockIdx.x * blockDim.x + threadIdx.x;
         if(i >= boxes.size())
             return;
+        if(i >= triangles.aabbs.size())
+        {
+            // A wire edge has no incident face. Store it in a standalone
+            // leaf so the ordinary b < e rule also covers wire-wire EE pairs.
+            const auto e = owned_edges(i)[0];
+            boxes(i)     = edges.aabbs(e);
+            bids(i)      = edges.bids(e);
+            cids(i)      = edges.cids(e);
+            return;
+        }
         auto       box = triangles.aabbs(i);
         const auto vs  = triangle_vertices(i);
         auto       bid = points.bids(vs[0]);
@@ -209,7 +235,8 @@ namespace
         for(int slot = 0; slot < 2; ++slot)
         {
             const auto v = owned_vertices(e)[slot];
-            if(v >= 0 && points.aabbs(v).intersects(triangles.aabbs(f))
+            if(v >= 0 && f < triangles.aabbs.size()
+               && points.aabbs(v).intersects(triangles.aabbs(f))
                && node_pred({v,
                              points.bids(v),
                              points.cids(v),
@@ -229,7 +256,8 @@ namespace
         for(int slot = 0; slot < 3; ++slot)
         {
             const auto b = owned_edges(f)[slot];
-            if(b >= 0 && b < e && edges.aabbs(b).intersects(edges.aabbs(e))
+            if(e < edges.aabbs.size() && b >= 0 && b < e
+               && edges.aabbs(b).intersects(edges.aabbs(e))
                && node_pred(
                    {b, edges.bids(b), edges.cids(b), edges.bids(e), edges.cids(e)})
                && ee_pred(
@@ -386,9 +414,13 @@ bool SingleEFBVHQuery::prepare_topology(const bvh_simplex_detail::PointTriangleP
             }
         }
     }
-    if(std::find(representatives.begin(), representatives.end(), -1)
-           != representatives.end()
-       || std::find(owner_faces.begin(), owner_faces.end(), -1) != owner_faces.end())
+    for(SizeT v = 0; v < representatives.size(); ++v)
+        if(representatives[v] < 0)
+            owned_vertices.emplace_back(static_cast<IndexT>(v), -1);
+    for(SizeT e = 0; e < owner_faces.size(); ++e)
+        if(owner_faces[e] < 0)
+            owned_edges.emplace_back(static_cast<IndexT>(e), -1, -1);
+    if(owned_vertices.size() > limit || owned_edges.size() > limit)
         return false;
 
     upload(m_edge_vertices, edge_vertices);
@@ -416,38 +448,40 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
     UIPC_ASSERT(points.aabbs.size() == m_vertex_count && edges.aabbs.size() == m_edge_count
                     && triangles.aabbs.size() == m_triangle_count,
                 "Single EF primitive bounds do not match topology");
-    m_query_boxes.resize_discard(m_edge_count);
-    m_query_bids.resize_discard(m_edge_count);
-    m_query_cids.resize_discard(m_edge_count);
+    const auto query_count = m_owned_vertices.size();
+    const auto leaf_count  = m_owned_edges.size();
+    m_query_boxes.resize_discard(query_count);
+    m_query_bids.resize_discard(query_count);
+    m_query_cids.resize_discard(query_count);
     if(pt_pred.alpha == 0.0)
-        m_query_segments.resize_discard(m_edge_count);
-    m_leaf_boxes.resize_discard(m_triangle_count);
-    m_leaf_bids.resize_discard(m_triangle_count);
-    m_leaf_cids.resize_discard(m_triangle_count);
-    make_query_proxies<<<(m_edge_count + 255) / 256, 256>>>(
-        points, edges, ee_pred, m_edge_vertices, m_owned_vertices, m_query_boxes, m_query_bids, m_query_cids, m_query_segments);
-    make_leaf_proxies<<<(m_triangle_count + 255) / 256, 256>>>(
+        m_query_segments.resize_discard(query_count);
+    m_leaf_boxes.resize_discard(leaf_count);
+    m_leaf_bids.resize_discard(leaf_count);
+    m_leaf_cids.resize_discard(leaf_count);
+    make_query_proxies<<<(query_count + 255) / 256, 256>>>(
+        points, edges, ee_pred, pt_pred.Vs, m_edge_vertices, m_owned_vertices, m_query_boxes, m_query_bids, m_query_cids, m_query_segments);
+    make_leaf_proxies<<<(leaf_count + 255) / 256, 256>>>(
         points, edges, triangles, m_triangle_vertices, m_owned_edges, m_leaf_boxes, m_leaf_bids, m_leaf_cids);
     triangle_bvh.build(m_leaf_boxes, m_leaf_bids, m_leaf_cids);
 
     const SizeT pair_limit = std::numeric_limits<IndexT>::max() - 1;
     const auto  chunk_size =
-        std::min({m_edge_count, std::max(SizeT{1}, max_chunk_edges), pair_limit / m_triangle_count});
+        std::min({query_count, std::max(SizeT{1}, max_chunk_edges), pair_limit / leaf_count});
     m_query_counts.resize_discard(3);
     m_chunk_base.resize_discard(2);
     for(;;)
     {
         const auto capacity =
-            std::min(m_ef_pairs.m_pairs.size(), chunk_size * m_triangle_count);
+            std::min(m_ef_pairs.m_pairs.size(), chunk_size * leaf_count);
         m_masks.resize_discard(capacity);
         m_pt_counts.resize_discard(capacity + 1);
         m_ee_counts.resize_discard(capacity + 1);
         m_pt_offsets.resize_discard(capacity + 1);
         m_ee_offsets.resize_discard(capacity + 1);
         m_query_counts.fill(0);
-        for(SizeT start = 0; start < m_edge_count; start += chunk_size)
+        for(SizeT start = 0; start < query_count; start += chunk_size)
         {
-            const auto count = std::min(chunk_size, m_edge_count - start);
+            const auto count = std::min(chunk_size, query_count - start);
             auto       run   = [&](auto predicate)
             {
                 triangle_bvh.launch_query(m_query_boxes.view(start, count),

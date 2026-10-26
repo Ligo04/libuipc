@@ -36,6 +36,19 @@ class SingleEFBVHQuery
 
     SizeT max_chunk_edges = std::numeric_limits<IndexT>::max();
 
+    SizeT isolated_point_count() const noexcept
+    {
+        return m_eligibility == Eligibility::Supported ?
+                   m_owned_vertices.size() - m_edge_count :
+                   0;
+    }
+    SizeT standalone_edge_count() const noexcept
+    {
+        return m_eligibility == Eligibility::Supported ?
+                   m_owned_edges.size() - m_triangle_count :
+                   0;
+    }
+
   private:
     enum class Eligibility
     {

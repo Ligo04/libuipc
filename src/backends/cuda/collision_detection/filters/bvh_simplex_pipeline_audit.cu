@@ -28,6 +28,8 @@ namespace
 
     enum class KeyKind
     {
+        CandidatePP,
+        CandidatePE,
         CandidatePT,
         CandidateEE,
         PP,
@@ -50,7 +52,7 @@ namespace
                 key[j] = raw[i][j];
             if constexpr(N == 2)
             {
-                if(kind != KeyKind::CandidatePT && key[1] < key[0])
+                if((kind == KeyKind::CandidateEE || kind == KeyKind::PP) && key[1] < key[0])
                     std::swap(key[0], key[1]);
             }
             if constexpr(N == 3)
@@ -297,6 +299,12 @@ void BVHSimplexPipeline::audit_detect(DetectInfo& info, CandidateMethod method, 
         ++m_audit_dcd_fallback;
 
     m_audit_shadow->detect(info, CandidateMethod::Baseline);
+    Json pp = compare<2>(candidate_AllP_CodimP_pairs.view(),
+                         m_audit_shadow->candidate_AllP_CodimP_pairs.view(),
+                         KeyKind::CandidatePP);
+    Json pe = compare<2>(candidate_CodimP_AllE_pairs.view(),
+                         m_audit_shadow->candidate_CodimP_AllE_pairs.view(),
+                         KeyKind::CandidatePE);
     Json pt                    = compare<2>(candidate_AllP_AllT_pairs.view(),
                          m_audit_shadow->candidate_AllP_AllT_pairs.view(),
                          KeyKind::CandidatePT);
@@ -309,19 +317,25 @@ void BVHSimplexPipeline::audit_detect(DetectInfo& info, CandidateMethod method, 
     ee["actual_writable_size"] = candidate_AllE_AllE_pairs.m_pairs.size();
     ee["baseline_writable_size"] =
         m_audit_shadow->candidate_AllE_AllE_pairs.m_pairs.size();
-    bool equal = pt["equal"].get<bool>() && ee["equal"].get<bool>();
+    bool equal = pp["equal"].get<bool>() && pe["equal"].get<bool>()
+                 && pt["equal"].get<bool>() && ee["equal"].get<bool>();
     write_record(Json{{"detect_sequence", m_audit_sequence},
                       {"phase", "candidates"},
                       {"comparison", "canonical_multiset"},
                       {"alpha", m_audit_alpha},
                       {"mode", m_audit_alpha == 0.0 ? "DCD" : "CCD"},
                       {"used_single_ef", used_single_ef},
+                      {"codim_vertices", info.codim_vertices().size()},
+                      {"isolated_point_proxies", used_single_ef ? single_ef.isolated_point_count() : 0},
+                      {"standalone_edge_proxies", used_single_ef ? single_ef.standalone_edge_count() : 0},
                       {"equal", equal},
                       {"dcd_single_calls", m_audit_dcd_single},
                       {"dcd_fallback_calls", m_audit_dcd_fallback},
                       {"ccd_single_calls", m_audit_ccd_single},
                       {"ccd_fallback_calls", m_audit_ccd_fallback},
                       {"toi_compared", false},
+                      {"PP", pp},
+                      {"PE", pe},
                       {"PT", pt},
                       {"EE", ee}});
     if(!equal)
@@ -373,6 +387,19 @@ void BVHSimplexPipeline::audit_toi(FilterTOIInfo& info)
     // The shadow must never publish its reduction into the real simulation.
     restore_actual_min();
 
+    Json pp = compare_pair_tois(
+        candidate_AllP_CodimP_pairs.view(),
+        tois.view(0, candidate_AllP_CodimP_pairs.size()),
+        m_audit_shadow->candidate_AllP_CodimP_pairs.view(),
+        m_audit_shadow->tois.view(0, m_audit_shadow->candidate_AllP_CodimP_pairs.size()),
+        KeyKind::CandidatePP);
+    Json pe = compare_pair_tois(
+        candidate_CodimP_AllE_pairs.view(),
+        tois.view(candidate_AllP_CodimP_pairs.size(), candidate_CodimP_AllE_pairs.size()),
+        m_audit_shadow->candidate_CodimP_AllE_pairs.view(),
+        m_audit_shadow->tois.view(m_audit_shadow->candidate_AllP_CodimP_pairs.size(),
+                                  m_audit_shadow->candidate_CodimP_AllE_pairs.size()),
+        KeyKind::CandidatePE);
     const auto actual_offset =
         candidate_AllP_CodimP_pairs.size() + candidate_CodimP_AllE_pairs.size();
     const auto shadow_offset = m_audit_shadow->candidate_AllP_CodimP_pairs.size()
@@ -395,7 +422,8 @@ void BVHSimplexPipeline::audit_toi(FilterTOIInfo& info)
         KeyKind::CandidateEE);
     const bool minimum_equal = close_toi(actual_min, baseline_min);
     const bool equal =
-        minimum_equal && pt["equal"].get<bool>() && ee["equal"].get<bool>();
+        minimum_equal && pp["equal"].get<bool>() && pe["equal"].get<bool>()
+        && pt["equal"].get<bool>() && ee["equal"].get<bool>();
     write_record(Json{{"detect_sequence", m_audit_sequence},
                       {"phase", "toi"},
                       {"comparison", "canonical_pair_toi_multiset"},
@@ -412,6 +440,8 @@ void BVHSimplexPipeline::audit_toi(FilterTOIInfo& info)
                        std::isfinite(actual_min) && std::isfinite(baseline_min) ?
                            Json(std::abs(actual_min - baseline_min)) :
                            Json(nullptr)},
+                      {"PP", pp},
+                      {"PE", pe},
                       {"PT", pt},
                       {"EE", ee}});
     if(!equal)
