@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: interfaces and state for fused iteration, blockwise
+ * assembly and layout generation.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 #include <sim_system.h>
 #include <functional>
@@ -205,6 +230,40 @@ class GlobalLinearSystem : public SimSystem
         Impl*                       m_impl   = nullptr;
     };
 
+    class FusedPcgUpdateApplyDotInfo
+    {
+      public:
+        FusedPcgUpdateApplyDotInfo(Impl* impl) noexcept
+            : m_impl(impl)
+        {
+        }
+
+        DenseVectorView             x() const { return m_x; }
+        CDenseVectorView            p() const { return m_p; }
+        DenseVectorView             r() const { return m_r; }
+        CDenseVectorView            Ap() const { return m_Ap; }
+        DenseVectorView             z() const { return m_z; }
+        cuda_tool::CVarView<Float>  rz() const { return m_rz; }
+        cuda_tool::CVarView<Float>  pAp() const { return m_pAp; }
+        cuda_tool::VarView<Float>   rz_new() const { return m_rz_new; }
+        cuda_tool::CVarView<IndexT> converged() const { return m_converged; }
+        cudaStream_t                stream() const noexcept { return m_stream; }
+
+      private:
+        friend class Impl;
+        DenseVectorView             m_x;
+        CDenseVectorView            m_p;
+        DenseVectorView             m_r;
+        CDenseVectorView            m_Ap;
+        DenseVectorView             m_z;
+        cuda_tool::CVarView<Float>  m_rz;
+        cuda_tool::CVarView<Float>  m_pAp;
+        cuda_tool::VarView<Float>   m_rz_new;
+        cuda_tool::CVarView<IndexT> m_converged;
+        cudaStream_t                m_stream = nullptr;
+        Impl*                       m_impl   = nullptr;
+    };
+
     class AccuracyInfo
     {
       public:
@@ -296,6 +355,10 @@ class GlobalLinearSystem : public SimSystem
         std::vector<int> accuracy_statisfied_flags;
         std::vector<int> no_precond_diag_subsystem_indices;
 
+        // Segment fusion may update x/r once per local preconditioner only
+        // when each subsystem has one owner. Fixed after initialization.
+        bool local_preconditioner_owners_unique = true;
+
         // Containers
         SimSystemSlotCollection<DiagLinearSubsystem>    diag_subsystems;
         SimSystemSlotCollection<OffDiagLinearSubsystem> off_diag_subsystems;
@@ -320,11 +383,26 @@ class GlobalLinearSystem : public SimSystem
         bool  initialized           = false;
         bool  empty_system          = true;
         SizeT last_solve_iterations = 0;
+        // Changes whenever the per-subsystem DoF partition changes. CUDA
+        // graphs capture subview offsets/counts and local-preconditioner
+        // buffer pointers, so total DoF and global matrix pointers alone are
+        // not a sufficient graph validity key.
+        SizeT dof_layout_generation = 0;
 
         void apply_preconditioner(cuda_tool::DenseVectorView<Float>  z,
                                   cuda_tool::CDenseVectorView<Float> r,
                                   cuda_tool::CVarView<IndexT>        converged,
                                   cudaStream_t stream = nullptr);
+        bool fused_pcg_update_apply_dot(cuda_tool::DenseVectorView<Float>  x,
+                                        cuda_tool::CDenseVectorView<Float> p,
+                                        cuda_tool::DenseVectorView<Float>  r,
+                                        cuda_tool::CDenseVectorView<Float> Ap,
+                                        cuda_tool::DenseVectorView<Float>  z,
+                                        cuda_tool::CVarView<Float>         rz,
+                                        cuda_tool::CVarView<Float>         pAp,
+                                        cuda_tool::VarView<Float>   rz_new,
+                                        cuda_tool::CVarView<IndexT> converged,
+                                        cudaStream_t                stream);
 
         void spmv(Float                              a,
                   cuda_tool::CDenseVectorView<Float> x,
@@ -334,6 +412,13 @@ class GlobalLinearSystem : public SimSystem
                       cuda_tool::DenseVectorView<Float>  y,
                       cuda_tool::VarView<Float>          d_dot,
                       cudaStream_t                       stream = nullptr);
+        void spmv_dot_pipelined(cuda_tool::CDenseVectorView<Float> x,
+                                cuda_tool::DenseVectorView<Float>  y,
+                                cuda_tool::VarView<Float>          d_dot,
+                                cuda_tool::DenseVectorView<Float>  next_y,
+                                cuda_tool::VarView<Float>          next_dot,
+                                cuda_tool::CVarView<IndexT>        converged,
+                                cudaStream_t                       stream);
 
         // data pointers of the assembled matrix buffers (row/col/value),
         // for the FusedPCG CUDA-graph validity key: a reassembly that
@@ -373,6 +458,7 @@ class GlobalLinearSystem : public SimSystem
     friend class GlobalPreconditioner;
     friend class GlobalDiffSimManager;
     friend class CurrentFrameDiffDofReporter;
+    friend class DuplicateLocalPreconditionerTestAccess;
 
     void add_subsystem(DiagLinearSubsystem* subsystem);
     void add_subsystem(OffDiagLinearSubsystem* subsystem);

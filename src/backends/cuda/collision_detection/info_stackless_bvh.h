@@ -1,3 +1,27 @@
+/*
+ * NVIDIA contributions: BVH refit/query-reuse interfaces and state.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 #include <type_define.h>
 #include <collision_detection/aabb.h>
@@ -94,7 +118,7 @@ class InfoStacklessBVH
         cuda_tool::DeviceBuffer<int>          m_querySortedId;
         cuda_tool::DeviceVar<int>             m_cpNum;
 
-        void build(cuda_tool::CBufferView<AABB> aabbs);
+        void build(cuda_tool::CBufferView<AABB> aabbs, bool reuse_order = false);
     };
 
     struct Node
@@ -119,6 +143,13 @@ class InfoStacklessBVH
                cuda_tool::CBufferView<IndexT> CIDs);
     void build(cuda_tool::CBufferView<AABB> aabbs);
 
+    // Reuse the existing Morton topology while updating bounds and informative
+    // metadata. A false result leaves the tree untouched so callers can fall
+    // back to a full build when the primitive count or cache is incompatible.
+    bool refit(cuda_tool::CBufferView<AABB>   aabbs,
+               cuda_tool::CBufferView<IndexT> BIDs,
+               cuda_tool::CBufferView<IndexT> CIDs);
+
     template <typename NodePred, typename LeafPred>
     void detect(cuda_tool::CBuffer2DView<IndexT> cmts, NodePred np, LeafPred lp, QueryBuffer& qbuffer);
 
@@ -135,7 +166,8 @@ class InfoStacklessBVH
                cuda_tool::CBuffer2DView<IndexT> cmts,
                NodePred                         np,
                LeafPred                         lp,
-               QueryBuffer&                     qbuffer);
+               QueryBuffer&                     qbuffer,
+               bool                             reuse_query_order = false);
 
     template <typename NodePred, typename LeafPred>
     void launch_query(cuda_tool::CBufferView<AABB>     query_aabbs,
@@ -145,7 +177,8 @@ class InfoStacklessBVH
                       NodePred                         np,
                       LeafPred                         lp,
                       QueryBuffer&                     qbuffer,
-                      bool                             rebuild_query = true);
+                      bool                             rebuild_query = true,
+                      bool reuse_query_order                         = false);
 
     // Publish a device-produced count and grow the output if a retry is
     // required. The caller relaunches the same query when this returns true.
@@ -172,6 +205,9 @@ class InfoStacklessBVH
         void        reorderNode(int intSize);
         void        propagateInformativeMetadata(int intSize);
         void        build(cuda_tool::CBufferView<AABB>   aabbs,
+                          cuda_tool::CBufferView<IndexT> bids,
+                          cuda_tool::CBufferView<IndexT> cids);
+        bool        refit(cuda_tool::CBufferView<AABB>   aabbs,
                           cuda_tool::CBufferView<IndexT> bids,
                           cuda_tool::CBufferView<IndexT> cids);
 
@@ -217,6 +253,14 @@ class InfoStacklessBVH
         cuda_tool::DeviceVector<int>      int_par;
         cuda_tool::DeviceVector<int>      int_range_x;
         cuda_tool::DeviceVector<int>      int_range_y;
+        // Maximum Morton-sorted leaf rank for each reordered internal node.
+        // stacklessSelf uses it to skip the already-covered half-tree.
+        cuda_tool::DeviceVector<int> self_max_rank;
+        // Stable reordered-tree links and per-refit publication state. The
+        // last arriving child publishes each parent before walking upward.
+        cuda_tool::DeviceVector<int>      refit_parent;
+        cuda_tool::DeviceVector<int>      refit_right_child;
+        cuda_tool::DeviceVector<int>      refit_arrivals;
         cuda_tool::DeviceVector<uint32_t> int_mark;
         cuda_tool::DeviceVector<AABB>     int_aabb;
         cuda_tool::DeviceVector<IndexT>   ext_bid;

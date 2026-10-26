@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: line-search reuse integration for trajectory bounds
+ * and active-contact count readback.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <sim_engine.h>
 #include <uipc/common/range.h>
 #include <global_geometry/global_vertex_manager.h>
@@ -14,6 +39,11 @@
 
 namespace uipc::backend::cuda
 {
+namespace
+{
+    constexpr IndexT OuterDcdRebuildPeriod = 8;
+}
+
 void SimEngine::advance()
 {
     Float alpha     = 1.0;
@@ -25,12 +55,12 @@ void SimEngine::advance()
     *                                  Function Shortcuts
     ***************************************************************************************/
 
-    auto detect_dcd_candidates = [this]
+    auto detect_dcd_candidates = [this](bool reuse_bvh_topology)
     {
         if(m_global_trajectory_filter)
         {
             Timer timer{"Detect DCD Candidates"};
-            m_global_trajectory_filter->detect(0.0);
+            m_global_trajectory_filter->detect(0.0, reuse_bvh_topology);
             m_global_trajectory_filter->filter_active();
         }
     };
@@ -40,7 +70,7 @@ void SimEngine::advance()
         if(m_global_trajectory_filter)
         {
             Timer timer{"Detect Trajectory Candidates"};
-            m_global_trajectory_filter->detect(alpha);
+            m_global_trajectory_filter->detect(alpha, true);
         }
     };
 
@@ -331,7 +361,7 @@ void SimEngine::advance()
             m_time_integrator_manager->predict_dof();
 
             // 3. Adaptive Parameter Calculation
-            detect_dcd_candidates();
+            detect_dcd_candidates(false);
             compute_adaptive_kappa();
 
             // 4. Nonlinear-Newton Iteration
@@ -353,7 +383,10 @@ void SimEngine::advance()
 
                 // 2) Build Collision Pairs
                 if(newton_iter > 0)
-                    detect_dcd_candidates();
+                {
+                    const bool rebuild = (newton_iter % OuterDcdRebuildPeriod) == 0;
+                    detect_dcd_candidates(!rebuild);
+                }
 
 
                 // 3) Compute Dynamic Topo Effect Gradient and Hessian => G:Vector3, H:Matrix3x3

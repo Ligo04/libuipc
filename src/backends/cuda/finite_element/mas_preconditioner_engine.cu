@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: partition-aware MAS direct-store, vector passes and
+ * reference fallbacks.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <finite_element/mas_preconditioner_engine.h>
 #include <cuda_tool/cub.h>
 #include <cuda_tool/cuda_tool.h>
@@ -18,6 +43,7 @@ static constexpr int BANKSIZE = MASPreconditionerEngine::BANKSIZE;
 static constexpr int DEFAULT_BLOCKSIZE = MASPreconditionerEngine::DEFAULT_BLOCKSIZE;
 static constexpr int DEFAULT_WARPNUM = MASPreconditionerEngine::DEFAULT_WARPNUM;
 static constexpr int SYM_BLOCK_COUNT = MASPreconditionerEngine::SYM_BLOCK_COUNT;
+static_assert(DEFAULT_BLOCKSIZE == BANKSIZE * BANKSIZE);
 
 using ClusterMatrixSym  = MASPreconditionerEngine::ClusterMatrixSym;
 using ClusterMatrixSymF = MASPreconditionerEngine::ClusterMatrixSymF;
@@ -28,6 +54,18 @@ using Int2              = MASPreconditionerEngine::Int2;
 UIPC_GENERIC unsigned int lanemask_lt(int lane_id)
 {
     return (1U << lane_id) - 1;
+}
+
+// MAS uses two independent 16-lane logical groups inside each hardware warp.
+// Volta and newer GPUs do not guarantee implicit lockstep execution between
+// dependent shared-memory accesses, so every publish/read phase needs an
+// explicit synchronization mask for the calling thread's logical group.
+__device__ __forceinline__ unsigned int mas_logical_group_mask()
+{
+    constexpr unsigned int GROUP_MASK = (1U << BANKSIZE) - 1U;
+    const unsigned int     lane       = threadIdx.x & 31;
+    const unsigned int     base       = (lane / BANKSIZE) * BANKSIZE;
+    return __activemask() & (GROUP_MASK << base);
 }
 
 // Symmetric upper-triangle index for a BANKSIZE x BANKSIZE block
@@ -120,13 +158,17 @@ namespace
         auto                    cache_mask = make_dense_1d(cache_mask_s);
         auto                    prefix_sum = make_dense_1d(prefix_sum_s);
 
+        const unsigned int group_mask  = mas_logical_group_mask();
+        unsigned int       connect_msk = idx >= 0 ? fine_connect_mask(idx) : 0U;
+
+        if(lane_id == 0)
+            prefix_sum(local_warp_id) = 0;
+        cache_mask(threadIdx.x) = connect_msk;
+        __syncwarp(group_mask);
+
         if(idx >= 0)
         {
-            unsigned int connect_msk = fine_connect_mask(idx);
-            if(lane_id == 0)
-                prefix_sum(local_warp_id) = 0;
-            cache_mask(threadIdx.x) = connect_msk;
-            unsigned int visited    = (1U << lane_id);
+            unsigned int visited = (1U << lane_id);
 
             while(connect_msk != ~0U)
             {
@@ -143,9 +185,11 @@ namespace
             unsigned int elected_prefix = __popc(connect_msk & lanemask_lt(lane_id));
             if(elected_prefix == 0)
                 atomicAdd(&prefix_sum(local_warp_id), 1);
-            if(lane_id == 0)
-                prefix_orig(warp_id) = prefix_sum(local_warp_id);
         }
+
+        __syncwarp(group_mask);
+        if(lane_id == 0)
+            prefix_orig(warp_id) = prefix_sum(local_warp_id);
     }
 
     __global__ void MASPreconditionerEngine_build_level1_kernel(
@@ -176,6 +220,8 @@ namespace
 
         if(lane_id == 0)
             elected_mask(local_warp_id) = 0;
+        const unsigned int group_mask = mas_logical_group_mask();
+        __syncwarp(group_mask);
 
         if(tid == N - 1)
         {
@@ -183,18 +229,26 @@ namespace
             level_size(1).y = level1_begin;
         }
 
-        int idx = part_to_real(tid);
+        int          idx      = part_to_real(tid);
+        unsigned int conn_msk = idx >= 0 ? fine_connect_mask(idx) : 0U;
+        unsigned int elected_prefix =
+            idx >= 0 ? __popc(conn_msk & lanemask_lt(lane_id)) : 1U;
+        if(idx >= 0 && elected_prefix == 0)
+            atomicOr(&elected_mask(local_warp_id), (1U << lane_id));
+
+        __syncwarp(group_mask);
+
         if(idx >= 0)
         {
-            unsigned int conn_msk = fine_connect_mask(idx);
-            unsigned int elected_prefix = __popc(conn_msk & lanemask_lt(lane_id));
-            if(elected_prefix == 0)
-                atomicOr(&elected_mask(local_warp_id), (1U << lane_id));
-
             lane_prefix(threadIdx.x) =
                 __popc(elected_mask(local_warp_id) & lanemask_lt(lane_id));
             lane_prefix(threadIdx.x) += prefix_sum_orig(warp_id);
+        }
 
+        __syncwarp(group_mask);
+
+        if(idx >= 0)
+        {
             unsigned int elected_lane = __ffs(conn_msk) - 1;
             unsigned int the_lane_prefix =
                 lane_prefix(elected_lane + BANKSIZE * local_warp_id);
@@ -222,67 +276,72 @@ namespace
         if(tid >= N)
             return;
 
-        int local_warp_id = threadIdx.x / BANKSIZE;
-        int lane_id       = tid % BANKSIZE;
+        int                local_warp_id = threadIdx.x / BANKSIZE;
+        int                lane_id       = tid % BANKSIZE;
+        const unsigned int group_mask    = mas_logical_group_mask();
 
         __shared__ int cache_msk_s[DEFAULT_BLOCKSIZE];
         auto           cache_msk = make_dense_1d(cache_msk_s);
 
-        int idx = part_to_real(tid);
-        if(idx < 0)
-            return;
+        int  idx   = part_to_real(tid);
+        bool valid = idx >= 0;
 
-        unsigned int prefix_msk = fine_connect_mask(idx);
+        unsigned int prefix_msk = valid ? fine_connect_mask(idx) : 0U;
         unsigned int conn_msk   = 0;
-        int          coarse_idx = coarse_table((level - 1) * vert_num + idx);
-        if(coarse_idx < 0 || coarse_idx >= N)
+        int coarse_idx = valid ? coarse_table((level - 1) * vert_num + idx) : -1;
+        valid = valid && coarse_idx >= 0 && coarse_idx < N;
+        if(valid)
         {
-            return;
-        }
-        int kn       = neighbor_num(idx);
-        int nk       = 0;
-        int start_id = neighbor_start(idx);
+            int kn       = neighbor_num(idx);
+            int nk       = 0;
+            int start_id = neighbor_start(idx);
 
-        for(int i = 0; i < kn; i++)
-        {
-            unsigned int connect = neighbor_list(start_id + i);
-            int coarse_connect = coarse_table((level - 1) * vert_num + connect);
-            if(coarse_connect < 0 || coarse_connect >= N)
+            for(int i = 0; i < kn; i++)
             {
-                neighbor_list(start_id + nk) = connect;
-                nk++;
-                continue;
+                unsigned int connect = neighbor_list(start_id + i);
+                int coarse_connect = coarse_table((level - 1) * vert_num + connect);
+                if(coarse_connect < 0 || coarse_connect >= N)
+                {
+                    neighbor_list(start_id + nk) = connect;
+                    nk++;
+                    continue;
+                }
+                if(coarse_idx / BANKSIZE == coarse_connect / BANKSIZE)
+                {
+                    conn_msk |= (1U << (coarse_connect % BANKSIZE));
+                }
+                else
+                {
+                    neighbor_list(start_id + nk) = connect;
+                    nk++;
+                }
             }
-            if(coarse_idx / BANKSIZE == coarse_connect / BANKSIZE)
-            {
-                conn_msk |= (1U << (coarse_connect % BANKSIZE));
-            }
-            else
-            {
-                neighbor_list(start_id + nk) = connect;
-                nk++;
-            }
+            neighbor_num(idx) = nk;
         }
-        neighbor_num(idx)      = nk;
+
         cache_msk(threadIdx.x) = 0;
+        __syncwarp(group_mask);
 
-        if(__popc(prefix_msk) == BANKSIZE)
+        int shared_slot = threadIdx.x;
+        if(valid && __popc(prefix_msk) == BANKSIZE)
         {
-            atomicOr(&cache_msk(local_warp_id * BANKSIZE), static_cast<int>(conn_msk));
-            conn_msk = static_cast<unsigned int>(cache_msk(local_warp_id * BANKSIZE));
+            shared_slot = local_warp_id * BANKSIZE;
+            atomicOr(&cache_msk(shared_slot), static_cast<int>(conn_msk));
         }
-        else
+        else if(valid)
         {
             unsigned int elected_lane = __ffs(prefix_msk) - 1;
+            shared_slot               = local_warp_id * BANKSIZE + elected_lane;
             if(conn_msk)
-                atomicOr(&cache_msk(local_warp_id * BANKSIZE + elected_lane),
-                         static_cast<int>(conn_msk));
-            conn_msk = static_cast<unsigned int>(
-                cache_msk(local_warp_id * BANKSIZE + elected_lane));
+                atomicOr(&cache_msk(shared_slot), static_cast<int>(conn_msk));
         }
 
+        __syncwarp(group_mask);
+        if(valid)
+            conn_msk = static_cast<unsigned int>(cache_msk(shared_slot));
+
         unsigned int elected_prefix = __popc(prefix_msk & lanemask_lt(lane_id));
-        if(conn_msk && elected_prefix == 0)
+        if(valid && conn_msk && elected_prefix == 0)
             atomicOr(&next_connect_mask(coarse_idx), conn_msk);
     }
 
@@ -310,7 +369,9 @@ namespace
 
         unsigned int conn_msk   = (1U << lane_id) | next_connect_mask(idx);
         cached_msk(threadIdx.x) = conn_msk;
-        unsigned int visited    = (1U << lane_id);
+        const unsigned int group_mask = mas_logical_group_mask();
+        __syncwarp(group_mask);
+        unsigned int visited = (1U << lane_id);
 
         while(true)
         {
@@ -326,6 +387,7 @@ namespace
         unsigned int elected_prefix = __popc(conn_msk & lanemask_lt(lane_id));
         if(elected_prefix == 0)
             atomicAdd(&prefix_sum_s(local_warp_id), 1);
+        __syncwarp(group_mask);
         if(lane_id == 0)
             next_prefix(idx / BANKSIZE) = prefix_sum_s(local_warp_id);
     }
@@ -357,6 +419,8 @@ namespace
 
         if(lane_id == 0)
             elected_mask(local_warp_id) = 0;
+        const unsigned int group_mask = mas_logical_group_mask();
+        __syncwarp(group_mask);
 
         if(idx == N - 1)
         {
@@ -369,9 +433,13 @@ namespace
         if(elected_prefix == 0)
             atomicOr(&elected_mask(local_warp_id), (1U << lane_id));
 
+        __syncwarp(group_mask);
+
         lane_prefix(threadIdx.x) =
             __popc(elected_mask(local_warp_id) & lanemask_lt(lane_id));
         lane_prefix(threadIdx.x) += next_prefix_sum(warp_id);
+
+        __syncwarp(group_mask);
 
         unsigned int elected_lane = __ffs(conn_msk) - 1;
         unsigned int the_lane_prefix = lane_prefix(elected_lane + BANKSIZE * local_warp_id);
@@ -797,8 +865,15 @@ namespace
         }
     }
 
+    template <bool UpdateXR>
     __global__ void MASPreconditionerEngine_build_multi_level_R_kernel(
+        cuda_tool::DenseVectorView<Float>      X_view,
+        cuda_tool::CDenseVectorView<Float>     P_view,
+        cuda_tool::DenseVectorView<Float>      R_write_view,
         cuda_tool::CDenseVectorView<Float>     R_view,
+        cuda_tool::CDenseVectorView<Float>     Ap_view,
+        cuda_tool::CDense<Float>               rz,
+        cuda_tool::CDense<Float>               pAp,
         cuda_tool::BufferView<Eigen::Vector3f> multi_lr,
         cuda_tool::CBufferView<int>            going_next,
         cuda_tool::CBufferView<Int2>           level_size,
@@ -822,10 +897,29 @@ namespace
         Eigen::Vector3f r = Eigen::Vector3f::Zero();
         if(is_valid)
         {
-            auto seg = R_view.segment<3>(3 * idx);
-            r[0]     = static_cast<float>(seg(0));
-            r[1]     = static_cast<float>(seg(1));
-            r[2]     = static_cast<float>(seg(2));
+            auto r_read = R_view.segment<3>(3 * idx);
+            if constexpr(UpdateXR)
+            {
+                const Float alpha = *rz / *pAp;
+                auto        x     = X_view.segment<3>(3 * idx);
+                auto        p     = P_view.segment<3>(3 * idx);
+                auto        r_out = R_write_view.segment<3>(3 * idx);
+                auto        Ap    = Ap_view.segment<3>(3 * idx);
+#pragma unroll
+                for(int component = 0; component < 3; ++component)
+                {
+                    x(component) += alpha * p(component);
+                    const Float r_new = r_read(component) - alpha * Ap(component);
+                    r_out(component) = r_new;
+                    r[component]     = static_cast<float>(r_new);
+                }
+            }
+            else
+            {
+                r[0] = static_cast<float>(r_read(0));
+                r[1] = static_cast<float>(r_read(1));
+                r[2] = static_cast<float>(r_read(2));
+            }
         }
 
         int lane_id       = threadIdx.x % BANKSIZE;
@@ -843,6 +937,12 @@ namespace
         if(lane_id == 0)
             prefix_sum_v(local_warp_id) = in_range ? prefix_orig(global_warp) : 0;
 
+        const unsigned int group_mask = mas_logical_group_mask();
+        sum_residual(threadIdx.x)     = 0;
+        sum_residual(threadIdx.x + DEFAULT_BLOCKSIZE)     = 0;
+        sum_residual(threadIdx.x + 2 * DEFAULT_BLOCKSIZE) = 0;
+        __syncwarp(group_mask);
+
         unsigned int connect_msk = is_valid ? fine_conn(idx) : 0U;
 
         if(prefix_sum_v(local_warp_id) == 1)
@@ -851,7 +951,9 @@ namespace
             __shared__ typename WarpReduceF::TempStorage temp_reduce_f[DEFAULT_WARPNUM];
 
             r[0] = WarpReduceF(temp_reduce_f[local_warp_id]).Sum(r[0]);
+            __syncwarp(group_mask);
             r[1] = WarpReduceF(temp_reduce_f[local_warp_id]).Sum(r[1]);
+            __syncwarp(group_mask);
             r[2] = WarpReduceF(temp_reduce_f[local_warp_id]).Sum(r[2]);
 
             if(lane_id == 0 && is_valid)
@@ -875,22 +977,23 @@ namespace
                 }
             }
         }
-        else if(is_valid)
+        else
         {
-            int elected_lane = __ffs(connect_msk) - 1;
+            int elected_lane = is_valid ? __ffs(connect_msk) - 1 : 0;
 
-            sum_residual(threadIdx.x)                         = 0;
-            sum_residual(threadIdx.x + DEFAULT_BLOCKSIZE)     = 0;
-            sum_residual(threadIdx.x + 2 * DEFAULT_BLOCKSIZE) = 0;
+            if(is_valid)
+            {
+                atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane), r[0]);
+                atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane + DEFAULT_BLOCKSIZE),
+                          r[1]);
+                atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane + 2 * DEFAULT_BLOCKSIZE),
+                          r[2]);
+            }
 
-            atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane), r[0]);
-            atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane + DEFAULT_BLOCKSIZE),
-                      r[1]);
-            atomicAdd(&sum_residual(local_warp_id * BANKSIZE + elected_lane + 2 * DEFAULT_BLOCKSIZE),
-                      r[2]);
+            __syncwarp(group_mask);
 
             unsigned int elected_prefix = __popc(connect_msk & lanemask_lt(lane_id));
-            if(elected_prefix == 0)
+            if(is_valid && elected_prefix == 0)
             {
                 int cur = idx;
                 for(int l = 0; l < level_num - 1; l++)
@@ -959,17 +1062,20 @@ namespace
 
         using WarpReduceF = cub::WarpReduce<float, BANKSIZE>;
         __shared__ typename WarpReduceF::TempStorage temp_reduce_f[BANKSIZE];
-        int logical_warp = threadIdx.x / BANKSIZE;
+        int                logical_warp = threadIdx.x / BANKSIZE;
+        const unsigned int group_mask   = mas_logical_group_mask();
 
         result[0] = WarpReduceF(temp_reduce_f[logical_warp]).Sum(result[0]);
+        __syncwarp(group_mask);
         result[1] = WarpReduceF(temp_reduce_f[logical_warp]).Sum(result[1]);
+        __syncwarp(group_mask);
         result[2] = WarpReduceF(temp_reduce_f[logical_warp]).Sum(result[2]);
 
         if((threadIdx.x % BANKSIZE) == 0)
         {
-            atomicAdd(&(multi_lz(vert_row).x), result[0]);
-            atomicAdd(&(multi_lz(vert_row).y), result[1]);
-            atomicAdd(&(multi_lz(vert_row).z), result[2]);
+            // One block owns one cluster and one logical warp owns one row,
+            // so each multi_lz slot has exactly one writer in this launch.
+            multi_lz(vert_row) = float3{result[0], result[1], result[2]};
         }
     }
 
@@ -1017,6 +1123,52 @@ namespace
         seg(0)   = static_cast<double>(cz.x);
         seg(1)   = static_cast<double>(cz.y);
         seg(2)   = static_cast<double>(cz.z);
+    }
+
+    __global__ void MASPreconditionerEngine_collect_final_Z_dot_kernel(
+        cuda_tool::DenseVectorView<Float>  Z_view,
+        cuda_tool::CDenseVectorView<Float> R_view,
+        cuda_tool::CBufferView<float3>     multi_lz,
+        cuda_tool::CBufferView<LevelTable> coarse_table,
+        cuda_tool::CBufferView<int>        real_to_part,
+        cuda_tool::Dense<Float>            rz_new,
+        cuda_tool::CDense<IndexT>          converged,
+        int                                level_num,
+        int                                n)
+    {
+        using BlockReduce = cub::BlockReduce<Float, DEFAULT_BLOCKSIZE>;
+        __shared__ typename BlockReduce::TempStorage reduce_storage;
+
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        Float     dot = Float{0};
+
+        if(idx < n && *converged == 0)
+        {
+            const int rdx = real_to_part(idx);
+            if(rdx >= 0)
+            {
+                float3           cz    = multi_lz(rdx);
+                const LevelTable table = coarse_table(idx);
+                for(int l = 1; l < level_num; ++l)
+                {
+                    const float3 val = multi_lz(table.index[l - 1]);
+                    cz.x += val.x;
+                    cz.y += val.y;
+                    cz.z += val.z;
+                }
+
+                auto z = Z_view.segment<3>(3 * idx);
+                auto r = R_view.segment<3>(3 * idx);
+                z(0)   = static_cast<Float>(cz.x);
+                z(1)   = static_cast<Float>(cz.y);
+                z(2)   = static_cast<Float>(cz.z);
+                dot    = r(0) * z(0) + r(1) * z(1) + r(2) * z(2);
+            }
+        }
+
+        const Float block_sum = BlockReduce(reduce_storage).Sum(dot);
+        if(threadIdx.x == 0 && block_sum != Float{0})
+            atomicAdd(rz_new.data(), block_sum);
     }
 }  // namespace
 
@@ -1477,17 +1629,23 @@ void MASPreconditionerEngine::build_multi_level_R(cuda_tool::CDenseVectorView<Fl
     int block_size = DEFAULT_BLOCKSIZE;
     int num_blocks = (N + block_size - 1) / block_size;
 
-    MASPreconditionerEngine_build_multi_level_R_kernel<<<num_blocks, block_size, 0, stream>>>(
-        R,
-        multi_level_R.view(),
-        going_next.cview(0, m_total_num_clusters),
-        level_sizes.cview(),
-        prefix_original.cview(),
-        fine_connect_masks.cview(),
-        part_to_real.cview(),
-        converged.cviewer(),
-        m_level_num,
-        N);
+    MASPreconditionerEngine_build_multi_level_R_kernel<false>
+        <<<num_blocks, block_size, 0, stream>>>({},
+                                                {},
+                                                {},
+                                                R,
+                                                {},
+                                                {},
+                                                {},
+                                                multi_level_R.view(),
+                                                going_next.cview(0, m_total_num_clusters),
+                                                level_sizes.cview(),
+                                                prefix_original.cview(),
+                                                fine_connect_masks.cview(),
+                                                part_to_real.cview(),
+                                                converged.cviewer(),
+                                                m_level_num,
+                                                N);
 }
 
 // ---------------------------------------------------------------------------
@@ -1501,8 +1659,12 @@ void MASPreconditionerEngine::schwarz_local_solve(cuda_tool::CVarView<IndexT> co
     if(N < 1)
         return;
 
-    int block_size = BANKSIZE * BANKSIZE;
-    int num_blocks = (N + block_size - 1) / block_size;
+    UIPC_ASSERT(m_total_num_clusters % BANKSIZE == 0,
+                "MAS hierarchy size {} must be aligned to BANKSIZE {}",
+                m_total_num_clusters,
+                BANKSIZE);
+    constexpr int block_size = DEFAULT_BLOCKSIZE;
+    int           num_blocks = m_total_num_clusters / BANKSIZE;
 
     MASPreconditionerEngine_schwarz_local_solve_kernel<<<num_blocks, block_size, 0, stream>>>(
         cluster_inverses.cview(),
@@ -1562,8 +1724,6 @@ void MASPreconditionerEngine::apply(cuda_tool::CDenseVectorView<Float> r,
             .fill(Eigen::Vector3f::Zero(), stream);
     }
 
-    multi_level_Z.view(0, m_total_num_clusters).fill(float3{0, 0, 0}, stream);
-
     // 1. Restrict: accumulate residual down through levels
     build_multi_level_R(r, converged, stream);
 
@@ -1572,6 +1732,74 @@ void MASPreconditionerEngine::apply(cuda_tool::CDenseVectorView<Float> r,
 
     // 3. Prolongate: sum Z from all levels back to fine nodes
     collect_final_Z(z, converged, stream);
+}
+
+void MASPreconditionerEngine::fused_pcg_update_apply_dot(
+    cuda_tool::DenseVectorView<Float>  x,
+    cuda_tool::CDenseVectorView<Float> p,
+    cuda_tool::DenseVectorView<Float>  r,
+    cuda_tool::CDenseVectorView<Float> Ap,
+    cuda_tool::DenseVectorView<Float>  z,
+    cuda_tool::CVarView<Float>         rz,
+    cuda_tool::CVarView<Float>         pAp,
+    cuda_tool::VarView<Float>          rz_new,
+    cuda_tool::CVarView<IndexT>        converged,
+    cudaStream_t                       stream)
+{
+    if(m_total_nodes < 1)
+        return;
+
+    UIPC_ASSERT(x.size() == 3 * m_total_nodes && p.size() == x.size()
+                    && r.size() == x.size() && Ap.size() == x.size()
+                    && z.size() == x.size(),
+                "MAS fused PCG vectors must contain exactly all FEM degrees of freedom");
+
+    if(m_total_num_clusters > static_cast<int>(multi_level_R.size()))
+    {
+        multi_level_R.resize(m_total_num_clusters);
+        multi_level_Z.resize(m_total_num_clusters);
+    }
+
+    if(m_total_num_clusters > m_total_map_nodes)
+    {
+        multi_level_R
+            .view(m_total_map_nodes, m_total_num_clusters - m_total_map_nodes)
+            .fill(Eigen::Vector3f::Zero(), stream);
+    }
+
+    const int build_blocks = (m_total_map_nodes + DEFAULT_BLOCKSIZE - 1) / DEFAULT_BLOCKSIZE;
+    MASPreconditionerEngine_build_multi_level_R_kernel<true>
+        <<<build_blocks, DEFAULT_BLOCKSIZE, 0, stream>>>(x,
+                                                         p,
+                                                         r,
+                                                         r.cviewer(),
+                                                         Ap,
+                                                         rz.cviewer(),
+                                                         pAp.cviewer(),
+                                                         multi_level_R.view(),
+                                                         going_next.cview(0, m_total_num_clusters),
+                                                         level_sizes.cview(),
+                                                         prefix_original.cview(),
+                                                         fine_connect_masks.cview(),
+                                                         part_to_real.cview(),
+                                                         converged.cviewer(),
+                                                         m_level_num,
+                                                         m_total_map_nodes);
+
+    schwarz_local_solve(converged, stream);
+
+    const int level_num = (m_active_level_num > 0) ? m_active_level_num : m_level_num;
+    const int collect_blocks = (m_total_nodes + DEFAULT_BLOCKSIZE - 1) / DEFAULT_BLOCKSIZE;
+    MASPreconditionerEngine_collect_final_Z_dot_kernel<<<collect_blocks, DEFAULT_BLOCKSIZE, 0, stream>>>(
+        z,
+        r,
+        multi_level_Z.cview(),
+        coarse_tables.cview(),
+        real_to_part.cview(),
+        rz_new.viewer(),
+        converged.cviewer(),
+        level_num,
+        m_total_nodes);
 }
 
 void MASPreconditionerEngine::dump_cluster_matrices_debug(std::string_view output_dir,

@@ -1,13 +1,38 @@
+/*
+ * NVIDIA contributions: scene-bounds reduction fixes, duplicate-half
+ * self-query pruning and trajectory refit/query reuse.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <cuda_device/builtin.h>
 #include <cuda_tool/cub.h>
 #include <cuda_tool/cuda_tool.h>
 
-// Implementation of InfoStacklessBVH.
-// All build/sort/reorder functions are identical to InfoStacklessBVH.
-// The two traversal functions (stacklessSelf / stacklessOther) are the
-// optimized variants: they pre-load per-query bid/cid into shared memory
-// ONCE before the traversal loop, eliminating repeated global-memory reads
-// of query_bid/query_cid inside the hot node-cull path.
+// Optimized InfoStacklessBVH implementation. Self/Other traversal pre-loads
+// per-query bid/cid into shared memory, and Self also skips subtrees that
+// cannot pass the Morton-rank uniqueness rule. The build path keeps enough
+// topology metadata for later refits, while compatible Other queries may
+// reuse their Morton order; both optimizations fall back to a full build when
+// their cached topology or ordering is no longer valid.
 
 namespace uipc::info_stackless_detail
 {
@@ -17,11 +42,38 @@ using Vector2i = uipc::Vector2i;
 using uint     = uint32_t;
 using ullint   = unsigned long long;
 
-constexpr int  K_THREADS         = 256;
-constexpr int  K_WARPS           = K_THREADS >> 5;
-constexpr int  MAX_RES_PER_BLOCK = 1024;
-constexpr int  AABB_BITS         = 15;
-constexpr uint AABB_MASK         = 0xFFFFFFFFu >> (32 - AABB_BITS);
+#ifndef UIPC_INFO_STACKLESS_BVH_SELF_THREADS
+#define UIPC_INFO_STACKLESS_BVH_SELF_THREADS 64
+#endif
+#ifndef UIPC_INFO_STACKLESS_BVH_SELF_QUEUE_SLOTS_PER_THREAD
+#define UIPC_INFO_STACKLESS_BVH_SELF_QUEUE_SLOTS_PER_THREAD 4
+#endif
+#ifndef UIPC_INFO_STACKLESS_BVH_OTHER_THREADS
+#define UIPC_INFO_STACKLESS_BVH_OTHER_THREADS 128
+#endif
+#ifndef UIPC_INFO_STACKLESS_BVH_OTHER_QUEUE_SLOTS_PER_THREAD
+#define UIPC_INFO_STACKLESS_BVH_OTHER_QUEUE_SLOTS_PER_THREAD 4
+#endif
+
+constexpr int K_BUILD_THREADS = 256;
+constexpr int K_BUILD_WARPS   = K_BUILD_THREADS >> 5;
+
+constexpr int K_SELF_THREADS = UIPC_INFO_STACKLESS_BVH_SELF_THREADS;
+constexpr int K_SELF_QUEUE_SLOTS_PER_THREAD = UIPC_INFO_STACKLESS_BVH_SELF_QUEUE_SLOTS_PER_THREAD;
+constexpr int K_SELF_MAX_RES_PER_BLOCK = K_SELF_THREADS * K_SELF_QUEUE_SLOTS_PER_THREAD;
+
+constexpr int K_OTHER_THREADS = UIPC_INFO_STACKLESS_BVH_OTHER_THREADS;
+constexpr int K_OTHER_QUEUE_SLOTS_PER_THREAD =
+    UIPC_INFO_STACKLESS_BVH_OTHER_QUEUE_SLOTS_PER_THREAD;
+constexpr int K_OTHER_MAX_RES_PER_BLOCK = K_OTHER_THREADS * K_OTHER_QUEUE_SLOTS_PER_THREAD;
+
+static_assert(K_BUILD_THREADS % 32 == 0);
+static_assert(K_SELF_THREADS > 0 && K_SELF_THREADS <= 1024 && K_SELF_THREADS % 32 == 0);
+static_assert(K_OTHER_THREADS > 0 && K_OTHER_THREADS <= 1024 && K_OTHER_THREADS % 32 == 0);
+static_assert(K_SELF_QUEUE_SLOTS_PER_THREAD > 0);
+static_assert(K_OTHER_QUEUE_SLOTS_PER_THREAD > 0);
+constexpr int  AABB_BITS = 15;
+constexpr uint AABB_MASK = 0xFFFFFFFFu >> (32 - AABB_BITS);
 
 struct PlainAABB
 {
@@ -50,15 +102,20 @@ UIPC_GENERIC UIPC_INLINE T mm_max(T a, T b)
 
 UIPC_DEVICE UIPC_INLINE float atomic_minf(float* addr, float value)
 {
-    return (value >= 0) ?
-               __int_as_float(atomicMin((int*)addr, __float_as_int(value))) :
+    // Classify by the IEEE-754 sign bit: -0.0f compares >= 0.0f but must use
+    // the negative-value integer ordering.
+    const int value_bits = __float_as_int(value);
+    return (value_bits >= 0) ?
+               __int_as_float(atomicMin((int*)addr, value_bits)) :
                __uint_as_float(atomicMax((unsigned int*)addr, __float_as_uint(value)));
 }
 
 UIPC_DEVICE UIPC_INLINE float atomic_maxf(float* addr, float value)
 {
-    return (value >= 0) ?
-               __int_as_float(atomicMax((int*)addr, __float_as_int(value))) :
+    // See atomic_minf: a numeric comparison misclassifies negative zero.
+    const int value_bits = __float_as_int(value);
+    return (value_bits >= 0) ?
+               __int_as_float(atomicMax((int*)addr, value_bits)) :
                __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
 }
 
@@ -126,15 +183,12 @@ namespace
 {
     __global__ void InfoStacklessBVH_initializeBuildState_kernel(
         int                             num_objs,
-        cuda_tool::Dense<AABB>          scene_box,
         cuda_tool::BufferView<uint32_t> flags,
         cuda_tool::BufferView<int>      ext_lca,
         cuda_tool::BufferView<uint32_t> depths,
         cuda_tool::BufferView<int32_t>  unsorted_ids)
     {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(idx == 0)
-            *scene_box = AABB();
         if(idx < num_objs - 1)
             flags(idx) = 0;
         if(idx < num_objs)
@@ -146,38 +200,49 @@ namespace
             ext_lca(idx) = -1;
     }
 
-    __global__ void InfoStacklessBVH_initializeQueryState_kernel(
-        int num_objs, cuda_tool::Dense<AABB> scene_box, cuda_tool::BufferView<int> unsorted_ids)
+    __global__ void InfoStacklessBVH_initializeQueryState_kernel(int num_objs,
+                                                                 cuda_tool::BufferView<int> unsorted_ids)
     {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(idx == 0)
-            *scene_box = AABB();
         if(idx < num_objs)
             unsorted_ids(idx) = idx;
+    }
+
+    __global__ void InfoStacklessBVH_resetSceneBox_kernel(cuda_tool::Dense<AABB> out)
+    {
+        *out = AABB();
     }
 
     __global__ void InfoStacklessBVH_calcMaxBVFromBox_kernel(
         size_t size, cuda_tool::CBufferView<AABB> box, cuda_tool::Dense<AABB> out)
     {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(idx >= size)
-            return;
-
-        __shared__ PlainAABB warp_boxes[K_WARPS];
-        auto                 temp     = to_plain(box(idx));
+        int                  idx = blockIdx.x * blockDim.x + threadIdx.x;
+        __shared__ PlainAABB warp_boxes[K_BUILD_WARPS];
         int                  warp_tid = threadIdx.x & 31;
         int                  warp_id  = threadIdx.x >> 5;
 
+        PlainAABB temp;
+        if(idx < size)
+        {
+            temp = to_plain(box(idx));
+        }
+        else
+        {
+            constexpr float max_float = 3.402823466e+38F;
+            temp._min = make_float3(max_float, max_float, max_float);
+            temp._max = make_float3(-max_float, -max_float, -max_float);
+        }
+
         float minx = temp._min.x, miny = temp._min.y, minz = temp._min.z;
         float maxx = temp._max.x, maxy = temp._max.y, maxz = temp._max.z;
-        for(int i = 1; i < 32; i <<= 1)
+        for(int offset = 16; offset > 0; offset >>= 1)
         {
-            minx = mm_min(minx, __shfl_down_sync(0xffffffff, minx, i));
-            miny = mm_min(miny, __shfl_down_sync(0xffffffff, miny, i));
-            minz = mm_min(minz, __shfl_down_sync(0xffffffff, minz, i));
-            maxx = mm_max(maxx, __shfl_down_sync(0xffffffff, maxx, i));
-            maxy = mm_max(maxy, __shfl_down_sync(0xffffffff, maxy, i));
-            maxz = mm_max(maxz, __shfl_down_sync(0xffffffff, maxz, i));
+            minx = mm_min(minx, __shfl_down_sync(0xffffffff, minx, offset));
+            miny = mm_min(miny, __shfl_down_sync(0xffffffff, miny, offset));
+            minz = mm_min(minz, __shfl_down_sync(0xffffffff, minz, offset));
+            maxx = mm_max(maxx, __shfl_down_sync(0xffffffff, maxx, offset));
+            maxy = mm_max(maxy, __shfl_down_sync(0xffffffff, maxy, offset));
+            maxz = mm_max(maxz, __shfl_down_sync(0xffffffff, maxz, offset));
         }
         if(warp_tid == 0)
         {
@@ -186,36 +251,41 @@ namespace
         }
         __syncthreads();
 
-        int warp_num = (blockIdx.x == gridDim.x - 1) ?
-                           ((size - blockIdx.x * blockDim.x + 31) >> 5) :
-                           (blockDim.x >> 5);
-        if(threadIdx.x >= warp_num)
-            return;
+        if(warp_id == 0)
+        {
+            constexpr float max_float = 3.402823466e+38F;
+            if(warp_tid < K_BUILD_WARPS)
+                temp = warp_boxes[warp_tid];
+            else
+            {
+                temp._min = make_float3(max_float, max_float, max_float);
+                temp._max = make_float3(-max_float, -max_float, -max_float);
+            }
 
-        temp = warp_boxes[threadIdx.x];
-        minx = temp._min.x;
-        miny = temp._min.y;
-        minz = temp._min.z;
-        maxx = temp._max.x;
-        maxy = temp._max.y;
-        maxz = temp._max.z;
-        for(int i = 1; i < warp_num; i <<= 1)
-        {
-            minx = mm_min(minx, __shfl_down_sync(0xffffffff, minx, i));
-            miny = mm_min(miny, __shfl_down_sync(0xffffffff, miny, i));
-            minz = mm_min(minz, __shfl_down_sync(0xffffffff, minz, i));
-            maxx = mm_max(maxx, __shfl_down_sync(0xffffffff, maxx, i));
-            maxy = mm_max(maxy, __shfl_down_sync(0xffffffff, maxy, i));
-            maxz = mm_max(maxz, __shfl_down_sync(0xffffffff, maxz, i));
-        }
-        if(threadIdx.x == 0)
-        {
-            atomic_minf(&out->min().x(), minx);
-            atomic_minf(&out->min().y(), miny);
-            atomic_minf(&out->min().z(), minz);
-            atomic_maxf(&out->max().x(), maxx);
-            atomic_maxf(&out->max().y(), maxy);
-            atomic_maxf(&out->max().z(), maxz);
+            minx = temp._min.x;
+            miny = temp._min.y;
+            minz = temp._min.z;
+            maxx = temp._max.x;
+            maxy = temp._max.y;
+            maxz = temp._max.z;
+            for(int offset = 16; offset > 0; offset >>= 1)
+            {
+                minx = mm_min(minx, __shfl_down_sync(0xffffffff, minx, offset));
+                miny = mm_min(miny, __shfl_down_sync(0xffffffff, miny, offset));
+                minz = mm_min(minz, __shfl_down_sync(0xffffffff, minz, offset));
+                maxx = mm_max(maxx, __shfl_down_sync(0xffffffff, maxx, offset));
+                maxy = mm_max(maxy, __shfl_down_sync(0xffffffff, maxy, offset));
+                maxz = mm_max(maxz, __shfl_down_sync(0xffffffff, maxz, offset));
+            }
+            if(warp_tid == 0)
+            {
+                atomic_minf(&out->min().x(), minx);
+                atomic_minf(&out->min().y(), miny);
+                atomic_minf(&out->min().z(), minz);
+                atomic_maxf(&out->max().x(), maxx);
+                atomic_maxf(&out->max().y(), maxy);
+                atomic_maxf(&out->max().z(), maxz);
+            }
         }
     }
 
@@ -234,9 +304,10 @@ namespace
         float3 smin = make_float3(scene_min.x(), scene_min.y(), scene_min.z());
         auto   scene_size = scene->sizes();
         float3 off        = c - smin;
-        codes(idx)        = morton3D(off.x / scene_size.x(),
-                              off.y / scene_size.y(),
-                              off.z / scene_size.z());
+        float  nx  = scene_size.x() > 0.0f ? off.x / scene_size.x() : 0.0f;
+        float  ny  = scene_size.y() > 0.0f ? off.y / scene_size.y() : 0.0f;
+        float  nz  = scene_size.z() > 0.0f ? off.z / scene_size.z() : 0.0f;
+        codes(idx) = morton3D(nx, ny, nz);
     }
 
     __global__ void InfoStacklessBVH_calcInverseMapping_kernel(
@@ -428,13 +499,19 @@ namespace
     __global__ void InfoStacklessBVH_reorderNode_kernel(
         int                                           int_size,
         cuda_tool::BufferView<int>                    _lvs_lca,
+        cuda_tool::BufferView<uint32_t>               _lvs_par,
         cuda_tool::BufferView<AABB>                   _lvs_box,
         cuda_tool::BufferView<IndexT>                 _lvs_bid,
         cuda_tool::BufferView<IndexT>                 _lvs_cid,
         cuda_tool::BufferView<int>                    _tk_map,
         cuda_tool::BufferView<int>                    _int_lc,
+        cuda_tool::BufferView<int>                    _int_rc,
+        cuda_tool::BufferView<int>                    _int_par,
         cuda_tool::BufferView<uint32_t>               _int_mark,
         cuda_tool::BufferView<int>                    _int_range_y,
+        cuda_tool::BufferView<int>                    _self_max_rank,
+        cuda_tool::BufferView<int>                    _refit_parent,
+        cuda_tool::BufferView<int>                    _refit_right,
         cuda_tool::BufferView<AABB>                   _int_box,
         cuda_tool::BufferView<IndexT>                 _int_bid,
         cuda_tool::BufferView<IndexT>                 _int_cid,
@@ -459,6 +536,8 @@ namespace
         leaf.bid               = _lvs_bid(idx);
         leaf.cid               = _lvs_cid(idx);
         _nodes(idx + int_size) = leaf;
+        _refit_parent(idx + int_size) =
+            int_size == 0 ? -1 : static_cast<int>(_lvs_par(idx));
 
         if(idx >= int_size)
             return;
@@ -466,9 +545,13 @@ namespace
         InfoStacklessBVH::Node n;
         int                    new_id = _tk_map(idx);
         uint32_t               m      = _int_mark(idx);
-        n.lc    = (m & 1) ? _int_lc(idx) + int_size : _tk_map(_int_lc(idx));
-        n.bound = _int_box(idx);
-        int ie  = _lvs_lca(_int_range_y(idx) + 1);
+        _self_max_rank(new_id)        = _int_range_y(idx);
+        n.lc = (m & 1) ? _int_lc(idx) + int_size : _tk_map(_int_lc(idx));
+        _refit_right(new_id) = (m & 2) ? _int_rc(idx) + int_size : _tk_map(_int_rc(idx));
+        int old_parent        = _int_par(idx);
+        _refit_parent(new_id) = old_parent == -1 ? -1 : _tk_map(old_parent);
+        n.bound               = _int_box(idx);
+        int ie                = _lvs_lca(_int_range_y(idx) + 1);
         if(ie == -1)
             n.escape = -1;
         else
@@ -482,6 +565,63 @@ namespace
         _nodes(new_id) = n;
     }
 
+    __global__ void InfoStacklessBVH_refit_kernel(
+        int                                           int_size,
+        cuda_tool::CBufferView<AABB>                  _aabbs,
+        cuda_tool::CBufferView<IndexT>                _bids,
+        cuda_tool::CBufferView<IndexT>                _cids,
+        cuda_tool::CBufferView<int>                   _lvs_idx,
+        cuda_tool::BufferView<AABB>                   _lvs_box,
+        cuda_tool::BufferView<IndexT>                 _lvs_bid,
+        cuda_tool::BufferView<IndexT>                 _lvs_cid,
+        cuda_tool::BufferView<InfoStacklessBVH::Node> _nodes,
+        cuda_tool::CBufferView<int>                   _parent,
+        cuda_tool::CBufferView<int>                   _right,
+        cuda_tool::BufferView<int>                    _arrivals,
+        int                                           n)
+    {
+        constexpr IndexT invalid = static_cast<IndexT>(-1);
+        int              rank    = blockIdx.x * blockDim.x + threadIdx.x;
+        if(rank >= n)
+            return;
+
+        int raw_id  = _lvs_idx(rank);
+        int leaf_id = int_size + rank;
+
+        InfoStacklessBVH::Node leaf = _nodes(leaf_id);
+        leaf.bound                  = _aabbs(raw_id);
+        leaf.bid                    = _bids(raw_id);
+        leaf.cid                    = _cids(raw_id);
+        _nodes(leaf_id)             = leaf;
+        _lvs_box(rank)              = leaf.bound;
+        _lvs_bid(rank)              = leaf.bid;
+        _lvs_cid(rank)              = leaf.cid;
+
+        // Publish the leaf before announcing its arrival. The first child at
+        // each parent stops; the second observes both children, publishes the
+        // merged node, and carries completion toward the root.
+        __threadfence();
+        int parent = _parent(leaf_id);
+        while(parent != -1)
+        {
+            if(atomicAdd(&_arrivals(parent), 1) == 0)
+                break;
+
+            __threadfence();
+            auto node  = _nodes(parent);
+            auto left  = _nodes(node.lc);
+            auto right = _nodes(_right(parent));
+            node.bound = left.bound;
+            node.bound.extend(right.bound);
+            node.bid       = left.bid == right.bid ? left.bid : invalid;
+            node.cid       = left.cid == right.cid ? left.cid : invalid;
+            _nodes(parent) = node;
+
+            __threadfence();
+            parent = _parent(parent);
+        }
+    }
+
     template <typename NodeCull, typename PairPred>
     __global__ void InfoStacklessBVH_stacklessSelf_kernel(
         int                                           Size,
@@ -490,6 +630,7 @@ namespace
         int                                           numObjs,
         cuda_tool::BufferView<int>                    _lvs_idx,
         cuda_tool::BufferView<InfoStacklessBVH::Node> _nodes,
+        cuda_tool::BufferView<int>                    _self_max_rank,
         cuda_tool::CBufferView<IndexT>                _bids,
         cuda_tool::CBufferView<IndexT>                _cids,
         bool                                          has_info,
@@ -511,20 +652,15 @@ namespace
 
         // -----------------------------------------------------------------
         // SMem: pre-load query bid/cid once per thread, before hot loop.
-        // Shared memory layout (per block, K_THREADS=256):
-        //   s_qbid[256]   = 1 KB
-        //   s_qcid[256]   = 1 KB
-        //   shared_res[1024 * sizeof(int2)] = 8 KB   (existing)
-        //   shared_counter, shared_global_idx         (existing)
-        // Total: ~10 KB — well within the 48 KB limit.
+        // Shared storage follows the independently swept Self CTA and queue.
         // -----------------------------------------------------------------
-        __shared__ IndexT s_qbid[K_THREADS];
-        __shared__ IndexT s_qcid[K_THREADS];
+        __shared__ IndexT s_qbid[K_SELF_THREADS];
+        __shared__ IndexT s_qcid[K_SELF_THREADS];
 
         s_qbid[threadIdx.x] = (active && has_info) ? _bids(idx) : invalid;
         s_qcid[threadIdx.x] = (active && has_info) ? _cids(idx) : invalid;
 
-        __shared__ int2 shared_res[MAX_RES_PER_BLOCK];
+        __shared__ int2 shared_res[K_SELF_MAX_RES_PER_BLOCK];
         __shared__ int  shared_counter;
         __shared__ int  shared_global_idx;
         if(threadIdx.x == 0)
@@ -545,6 +681,14 @@ namespace
                 {
                     if(st == -1)
                         break;
+                    // Self traversal only accepts leaves with Morton rank > tid.
+                    // An internal subtree whose maximum rank cannot pass that
+                    // gate is the duplicate half and can be skipped wholesale.
+                    if(st < intSize && _self_max_rank(st) <= tid)
+                    {
+                        st = _nodes(st).escape;
+                        continue;
+                    }
                     auto node = _nodes(st);
                     if(!node.bound.intersects(bv))
                     {
@@ -574,7 +718,7 @@ namespace
                             if(pair_pred(leaf_info))
                             {
                                 int sidx = atomicAdd(&shared_counter, 1);
-                                if(sidx >= MAX_RES_PER_BLOCK)
+                                if(sidx >= K_SELF_MAX_RES_PER_BLOCK)
                                     break;
                                 shared_res[sidx] = pair;
                             }
@@ -587,14 +731,14 @@ namespace
                 UIPC_KERNEL_ASSERT(inner_i < max_iter, "Exceeded max stackless iteration");
             }
             __syncthreads();
-            int total = min(shared_counter, MAX_RES_PER_BLOCK);
+            int total = min(shared_counter, K_SELF_MAX_RES_PER_BLOCK);
             if(threadIdx.x == 0)
                 shared_global_idx = atomicAdd(resCounter.data(), total);
             __syncthreads();
             int gidx = shared_global_idx;
             if(threadIdx.x == 0)
                 shared_counter = 0;
-            bool done = total < MAX_RES_PER_BLOCK;
+            bool done = total < K_SELF_MAX_RES_PER_BLOCK;
             safe_copy_to(shared_res, total, res.data(), gidx, static_cast<int>(res.total_size()));
             if(done)
                 break;
@@ -632,13 +776,13 @@ namespace
         // -----------------------------------------------------------------
         // SMem: pre-load per-query bid/cid before the traversal loop.
         // -----------------------------------------------------------------
-        __shared__ IndexT s_qbid[K_THREADS];
-        __shared__ IndexT s_qcid[K_THREADS];
+        __shared__ IndexT s_qbid[K_OTHER_THREADS];
+        __shared__ IndexT s_qcid[K_OTHER_THREADS];
 
         s_qbid[threadIdx.x] = (active && qhas_info) ? _qbids(idx) : invalid;
         s_qcid[threadIdx.x] = (active && qhas_info) ? _qcids(idx) : invalid;
 
-        __shared__ int2 shared_res[MAX_RES_PER_BLOCK];
+        __shared__ int2 shared_res[K_OTHER_MAX_RES_PER_BLOCK];
         __shared__ int  shared_counter;
         __shared__ int  shared_global_idx;
         if(threadIdx.x == 0)
@@ -682,7 +826,7 @@ namespace
                         if(pair_pred(leaf_info))
                         {
                             int sidx = atomicAdd(&shared_counter, 1);
-                            if(sidx >= MAX_RES_PER_BLOCK)
+                            if(sidx >= K_OTHER_MAX_RES_PER_BLOCK)
                                 break;
                             shared_res[sidx] = pair;
                         }
@@ -695,7 +839,7 @@ namespace
             }
 
             __syncthreads();
-            int total = min(shared_counter, MAX_RES_PER_BLOCK);
+            int total = min(shared_counter, K_OTHER_MAX_RES_PER_BLOCK);
             if(threadIdx.x == 0)
                 shared_global_idx = atomicAdd(resCounter.data(), total);
             __syncthreads();
@@ -703,7 +847,7 @@ namespace
             if(threadIdx.x == 0)
                 shared_counter = 0;
             __syncthreads();
-            bool done = total < MAX_RES_PER_BLOCK;
+            bool done = total < K_OTHER_MAX_RES_PER_BLOCK;
             safe_copy_to(shared_res, total, res.data(), gidx, static_cast<int>(res.total_size()));
             if(done)
                 break;
@@ -712,20 +856,22 @@ namespace
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// Build pipeline — identical to InfoStacklessBVH
+// Build and refit pipeline
 // ---------------------------------------------------------------------------
 
 inline void InfoStacklessBVH::Impl::calcMaxBVFromBox(cuda_tool::CBufferView<AABB> aabbs,
                                                      cuda_tool::VarView<AABB> scene_box)
 {
+    InfoStacklessBVH_resetSceneBox_kernel<<<1, 1, 0, nullptr>>>(scene_box.viewer());
+
     if(aabbs.size() == 0)
         return;
 
     auto num  = aabbs.size();
-    auto grid = (num + K_THREADS - 1) / K_THREADS;
+    auto grid = (num + K_BUILD_THREADS - 1) / K_BUILD_THREADS;
 
     if(grid > 0)
-        InfoStacklessBVH_calcMaxBVFromBox_kernel<<<grid, K_THREADS, 0, nullptr>>>(
+        InfoStacklessBVH_calcMaxBVFromBox_kernel<<<grid, K_BUILD_THREADS, 0, nullptr>>>(
             aabbs.size(), aabbs, scene_box.viewer());
 }
 
@@ -833,13 +979,19 @@ inline void InfoStacklessBVH::Impl::reorderNode(int int_size)
         k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
             int_size,
             ext_lca.view(),
+            ext_par.view(),
             ext_aabb.view(),
             ext_bid.view(),
             ext_cid.view(),
             tkMap.view(),
             int_lc.view(),
+            int_rc.view(),
+            int_par.view(),
             int_mark.view(),
             int_range_y.view(),
+            self_max_rank.view(),
+            refit_parent.view(),
+            refit_right_child.view(),
             int_aabb.view(),
             int_bid.view(),
             int_cid.view(),
@@ -853,15 +1005,16 @@ inline void InfoStacklessBVH::Impl::build(cuda_tool::CBufferView<AABB>   aabbs,
                                           cuda_tool::CBufferView<IndexT> _bids,
                                           cuda_tool::CBufferView<IndexT> _cids)
 {
-    objs          = aabbs;
-    bids          = _bids;
-    cids          = _cids;
-    auto num_objs = aabbs.size();
+    objs              = aabbs;
+    bids              = _bids;
+    cids              = _cids;
+    auto num_objs     = aabbs.size();
+    auto num_internal = num_objs > 0 ? num_objs - 1 : 0;
+    self_max_rank.resize(num_internal);
     if(num_objs == 0)
         return;
 
-    auto num_internal = num_objs - 1;
-    auto num_nodes    = num_objs * 2 - 1;
+    auto num_nodes = num_objs * 2 - 1;
     mtcode.resize(num_objs);
     sorted_mtcode.resize(num_objs);
     sorted_id.resize(num_objs);
@@ -887,16 +1040,14 @@ inline void InfoStacklessBVH::Impl::build(cuda_tool::CBufferView<AABB>   aabbs,
     int_bid.resize(num_internal);
     int_cid.resize(num_internal);
     nodes.resize(num_nodes);
+    refit_parent.resize(num_nodes);
+    refit_right_child.resize(num_internal);
+    refit_arrivals.resize(num_internal);
 
     auto init = InfoStacklessBVH_initializeBuildState_kernel;
     auto n    = static_cast<int>(num_objs);
     init<<<cuda_tool::best_grid_dim(n + 1, init), cuda_tool::best_block_dim(init), 0, nullptr>>>(
-        n,
-        scene_box.viewer(),
-        flags.view(),
-        ext_lca.view(),
-        count.view(),
-        primMap.view());
+        n, flags.view(), ext_lca.view(), count.view(), primMap.view());
 
     calcMaxBVFromBox(aabbs, scene_box.view());
     calcMCsFromBox(aabbs, scene_box.view(), mtcode.view());
@@ -914,6 +1065,55 @@ inline void InfoStacklessBVH::Impl::build(cuda_tool::CBufferView<AABB>   aabbs,
     reorderNode(num_internal);
 }
 
+inline bool InfoStacklessBVH::Impl::refit(cuda_tool::CBufferView<AABB>   aabbs,
+                                          cuda_tool::CBufferView<IndexT> _bids,
+                                          cuda_tool::CBufferView<IndexT> _cids)
+{
+    auto num_objs = aabbs.size();
+    if(num_objs != objs.size() || _bids.size() != num_objs || _cids.size() != num_objs)
+        return false;
+
+    if(num_objs == 0)
+    {
+        objs = aabbs;
+        bids = _bids;
+        cids = _cids;
+        return true;
+    }
+
+    auto num_internal = num_objs - 1;
+    auto num_nodes    = num_objs * 2 - 1;
+    if(nodes.size() != num_nodes || ext_idx.size() != num_objs
+       || ext_aabb.size() != num_objs || ext_bid.size() != num_objs
+       || ext_cid.size() != num_objs || refit_parent.size() != num_nodes
+       || refit_right_child.size() != num_internal || refit_arrivals.size() != num_internal)
+        return false;
+
+    objs = aabbs;
+    bids = _bids;
+    cids = _cids;
+
+    cuda_tool::BufferLaunch().fill(refit_arrivals.view(), 0);
+
+    auto k = InfoStacklessBVH_refit_kernel;
+    auto n = static_cast<int>(num_objs);
+    k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+        static_cast<int>(num_internal),
+        aabbs,
+        _bids,
+        _cids,
+        ext_idx.view(),
+        ext_aabb.view(),
+        ext_bid.view(),
+        ext_cid.view(),
+        nodes.view(),
+        refit_parent.view(),
+        refit_right_child.view(),
+        refit_arrivals.view(),
+        n);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // OPTIMIZED: stacklessSelf
 //   Pre-loads query_bid and query_cid for each thread into shared memory
@@ -929,25 +1129,26 @@ void InfoStacklessBVH::Impl::stacklessSelf(NodeCull                node_cull,
 {
     auto num_query = static_cast<int>(ext_aabb.size());
     auto num_objs  = num_query;
-    auto grid      = (num_query + K_THREADS - 1) / K_THREADS;
+    auto grid      = (num_query + K_SELF_THREADS - 1) / K_SELF_THREADS;
 
     bool has_info = bids.size() == (size_t)num_objs && cids.size() == (size_t)num_objs;
 
     if(grid > 0)
         InfoStacklessBVH_stacklessSelf_kernel<NodeCull, PairPred>
-            <<<grid, K_THREADS, 0, nullptr>>>(num_query,
-                                              objs,
-                                              num_objs - 1,
-                                              num_objs,
-                                              ext_idx.view(),
-                                              nodes.view(),
-                                              bids,
-                                              cids,
-                                              has_info,
-                                              cpNum.viewer(),
-                                              buffer,
-                                              node_cull,
-                                              pair_pred);
+            <<<grid, K_SELF_THREADS, 0, nullptr>>>(num_query,
+                                                   objs,
+                                                   num_objs - 1,
+                                                   num_objs,
+                                                   ext_idx.view(),
+                                                   nodes.view(),
+                                                   self_max_rank.view(),
+                                                   bids,
+                                                   cids,
+                                                   has_info,
+                                                   cpNum.viewer(),
+                                                   buffer,
+                                                   node_cull,
+                                                   pair_pred);
 }
 
 // ---------------------------------------------------------------------------
@@ -968,27 +1169,27 @@ void InfoStacklessBVH::Impl::stacklessOther(NodeCull node_cull,
 {
     auto num_query = static_cast<int>(query_aabbs.size());
     auto num_objs  = static_cast<int>(ext_aabb.size());
-    auto grid      = (num_query + K_THREADS - 1) / K_THREADS;
+    auto grid      = (num_query + K_OTHER_THREADS - 1) / K_OTHER_THREADS;
 
     bool qhas_info = query_bids.size() == (size_t)num_query
                      && query_cids.size() == (size_t)num_query;
 
     if(grid > 0)
         InfoStacklessBVH_stacklessOther_kernel<NodeCull, PairPred>
-            <<<grid, K_THREADS, 0, nullptr>>>(num_query,
-                                              query_aabbs,
-                                              query_sorted_id,
-                                              num_objs - 1,
-                                              num_objs,
-                                              ext_idx.view(),
-                                              nodes.view(),
-                                              query_bids,
-                                              query_cids,
-                                              qhas_info,
-                                              cpNum.viewer(),
-                                              buffer,
-                                              node_cull,
-                                              pair_pred);
+            <<<grid, K_OTHER_THREADS, 0, nullptr>>>(num_query,
+                                                    query_aabbs,
+                                                    query_sorted_id,
+                                                    num_objs - 1,
+                                                    num_objs,
+                                                    ext_idx.view(),
+                                                    nodes.view(),
+                                                    query_bids,
+                                                    query_cids,
+                                                    qhas_info,
+                                                    cpNum.viewer(),
+                                                    buffer,
+                                                    node_cull,
+                                                    pair_pred);
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,8 +1201,14 @@ inline InfoStacklessBVH::InfoStacklessBVH(cuda_tool::Stream& stream) noexcept
     (void)stream;
 }
 
-inline void InfoStacklessBVH::QueryBuffer::build(cuda_tool::CBufferView<AABB> aabbs)
+inline void InfoStacklessBVH::QueryBuffer::build(cuda_tool::CBufferView<AABB> aabbs, bool reuse_order)
 {
+    // Morton order schedules traversal only; pair predicates still consume
+    // current AABBs and primitive IDs. During one Line Search the query
+    // identity and count are stable, so a cached permutation remains valid.
+    if(reuse_order && m_querySortedId.size() == aabbs.size())
+        return;
+
     m_queryMtCode.resize(aabbs.size());
     m_querySortedMtCode.resize(aabbs.size());
     m_queryId.resize(aabbs.size());
@@ -1010,7 +1217,7 @@ inline void InfoStacklessBVH::QueryBuffer::build(cuda_tool::CBufferView<AABB> aa
     auto n    = static_cast<int>(aabbs.size());
     if(n > 0)
         init<<<cuda_tool::best_grid_dim(n, init), cuda_tool::best_block_dim(init), 0, nullptr>>>(
-            n, m_querySceneBox.viewer(), m_queryId.view());
+            n, m_queryId.view());
     Impl::calcMaxBVFromBox(aabbs, m_querySceneBox);
     Impl::calcMCsFromBox(aabbs, m_querySceneBox, m_queryMtCode.view());
     cuda_tool::DeviceRadixSort().SortPairs(m_queryMtCode.data(),
@@ -1044,6 +1251,23 @@ inline void InfoStacklessBVH::build(cuda_tool::CBufferView<AABB> aabbs)
     m_BIDs  = {};
     m_CIDs  = {};
     m_impl.build(aabbs, {}, {});
+}
+
+inline bool InfoStacklessBVH::refit(cuda_tool::CBufferView<AABB>   aabbs,
+                                    cuda_tool::CBufferView<IndexT> BIDs,
+                                    cuda_tool::CBufferView<IndexT> CIDs)
+{
+    if(aabbs.size() != m_aabbs.size() || aabbs.size() != BIDs.size()
+       || aabbs.size() != CIDs.size())
+        return false;
+
+    if(!m_impl.refit(aabbs, BIDs, CIDs))
+        return false;
+
+    m_aabbs = aabbs;
+    m_BIDs  = BIDs;
+    m_CIDs  = CIDs;
+    return true;
 }
 
 inline bool InfoStacklessBVH::prepare_query_result(QueryBuffer& qbuffer, int count)
@@ -1106,7 +1330,8 @@ inline void InfoStacklessBVH::launch_query(cuda_tool::CBufferView<AABB> query_aa
                                            NodePred     np,
                                            LeafPred     lp,
                                            QueryBuffer& qbuffer,
-                                           bool         rebuild_query)
+                                           bool         rebuild_query,
+                                           bool         reuse_query_order)
 {
     using namespace cuda_tool;
     BufferLaunch().fill(qbuffer.m_cpNum.view(), 0);
@@ -1124,7 +1349,7 @@ inline void InfoStacklessBVH::launch_query(cuda_tool::CBufferView<AABB> query_aa
                 query_CIDs.size());
 
     if(rebuild_query)
-        qbuffer.build(query_aabbs);
+        qbuffer.build(query_aabbs, reuse_query_order);
     m_impl.stacklessOther(np,
                           lp,
                           query_aabbs,
@@ -1143,12 +1368,13 @@ inline void InfoStacklessBVH::query(cuda_tool::CBufferView<AABB>   query_aabbs,
                                     cuda_tool::CBuffer2DView<IndexT> cmts,
                                     NodePred                         np,
                                     LeafPred                         lp,
-                                    QueryBuffer&                     qbuffer)
+                                    QueryBuffer&                     qbuffer,
+                                    bool reuse_query_order)
 {
-    launch_query(query_aabbs, query_BIDs, query_CIDs, cmts, np, lp, qbuffer, true);
+    launch_query(query_aabbs, query_BIDs, query_CIDs, cmts, np, lp, qbuffer, true, reuse_query_order);
     int h_cp_num = qbuffer.m_cpNum;
     if(prepare_query_result(qbuffer, h_cp_num))
-        launch_query(query_aabbs, query_BIDs, query_CIDs, cmts, np, lp, qbuffer, false);
+        launch_query(query_aabbs, query_BIDs, query_CIDs, cmts, np, lp, qbuffer, false, reuse_query_order);
 }
 
 }  // namespace uipc::backend::cuda

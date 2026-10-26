@@ -1,3 +1,28 @@
+/*
+ * NVIDIA contributions: zero-output handling for empty DeviceReduce::Sum and
+ * optional radix-sort bit ranges.
+ *
+ * The NVIDIA notice applies to the contributions described above, not to the
+ * pre-existing libuipc or other contributors' code.
+ */
+
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 #include <cuda_tool/stream.h>
 #include <cuda_tool/buffer.h>
@@ -71,6 +96,14 @@ class DeviceReduce
     template <typename T>
     DeviceReduce& Sum(const T* in, T* out, int n)
     {
+        // CUB does not promise to write the output for an empty reduction.
+        // Callers reuse DeviceVar outputs across Line Search trials, so leaving
+        // an old value here would turn an empty energy range into stale energy.
+        if(n == 0)
+        {
+            CUDA_TOOL_CHECK(cudaMemsetAsync(out, 0, sizeof(T), m_stream));
+            return *this;
+        }
         details::run_with_temp_storage(
             [&](void* t, size_t& b, cudaStream_t s)
             { cub::DeviceReduce::Sum(t, b, in, out, n, s); },
@@ -256,13 +289,19 @@ class DeviceRadixSort
         return *this;
     }
     template <typename K, typename V>
-    DeviceRadixSort& SortPairs(const K* kin, K* kout, const V* vin, V* vout, int n)
+    DeviceRadixSort& SortPairs(const K* kin,
+                               K*       kout,
+                               const V* vin,
+                               V*       vout,
+                               int      n,
+                               int      begin_bit = 0,
+                               int      end_bit   = sizeof(K) * 8)
     {
         details::run_with_temp_storage(
             [&](void* t, size_t& b, cudaStream_t s)
             {
                 cub::DeviceRadixSort::SortPairs(
-                    t, b, kin, kout, vin, vout, n, 0, sizeof(K) * 8, s);
+                    t, b, kin, kout, vin, vout, n, begin_bit, end_bit, s);
             },
             m_stream);
         return *this;
