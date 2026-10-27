@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <time_integrator/bdf1_flag.h>
 #include <finite_element/finite_element_kinetic.h>
 
@@ -31,6 +32,7 @@ namespace
         }
     }
 
+    template <bool GradientOnly>
     __global__ void FiniteElementBDF1Kinetic_do_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<IndexT>            is_fixed,
         cuda_tool::CBufferView<Vector3>           xs,
@@ -38,7 +40,6 @@ namespace
         cuda_tool::CBufferView<Float>             masses,
         cuda_tool::DoubletVectorView<Float, 3>    G3s,
         cuda_tool::TripletMatrixView<Float, 3, 3> H3x3s,
-        bool                                      gradient_only,
         int                                       n)
     {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -61,13 +62,32 @@ namespace
 
         G3s(i).write(i, G);
 
-        if(gradient_only)
-            return;
-
-        Matrix3x3 H = masses(i) * Matrix3x3::Identity();
-        H3x3s(i).write(i, i, H);
+        if constexpr(!GradientOnly)
+        {
+            Matrix3x3 H = masses(i) * Matrix3x3::Identity();
+            H3x3s(i).write(i, i, H);
+        }
     }
 }  // namespace
+
+void launch_fem_bdf1_gradient_hessian(const FEMBDF1GradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.xs.size());
+    if(n <= 0)
+        return;
+    const int block_size = cuda_tool::best_block_dim(
+        FiniteElementBDF1Kinetic_do_compute_gradient_hessian_kernel<false>);
+    auto launch = [&]<bool GradientOnly>()
+    {
+        auto k = FiniteElementBDF1Kinetic_do_compute_gradient_hessian_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.is_fixed, info.xs, info.x_tildes, info.masses, info.G3s, info.H3x3s, n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class FiniteElementBDF1Kinetic final : public FiniteElementKinetic
 {
@@ -99,20 +119,13 @@ class FiniteElementBDF1Kinetic final : public FiniteElementKinetic
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto k = FiniteElementBDF1Kinetic_do_compute_gradient_hessian_kernel;
-        int  n = (int)info.xs().size();
-        if(n > 0)
-        {
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                info.is_fixed().cview(),
-                info.xs().cview(),
-                info.x_tildes(),
-                info.masses().cview(),
-                info.gradients(),
-                info.hessians(),
-                info.gradient_only(),
-                n);
-        }
+        launch_fem_bdf1_gradient_hessian({info.is_fixed().cview(),
+                                          info.xs().cview(),
+                                          info.x_tildes(),
+                                          info.masses().cview(),
+                                          info.gradients(),
+                                          info.hessians(),
+                                          info.gradient_only()});
     }
 };
 

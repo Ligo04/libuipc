@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <sim_system.h>
 #include <affine_body/constitutions/arap_function.h>
 #include <affine_body/affine_body_constitution.h>
@@ -35,6 +36,7 @@ namespace
         shape_energies(i) = E * Vdt2;
     }
 
+    template <bool GradientOnly>
     __global__ void arap_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Vector12>   qs,
         cuda_tool::CBufferView<Float>      volumes,
@@ -42,14 +44,12 @@ namespace
         cuda_tool::BufferView<Matrix12x12> hessians,
         cuda_tool::CBufferView<Float>      kappas,
         Float                              dt,
-        bool                               gradient_only,
         int                                n)
     {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if(i >= n)
             return;
-        Matrix12x12 H = Matrix12x12::Zero();
-        Vector12    G = Vector12::Zero();
+        Vector12 G = Vector12::Zero();
 
         const auto& q      = qs(i);
         Float       kappa  = kappas(i);
@@ -62,16 +62,36 @@ namespace
         G.segment<9>(3) = G9 * Vdt2;
         gradients(i)    = G;
 
-        if(gradient_only)
-            return;
+        if constexpr(!GradientOnly)
+        {
+            Matrix12x12 H = Matrix12x12::Zero();
+            Matrix9x9   H9x9;
+            abd_arap::ddEddq(H9x9, kappa, q);
+            H.block<9, 9>(3, 3) = H9x9 * Vdt2;
 
-        Matrix9x9 H9x9;
-        abd_arap::ddEddq(H9x9, kappa, q);
-        H.block<9, 9>(3, 3) = H9x9 * Vdt2;
-
-        hessians(i) = H;
+            hessians(i) = H;
+        }
     }
 }  // namespace
+
+void launch_abd_arap_gradient_hessian(const ABDARAPGradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.qs.size());
+    if(n <= 0)
+        return;
+    const int block_size =
+        cuda_tool::best_block_dim(arap_compute_gradient_hessian_kernel<false>);
+    auto launch = [&]<bool GradientOnly>()
+    {
+        auto k = arap_compute_gradient_hessian_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.qs, info.volumes, info.gradients, info.hessians, info.kappas, info.dt, n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class ARAP final : public AffineBodyConstitution
 {
@@ -133,23 +153,13 @@ class ARAP final : public AffineBodyConstitution
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto N             = info.qs().size();
-        auto gradient_only = info.gradient_only();
-
-        int n = (int)N;
-        if(n > 0)
-        {
-            auto k = arap_compute_gradient_hessian_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                info.qs(),
-                info.volumes(),
-                info.gradients(),
-                info.hessians(),
-                kappas.cview(),
-                info.dt(),
-                gradient_only,
-                n);
-        }
+        launch_abd_arap_gradient_hessian({info.qs(),
+                                          info.volumes(),
+                                          info.gradients(),
+                                          info.hessians(),
+                                          kappas.cview(),
+                                          info.dt(),
+                                          info.gradient_only()});
     }
 };
 

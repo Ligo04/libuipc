@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <affine_body/affine_body_kinetic.h>
 #include <time_integrator/bdf2_flag.h>
 
@@ -33,6 +34,7 @@ namespace
         }
     }
 
+    template <bool GradientOnly>
     __global__ void affine_body_bdf2_kinetic_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<IndexT>              is_fixed,
         cuda_tool::CBufferView<Vector12>            qs,
@@ -40,7 +42,6 @@ namespace
         cuda_tool::CBufferView<ABDJacobiDyadicMass> masses,
         cuda_tool::BufferView<Matrix12x12>          hessians,
         cuda_tool::BufferView<Vector12>             gradients,
-        bool                                        gradient_only,
         Float                                       inv_beta,
         int                                         n)
     {
@@ -59,12 +60,31 @@ namespace
             G = Vector12::Zero();
         }
 
-        if(gradient_only)
-            return;
-
-        hessians(i) = inv_beta * M.to_mat();
+        if constexpr(!GradientOnly)
+        {
+            hessians(i) = inv_beta * M.to_mat();
+        }
     }
 }  // namespace
+
+void launch_abd_bdf2_gradient_hessian(const ABDBDF2GradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.qs.size());
+    if(n <= 0)
+        return;
+    const int block_size = cuda_tool::best_block_dim(
+        affine_body_bdf2_kinetic_compute_gradient_hessian_kernel<false>);
+    auto launch = [&]<bool GradientOnly>()
+    {
+        auto k = affine_body_bdf2_kinetic_compute_gradient_hessian_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.is_fixed, info.qs, info.q_tildes, info.masses, info.hessians, info.gradients, info.inv_beta, n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class AffineBodyBDF2Kinetic final : public AffineBodyKinetic
 {
@@ -100,21 +120,14 @@ class AffineBodyBDF2Kinetic final : public AffineBodyKinetic
 
     void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        int n = (int)info.qs().size();
-        if(n > 0)
-        {
-            auto k = affine_body_bdf2_kinetic_compute_gradient_hessian_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                info.is_fixed().cview(),
-                info.qs().cview(),
-                info.q_tildes().cview(),
-                info.masses().cview(),
-                info.hessians(),
-                info.gradients(),
-                info.gradient_only(),
-                inv_beta,
-                n);
-        }
+        launch_abd_bdf2_gradient_hessian({info.is_fixed().cview(),
+                                          info.qs().cview(),
+                                          info.q_tildes().cview(),
+                                          info.masses().cview(),
+                                          info.hessians(),
+                                          info.gradients(),
+                                          inv_beta,
+                                          info.gradient_only()});
     }
 };
 

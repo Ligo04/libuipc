@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <finite_element/codim_2d_constitution.h>
 #include <finite_element/constitutions/strain_limiting_baraff_witkin_shell_2d.h>
 #include <kernel_cout.h>
@@ -76,6 +77,7 @@ namespace
         energies(I) = E * V * dt * dt;
     }
 
+    template <bool GradientOnly>
     __global__ void StrainLimitingBaraffWitkinShell2D_do_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Float>          mus,
         cuda_tool::CBufferView<Float>          lambdas,
@@ -90,7 +92,6 @@ namespace
         Float                                  dt,
         cuda_tool::CBufferView<Matrix2x2>      IBs,
         SizeT                                  half_hessian_size,
-        bool                                   gradient_only,
         int                                    n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -135,20 +136,52 @@ namespace
         DoubletVectorAssembler DVA{G3s};
         DVA.segment<StencilSize>(I * StencilSize).write(idx, G);
 
-        if(gradient_only)
-            return;
+        if constexpr(!GradientOnly)
+        {
+            Matrix6x6 ddEddF;
+            BWS::ddEddF(ddEddF, F, anisotropic_a, anisotropic_b, lambda, stretch_bs(I), mu, strain_rate);
 
-        Matrix6x6 ddEddF;
-        BWS::ddEddF(ddEddF, F, anisotropic_a, anisotropic_b, lambda, stretch_bs(I), mu, strain_rate);
+            ddEddF *= Vdt2;
 
-        ddEddF *= Vdt2;
+            Matrix9x9 H = dFdx.transpose() * ddEddF * dFdx;
 
-        Matrix9x9 H = dFdx.transpose() * ddEddF * dFdx;
-
-        TripletMatrixAssembler TMA{H3x3s};
-        TMA.half_block<StencilSize>(I * half_hessian_size).write(idx, H);
+            TripletMatrixAssembler TMA{H3x3s};
+            TMA.half_block<StencilSize>(I * half_hessian_size).write(idx, H);
+        }
     }
 }  // namespace
+
+void launch_baraff_witkin_shell_gradient_hessian(const BaraffWitkinShellGradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.indices.size());
+    if(n <= 0)
+        return;
+    const int block_size = cuda_tool::best_block_dim(
+        StrainLimitingBaraffWitkinShell2D_do_compute_gradient_hessian_kernel<false>);
+    auto launch = [&]<bool GradientOnly>()
+    {
+        auto k = StrainLimitingBaraffWitkinShell2D_do_compute_gradient_hessian_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.mus,
+            info.lambdas,
+            info.stretch_bs,
+            info.strainRates,
+            info.indices,
+            info.xs,
+            info.thicknesses,
+            info.G3s,
+            info.H3x3s,
+            info.rest_areas,
+            info.dt,
+            info.IBs,
+            info.half_hessian_size,
+            n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class StrainLimitingBaraffWitkinShell2D final : public Codim2DConstitution
 {
@@ -296,27 +329,20 @@ class StrainLimitingBaraffWitkinShell2D final : public Codim2DConstitution
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto k = StrainLimitingBaraffWitkinShell2D_do_compute_gradient_hessian_kernel;
-        int n = (int)info.indices().size();
-        if(n > 0)
-        {
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                mus.cview(),
-                lambdas.cview(),
-                stretch_bs.cview(),
-                strain_rates.cview(),
-                info.indices(),
-                info.xs(),
-                info.thicknesses(),
-                info.gradients(),
-                info.hessians(),
-                info.rest_areas(),
-                info.dt(),
-                inv_B_matrices.cview(),
-                HalfHessianSize,
-                info.gradient_only(),
-                n);
-        }
+        launch_baraff_witkin_shell_gradient_hessian({mus.cview(),
+                                                     lambdas.cview(),
+                                                     stretch_bs.cview(),
+                                                     strain_rates.cview(),
+                                                     info.indices(),
+                                                     info.xs(),
+                                                     info.thicknesses(),
+                                                     info.gradients(),
+                                                     info.hessians(),
+                                                     info.rest_areas(),
+                                                     info.dt(),
+                                                     inv_B_matrices.cview(),
+                                                     HalfHessianSize,
+                                                     info.gradient_only()});
     }
 };
 

@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <finite_element/fem_3d_constitution.h>
 #include <finite_element/constitutions/stable_neo_hookean_3d_function.h>
 #include <finite_element/fem_utils.h>
@@ -50,6 +51,7 @@ namespace
         energies(I) = E;
     }
 
+    template <bool GradientOnly>
     __global__ void StableNeoHookean3D_do_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Float>          mus,
         cuda_tool::CBufferView<Float>          lambdas,
@@ -60,7 +62,6 @@ namespace
         cuda_tool::TripletMatrixView<Float, 3> H3x3s,
         cuda_tool::CBufferView<Float>          volumes,
         Float                                  dt,
-        bool                                   gradient_only,
         int                                    n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -95,37 +96,64 @@ namespace
             DVA(I * StencilSize + i).write(tet(i), G);
         }
 
-        if(gradient_only)
-            return;
-
-        // analytically SPD-projected 9x9 energy Hessian (Stiff SNK1);
-        // scaling by the positive Vdt2 commutes with the projection
-        Matrix9x9 ddEddF;
-        SNH::ddEddF_spd(ddEddF, mu, lambda, F);
-        ddEddF *= Vdt2;
-
-        IndexT hessian_offset = I * HalfHessianSize;
-#pragma unroll
-        for(int i = 0; i < StencilSize; ++i)
+        if constexpr(!GradientOnly)
         {
-#pragma unroll
-            for(int j = i; j < StencilSize; ++j)
-            {
-                int left  = i;
-                int right = j;
-                if(tet(left) > tet(right))
-                {
-                    left  = j;
-                    right = i;
-                }
+            // analytically SPD-projected 9x9 energy Hessian (Stiff SNK1);
+            // scaling by the positive Vdt2 commutes with the projection
+            Matrix9x9 ddEddF;
+            SNH::ddEddF_spd(ddEddF, mu, lambda, F);
+            ddEddF *= Vdt2;
 
-                Matrix3x3 H = fem::project_F_hessian_block(
-                    shape_gradients.col(left), ddEddF, shape_gradients.col(right));
-                H3x3s(hessian_offset++).write(tet(left), tet(right), H);
+            IndexT hessian_offset = I * HalfHessianSize;
+#pragma unroll
+            for(int i = 0; i < StencilSize; ++i)
+            {
+#pragma unroll
+                for(int j = i; j < StencilSize; ++j)
+                {
+                    int left  = i;
+                    int right = j;
+                    if(tet(left) > tet(right))
+                    {
+                        left  = j;
+                        right = i;
+                    }
+
+                    Matrix3x3 H = fem::project_F_hessian_block(
+                        shape_gradients.col(left), ddEddF, shape_gradients.col(right));
+                    H3x3s(hessian_offset++).write(tet(left), tet(right), H);
+                }
             }
         }
     }
 }  // namespace
+
+void launch_stable_neo_hookean_3d_gradient_hessian(const StableNeoHookean3DGradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.indices.size());
+    if(n <= 0)
+        return;
+    const int block_size = cuda_tool::best_block_dim(
+        StableNeoHookean3D_do_compute_gradient_hessian_kernel<false>);
+    auto launch = [&]<bool GradientOnly>()
+    {
+        auto k = StableNeoHookean3D_do_compute_gradient_hessian_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(info.mus,
+                                                                         info.lambdas,
+                                                                         info.indices,
+                                                                         info.xs,
+                                                                         info.Dm_invs,
+                                                                         info.G3s,
+                                                                         info.H3x3s,
+                                                                         info.volumes,
+                                                                         info.dt,
+                                                                         n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class StableNeoHookean3D final : public FEM3DConstitution
 {
@@ -216,23 +244,16 @@ class StableNeoHookean3D final : public FEM3DConstitution
 
     virtual void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto k = StableNeoHookean3D_do_compute_gradient_hessian_kernel;
-        int  n = (int)info.indices().size();
-        if(n > 0)
-        {
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                mus.cview(),
-                lambdas.cview(),
-                info.indices(),
-                info.xs(),
-                info.Dm_invs(),
-                info.gradients(),
-                info.hessians(),
-                info.rest_volumes(),
-                info.dt(),
-                info.gradient_only(),
-                n);
-        }
+        launch_stable_neo_hookean_3d_gradient_hessian({mus.cview(),
+                                                       lambdas.cview(),
+                                                       info.indices(),
+                                                       info.xs(),
+                                                       info.Dm_invs(),
+                                                       info.gradients(),
+                                                       info.hessians(),
+                                                       info.rest_volumes(),
+                                                       info.dt(),
+                                                       info.gradient_only()});
     }
 };
 

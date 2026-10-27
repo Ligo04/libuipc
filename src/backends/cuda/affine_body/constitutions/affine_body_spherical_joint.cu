@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <affine_body/inter_affine_body_constitution.h>
 #include <affine_body/constitutions/affine_body_spherical_joint_function.h>
 #include <uipc/builtin/attribute_name.h>
@@ -42,6 +43,7 @@ namespace
         Es(I) = Et_val;
     }
 
+    template <bool GradientOnly>
     __global__ void affine_body_spherical_joint_compute_gradient_hessian_kernel(
         cuda_tool::CBufferView<Vector2i>            body_ids,
         cuda_tool::CBufferView<Vector6>             rest_cs,
@@ -50,7 +52,6 @@ namespace
         cuda_tool::CBufferView<Vector12>            qs,
         cuda_tool::DoubletVectorView<Float, 12>     G12s,
         cuda_tool::TripletMatrixView<Float, 12>     H12x12s,
-        bool                                        gradient_only,
         SizeT                                       HalfHessianSize,
         int                                         n)
     {
@@ -81,7 +82,7 @@ namespace
         Vector2i               indices = {bids(0), bids(1)};
         DVA.segment<2>(2 * I).write(indices, G);
 
-        if(!gradient_only)
+        if constexpr(!GradientOnly)
         {
             Matrix3x3 ddEdFt_val;
             SJ::ddEdFt<Float>(ddEdFt_val, kappa, Ft_val);
@@ -95,6 +96,33 @@ namespace
         }
     }
 }  // namespace
+
+void launch_affine_body_spherical_joint_gradient_hessian(const AffineBodySphericalJointGradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.body_ids.size());
+    if(n <= 0)
+        return;
+    const int block_size = cuda_tool::best_block_dim(
+        affine_body_spherical_joint_compute_gradient_hessian_kernel<false>);
+    auto launch = [&]<bool GradientOnly>()
+    {
+        auto k = affine_body_spherical_joint_compute_gradient_hessian_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.body_ids,
+            info.rest_cs,
+            info.strength_ratio,
+            info.body_masses,
+            info.qs,
+            info.G12s,
+            info.H12x12s,
+            info.HalfHessianSize,
+            n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class AffineBodySphericalJoint final : public InterAffineBodyConstitution
 {
@@ -231,23 +259,15 @@ class AffineBodySphericalJoint final : public InterAffineBodyConstitution
 
     void do_compute_gradient_hessian(ComputeGradientHessianInfo& info) override
     {
-        auto gradient_only = info.gradient_only();
-        int  n             = (int)body_ids.size();
-        if(n > 0)
-        {
-            auto k = affine_body_spherical_joint_compute_gradient_hessian_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                body_ids.cview(),
-                rest_cs.cview(),
-                strength_ratios.cview(),
-                info.body_masses(),
-                info.qs(),
-                info.gradients(),
-                info.hessians(),
-                gradient_only,
-                HalfHessianSize,
-                n);
-        }
+        launch_affine_body_spherical_joint_gradient_hessian({body_ids.cview(),
+                                                             rest_cs.cview(),
+                                                             strength_ratios.cview(),
+                                                             info.body_masses(),
+                                                             info.qs(),
+                                                             info.gradients(),
+                                                             info.hessians(),
+                                                             HalfHessianSize,
+                                                             info.gradient_only()});
     }
 
     U64 get_uid() const noexcept override { return ConstitutionUID; }

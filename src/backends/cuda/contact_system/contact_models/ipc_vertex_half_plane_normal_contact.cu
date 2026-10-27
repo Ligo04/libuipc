@@ -1,3 +1,4 @@
+#include <utils/specialized_gradient_hessian_launch.h>
 #include <contact_system/vertex_half_plane_normal_contact.h>
 #include <implicit_geometry/half_plane.h>
 #include <contact_system/contact_models/ipc_vertex_half_plane_contact_function.h>
@@ -47,8 +48,8 @@ namespace
             kt2, d_hat, thickness, v, P, N);
     }
 
-    __global__ void do_assemble_kernel(bool gradient_only,
-                                       cuda_tool::DoubletVectorView<Float, 3> Grad,
+    template <bool GradientOnly>
+    __global__ void do_assemble_kernel(cuda_tool::DoubletVectorView<Float, 3> Grad,
                                        cuda_tool::TripletMatrixView<Float, 3> Hess,
                                        cuda_tool::CBufferView<Vector2i> PHs,
                                        cuda_tool::CBufferView<Vector3> plane_positions,
@@ -84,7 +85,7 @@ namespace
         Float thickness = thicknesses(vI);
 
         Vector3 G;
-        if(gradient_only)
+        if constexpr(GradientOnly)
         {
             sym::ipc_vertex_half_contact::PH_barrier_gradient(
                 G, kt2, d_hat, thickness, v, P, N);
@@ -100,6 +101,36 @@ namespace
         }
     }
 }  // namespace
+
+void launch_half_plane_normal_gradient_hessian(const HalfPlaneNormalGradientHessianLaunchInfo& info)
+{
+    const int n = static_cast<int>(info.PHs.size());
+    if(n <= 0)
+        return;
+    const int block_size = cuda_tool::best_block_dim(do_assemble_kernel<false>);
+    auto      launch     = [&]<bool GradientOnly>()
+    {
+        auto k = do_assemble_kernel<GradientOnly>;
+        k<<<(n + block_size - 1) / block_size, block_size, 0, nullptr>>>(
+            info.Grad,
+            info.Hess,
+            info.PHs,
+            info.plane_positions,
+            info.plane_normals,
+            info.table,
+            info.contact_ids,
+            info.Ps,
+            info.thicknesses,
+            info.d_hats,
+            info.half_plane_vertex_offset,
+            info.dt,
+            n);
+    };
+    if(info.gradient_only)
+        launch.template operator()<true>();
+    else
+        launch.template operator()<false>();
+}
 
 class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContact
 {
@@ -134,26 +165,19 @@ class IPCVertexHalfPlaneNormalContact final : public VertexHalfPlaneNormalContac
 
     virtual void do_assemble(ContactInfo& info) override
     {
-        using namespace cuda_tool;
-
-        if(info.PHs().size())
-        {
-            do_assemble_kernel<<<cuda_tool::best_grid_dim((int)info.PHs().size(), do_assemble_kernel), cuda_tool::best_block_dim(do_assemble_kernel), 0, nullptr>>>(
-                info.gradient_only(),
-                info.gradients().viewer(),
-                info.hessians().viewer(),
-                info.PHs().viewer(),
-                half_plane->positions().viewer(),
-                half_plane->normals().viewer(),
-                info.contact_tabular().viewer(),
-                info.contact_element_ids().viewer(),
-                info.positions().viewer(),
-                info.thicknesses().viewer(),
-                info.d_hats().viewer(),
-                info.half_plane_vertex_offset(),
-                info.dt(),
-                (int)info.PHs().size());
-        }
+        launch_half_plane_normal_gradient_hessian({info.gradients().viewer(),
+                                                   info.hessians().viewer(),
+                                                   info.PHs().viewer(),
+                                                   half_plane->positions().viewer(),
+                                                   half_plane->normals().viewer(),
+                                                   info.contact_tabular().viewer(),
+                                                   info.contact_element_ids().viewer(),
+                                                   info.positions().viewer(),
+                                                   info.thicknesses().viewer(),
+                                                   info.d_hats().viewer(),
+                                                   info.half_plane_vertex_offset(),
+                                                   info.dt(),
+                                                   info.gradient_only()});
     }
 
     HalfPlane* half_plane = nullptr;
