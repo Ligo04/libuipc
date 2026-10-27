@@ -33,6 +33,16 @@ enum class GeometryKind
     PureCodim
 };
 
+vector<std::string> single_ef_methods()
+{
+    vector<std::string> methods{"single_ef_bvh"};
+    const auto          available =
+        Scene::config_schema().at("entries").at("collision_detection/method").at("enum");
+    if(std::ranges::find(available, Json("single_ef_optix")) != available.end())
+        methods.emplace_back("single_ef_optix");
+    return methods;
+}
+
 vector<FrameSample> run_contact_world(std::string_view method, GeometryKind kind)
 {
     const bool with_particle = kind != GeometryKind::Triangles;
@@ -100,7 +110,7 @@ vector<FrameSample> run_contact_world(std::string_view method, GeometryKind kind
     {
         const Float x = with_surface ? 0.6 : -0.4;
         const vector<Vector3> particle_vertices = {{x, 0.025, 0.1}, {x + 0.02, 0.025, 0.1}};
-        auto                  point             = pointcloud(particle_vertices);
+        auto point = pointcloud(particle_vertices);
         Particle{}.apply_to(point, 1e3, 0.005);
         label_surface(point);
         contact.apply_to(point);
@@ -184,6 +194,9 @@ vector<FrameSample> run_contact_world(std::string_view method, GeometryKind kind
 TEST_CASE("single EF BVH consumes contact candidates in a real world",
           "[cuda][collision detection][single_ef_bvh]")
 {
+    const auto method =
+        GENERATE_COPY(Catch::Generators::from_range(single_ef_methods()));
+    CAPTURE(method);
     auto kind = GeometryKind::Triangles;
     SECTION("pure triangle surfaces") {}
     SECTION("triangle surfaces and a codimensional particle")
@@ -198,8 +211,10 @@ TEST_CASE("single EF BVH consumes contact candidates in a real world",
     {
         kind = GeometryKind::PureCodim;
     }
-    const auto baseline  = run_contact_world("info_stackless_bvh", kind);
-    const auto single_ef = run_contact_world("single_ef_bvh", kind);
+    const auto baseline_method =
+        method == "single_ef_optix" ? "single_ef_bvh" : "info_stackless_bvh";
+    const auto baseline  = run_contact_world(baseline_method, kind);
+    const auto single_ef = run_contact_world(method, kind);
     REQUIRE(single_ef.size() == baseline.size());
     for(SizeT frame = 0; frame < baseline.size(); ++frame)
     {

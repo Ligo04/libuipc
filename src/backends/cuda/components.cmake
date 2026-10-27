@@ -55,12 +55,15 @@ file(GLOB_RECURSE UIPC_CUDA_AFFINE_BODY_SOURCES CONFIGURE_DEPENDS
     "affine_body/*.cu" "affine_body/*.cpp")
 file(GLOB_RECURSE UIPC_CUDA_COLLISION_SOURCES CONFIGURE_DEPENDS
     "collision_detection/*.cu" "collision_detection/*.cpp")
+file(GLOB UIPC_CUDA_OPTIX_DEVICE_SOURCES CONFIGURE_DEPENDS
+    "collision_detection/optix/ef_device.cu")
 set(UIPC_CUDA_COLLISION_LEGACY_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/collision_detection/filters/info_stackless_bvh_v0_simplex_trajectory_filter.cu"
     "${CMAKE_CURRENT_SOURCE_DIR}/collision_detection/filters/lbvh_simplex_trajectory_filter.cu"
     "${CMAKE_CURRENT_SOURCE_DIR}/collision_detection/filters/stackless_bvh_simplex_trajectory_filter.cu")
 list(REMOVE_ITEM UIPC_CUDA_COLLISION_SOURCES
-    ${UIPC_CUDA_COLLISION_LEGACY_SOURCES})
+    ${UIPC_CUDA_COLLISION_LEGACY_SOURCES}
+    ${UIPC_CUDA_OPTIX_DEVICE_SOURCES})
 file(GLOB_RECURSE UIPC_CUDA_CONTACT_SOURCES CONFIGURE_DEPENDS
     "active_set_system/*.cu" "active_set_system/*.cpp"
     "contact_system/*.cu" "contact_system/*.cpp"
@@ -79,6 +82,7 @@ set(UIPC_CUDA_COMPONENT_SOURCES
     ${UIPC_CUDA_AFFINE_BODY_SOURCES}
     ${UIPC_CUDA_COLLISION_SOURCES}
     ${UIPC_CUDA_COLLISION_LEGACY_SOURCES}
+    ${UIPC_CUDA_OPTIX_DEVICE_SOURCES}
     ${UIPC_CUDA_CONTACT_SOURCES}
     ${UIPC_CUDA_FEM_SOURCES}
     ${UIPC_CUDA_LINEAR_SYSTEM_SOURCES}

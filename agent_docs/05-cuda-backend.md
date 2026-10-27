@@ -253,6 +253,16 @@ not sufficient.
 
 ## Broad-phase BVH builds
 
+`single_ef_bvh` uses one proxy tree for PT/EE generation, including mixed
+codimensional ownership, then reuses the shared exact predicates and CCD
+pipeline. The optional `single_ef_optix` selector replaces only EF enumeration
+with a custom-AABB GAS. Its adapter is `collision_detection/optix_ef_bvh.cu`;
+the separate OptiX device program lives in `collision_detection/optix/`.
+The scene schema exposes that selector only when `UIPC_WITH_OPTIX` is enabled.
+Build/refit/launch counters in the same-state audit distinguish actual OptiX
+execution from unsupported-topology fallback. See
+[the experiment guide](../docs/development/single_ef_optix.md).
+
 `collision_detection/method = "info_stackless_bvh"` selects the optimized
 default broad phase. Its rebuild path is deliberately CUB-only:
 

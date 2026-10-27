@@ -10,6 +10,10 @@ config["collision_detection"]["method"] = "single_ef_bvh";
 The default remains `info_stackless_bvh`. This method requires no external BVH
 library or OptiX SDK.
 
+The optional [`single_ef_optix` experiment](single_ef_optix.md) replaces EF
+enumeration with an OptiX GAS while retaining the same topology ownership,
+exact predicates, capacity handling, and downstream contact/CCD stages.
+
 ## Candidate generation
 
 For discrete and swept detection, a supported triangle surface uses one

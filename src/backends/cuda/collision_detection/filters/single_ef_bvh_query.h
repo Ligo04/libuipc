@@ -1,5 +1,6 @@
 #pragma once
 #include <collision_detection/info_stackless_bvh.h>
+#include <collision_detection/optix_ef_bvh.h>
 #include <collision_detection/filters/simplex_candidate_predicates.cuh>
 #include <limits>
 
@@ -9,6 +10,23 @@ class SingleEFBVHQuery
 {
   public:
     SingleEFBVHQuery() = default;
+
+    enum class Backend
+    {
+        Cuda,
+        Optix
+    };
+
+    void                   set_backend(Backend backend);
+    Backend                backend() const noexcept { return m_backend; }
+    OptixEFBVH::Statistics statistics() const noexcept
+    {
+        return m_optix.statistics();
+    }
+    OptixEFBVH::Statistics last_statistics() const noexcept
+    {
+        return m_last_statistics;
+    }
 
     struct PrimitiveBounds
     {
@@ -51,6 +69,10 @@ class SingleEFBVHQuery
     }
 
   private:
+    Backend                m_backend = Backend::Cuda;
+    OptixEFBVH             m_optix;
+    OptixEFBVH::Statistics m_last_statistics{};
+
     enum class Eligibility
     {
         Unchecked,

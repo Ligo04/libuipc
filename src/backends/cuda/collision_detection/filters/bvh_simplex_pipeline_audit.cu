@@ -299,10 +299,10 @@ void BVHSimplexPipeline::audit_detect(DetectInfo& info, CandidateMethod method, 
         ++m_audit_dcd_fallback;
 
     m_audit_shadow->detect(info, CandidateMethod::Baseline);
-    Json pp = compare<2>(candidate_AllP_CodimP_pairs.view(),
+    Json pp                    = compare<2>(candidate_AllP_CodimP_pairs.view(),
                          m_audit_shadow->candidate_AllP_CodimP_pairs.view(),
                          KeyKind::CandidatePP);
-    Json pe = compare<2>(candidate_CodimP_AllE_pairs.view(),
+    Json pe                    = compare<2>(candidate_CodimP_AllE_pairs.view(),
                          m_audit_shadow->candidate_CodimP_AllE_pairs.view(),
                          KeyKind::CandidatePE);
     Json pt                    = compare<2>(candidate_AllP_AllT_pairs.view(),
@@ -319,15 +319,31 @@ void BVHSimplexPipeline::audit_detect(DetectInfo& info, CandidateMethod method, 
         m_audit_shadow->candidate_AllE_AllE_pairs.m_pairs.size();
     bool equal = pp["equal"].get<bool>() && pe["equal"].get<bool>()
                  && pt["equal"].get<bool>() && ee["equal"].get<bool>();
+    const bool optix_requested = single_ef.backend() == SingleEFBVHQuery::Backend::Optix;
+    const auto optix_total = single_ef.statistics();
+    const auto optix_call  = single_ef.last_statistics();
     write_record(Json{{"detect_sequence", m_audit_sequence},
                       {"phase", "candidates"},
                       {"comparison", "canonical_multiset"},
                       {"alpha", m_audit_alpha},
                       {"mode", m_audit_alpha == 0.0 ? "DCD" : "CCD"},
                       {"used_single_ef", used_single_ef},
+                      {"requested_backend", optix_requested ? "optix" : "cuda"},
+                      {"executed_backend",
+                       !used_single_ef ? "info_stackless_fallback" :
+                       optix_requested ? "optix" :
+                                         "cuda"},
+                      {"optix_builds", optix_call.builds},
+                      {"optix_refits", optix_call.refits},
+                      {"optix_launches", optix_call.launches},
+                      {"optix_builds_total", optix_total.builds},
+                      {"optix_refits_total", optix_total.refits},
+                      {"optix_launches_total", optix_total.launches},
                       {"codim_vertices", info.codim_vertices().size()},
-                      {"isolated_point_proxies", used_single_ef ? single_ef.isolated_point_count() : 0},
-                      {"standalone_edge_proxies", used_single_ef ? single_ef.standalone_edge_count() : 0},
+                      {"isolated_point_proxies",
+                       used_single_ef ? single_ef.isolated_point_count() : 0},
+                      {"standalone_edge_proxies",
+                       used_single_ef ? single_ef.standalone_edge_count() : 0},
                       {"equal", equal},
                       {"dcd_single_calls", m_audit_dcd_single},
                       {"dcd_fallback_calls", m_audit_dcd_fallback},
@@ -395,7 +411,8 @@ void BVHSimplexPipeline::audit_toi(FilterTOIInfo& info)
         KeyKind::CandidatePP);
     Json pe = compare_pair_tois(
         candidate_CodimP_AllE_pairs.view(),
-        tois.view(candidate_AllP_CodimP_pairs.size(), candidate_CodimP_AllE_pairs.size()),
+        tois.view(candidate_AllP_CodimP_pairs.size(),
+                  candidate_CodimP_AllE_pairs.size()),
         m_audit_shadow->candidate_CodimP_AllE_pairs.view(),
         m_audit_shadow->tois.view(m_audit_shadow->candidate_AllP_CodimP_pairs.size(),
                                   m_audit_shadow->candidate_CodimP_AllE_pairs.size()),
@@ -421,9 +438,9 @@ void BVHSimplexPipeline::audit_toi(FilterTOIInfo& info)
             m_audit_shadow->candidate_AllE_AllE_pairs.size()),
         KeyKind::CandidateEE);
     const bool minimum_equal = close_toi(actual_min, baseline_min);
-    const bool equal =
-        minimum_equal && pp["equal"].get<bool>() && pe["equal"].get<bool>()
-        && pt["equal"].get<bool>() && ee["equal"].get<bool>();
+    const bool equal         = minimum_equal && pp["equal"].get<bool>()
+                       && pe["equal"].get<bool>() && pt["equal"].get<bool>()
+                       && ee["equal"].get<bool>();
     write_record(Json{{"detect_sequence", m_audit_sequence},
                       {"phase", "toi"},
                       {"comparison", "canonical_pair_toi_multiset"},

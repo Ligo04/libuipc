@@ -35,10 +35,17 @@ set(UIPC_USD_INSTALL_DIR "" CACHE PATH
 option(UIPC_WITH_CUDA_BACKEND "Build with CUDA backend" ON)
 option(UIPC_WITH_CUDA_LEGACY_COLLISION
        "Build legacy CUDA broad-phase trajectory filters" ON)
+option(UIPC_WITH_OPTIX "Build the experimental OptiX Single-EF backend" OFF)
+set(UIPC_OPTIX_ROOT "$ENV{OptiX_ROOT}" CACHE PATH "OptiX SDK root directory")
+set(UIPC_OPTIX_NVCC "" CACHE FILEPATH "Optional NVCC override for OptiX PTX compilation")
 # if MAC OS, disable CUDA backend
 if(APPLE)
     # Force OFF
     set(UIPC_WITH_CUDA_BACKEND OFF CACHE BOOL "Build with CUDA backend" FORCE)
+endif()
+
+if(UIPC_WITH_OPTIX AND NOT UIPC_WITH_CUDA_BACKEND)
+    message(FATAL_ERROR "UIPC_WITH_OPTIX requires UIPC_WITH_CUDA_BACKEND")
 endif()
 
 set(UIPC_CUDA_ARCHITECTURES "native" CACHE STRING "Setup CUDA architectures (e.g. \"75,89\" or \"native\")")

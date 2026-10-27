@@ -1,5 +1,14 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
+Single-EF OptiX experiment (2026-10-27): optional `single_ef_optix` is implemented
+and passes focused/full CUDA tests, real-world contact checks, memcheck, and
+synccheck on CUDA 13.4 / OptiX 9.1 / RTX 5090. It remains disabled by default.
+The conservative ray construction can enumerate more EF pairs than native DCD
+segment pruning; build/refit cost and full-frame performance still need the
+fixed-state and 1,000-frame comparisons. Only CMake's isolated PTX generation
+has been tested; full-project CMake, other GPUs, and Python wheel packaging
+remain unverified. See `docs/development/single_ef_optix.md` and the handoff.
+
 Directional Baraff-Witkin stretch added (2026-10-20): the new three-modulus
 overload independently controls Ka/Kb while retaining old APIs, defaults and
 serialized shared-stretch fallback. Energy, gradient and projected Hessian

@@ -7,12 +7,17 @@ REGISTER_SIM_SYSTEM(SingleEFBVHSimplexTrajectoryFilter);
 
 void SingleEFBVHSimplexTrajectoryFilter::do_build(BuildInfo&)
 {
-    auto& config = world().scene().config();
-    auto  method = config.find<std::string>("collision_detection/method");
-    if(method->view()[0] != "single_ef_bvh")
+    auto&       config = world().scene().config();
+    auto        method = config.find<std::string>("collision_detection/method");
+    const auto& selected = method->view()[0];
+    if(selected != "single_ef_bvh" && selected != "single_ef_optix")
     {
         throw SimSystemException("Single EF BVH unused");
     }
+
+    m_pipeline.single_ef.set_backend(selected == "single_ef_optix" ?
+                                         SingleEFBVHQuery::Backend::Optix :
+                                         SingleEFBVHQuery::Backend::Cuda);
 
     m_pipeline.init();
 }

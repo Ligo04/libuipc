@@ -30,6 +30,7 @@ local components = {
         "collision_detection/filters/lbvh_simplex_trajectory_filter.cu",
         "collision_detection/filters/stackless_bvh_simplex_trajectory_filter.cu"
     },
+    optix_device = {"collision_detection/optix/ef_device.cu"},
     contact = {
         "active_set_system/**.cu",
         "contact_system/**.cu",
@@ -47,6 +48,7 @@ local component_order = {
     "affine_body",
     "collision",
     "collision_legacy",
+    "optix_device",
     "contact",
     "fem",
     "linear_system",
@@ -61,7 +63,9 @@ local backend_dir = os.scriptdir()
 -- Windows and Linux.
 function uipc_add_cuda_component_sources()
     for _, name in ipairs(component_order) do
-        if name ~= "collision_legacy" or has_config("cuda_legacy_collision") then
+        -- OptiX programs produce PTX, not native RDC objects.
+        if name ~= "optix_device"
+            and (name ~= "collision_legacy" or has_config("cuda_legacy_collision")) then
             for _, pattern in ipairs(components[name]) do
                 add_files(path.join(backend_dir, pattern))
             end

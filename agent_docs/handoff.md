@@ -1,5 +1,20 @@
 # Handoff — Current State of the Repo
 
+> **Optional Single-EF OptiX experiment (2026-10-27)**: branch
+> `codex/single-ef-optix` starts at `755b3d62`. The optional `single_ef_optix`
+> selector replaces EF enumeration with a custom-AABB GAS, retaining CUDA
+> PT/EE predicates, overflow replay, DCD/CCD, and the existing codim fallback.
+> XMake Release builds pass with native CUDA and PTX both compiled by
+> CUDA 13.4.92, OptiX SDK 9.1.0, RTX 5090, and driver 590.48.01.
+> Focused tests pass 3,516 assertions; full core, backend CUDA, and sim_case
+> suites pass. Memcheck (including OptiX resource checks) and synccheck report
+> zero errors. The CPU-only, OptiX-disabled schema test passes 730 assertions
+> and rejects the optional selector. CMake PTX generation and incremental
+> behavior were checked; a complete CMake build was not run.
+> Fixed-state timings and repeated 1,000-frame comparisons are pending;
+> no performance improvement is claimed yet. Evidence: `output/optix-single-ef/`.
+> Build and query semantics: `docs/development/single_ef_optix.md`.
+
 > **PR #502 Eigen 5 header dependency (2026-10-20)**: Linux XMake uses Eigen
 > 5.0.1 and caught the BW formula header relying on callers to include
 > `Eigen/Geometry` before using `Vector3::cross`. Add that direct dependency

@@ -9,11 +9,17 @@ option("github_actions", {default = false})
 
 option("backend_cuda", {default = true, description = "Build with CUDA backend"})
 option("cuda_legacy_collision", {default = true, description = "Build legacy CUDA broad-phase trajectory filters"})
+option("optix", {default = false, description = "Build the experimental OptiX Single-EF backend"})
+option("optix_nvcc", {default = "", description = "Optional NVCC override for OptiX PTX compilation"})
 option("usd", {default = false, description = "Build with OpenUSD support"})
 option("vdb", {default = false, description = "Build with OpenVDB support"})
 
 option("python_version", {default = "3.11.x", description = "Specify python version"})
 option("python_system", {default = false, description = "Use system python"})
+
+if has_config("optix") and not has_config("backend_cuda") then
+    raise("optix requires backend_cuda")
+end
 
 
 includes("src", "apps", "xmake/*.lua")

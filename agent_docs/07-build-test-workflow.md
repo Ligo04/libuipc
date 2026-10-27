@@ -68,6 +68,17 @@ the unresolved references and defer the failure to load time. Keep the direct
 source attachment, `-rdc=true`, project `src/` include, and final-target backend
 definitions together. The repository contract guards this boundary.
 
+The optional Single-EF OptiX experiment uses `UIPC_WITH_OPTIX` / `optix`,
+disabled by default. Its `collision_detection/optix/ef_device.cu` is explicitly
+owned as a separate PTX input and excluded from native RDC sources. Both build
+systems generate an embedded module header before compiling the host adapter.
+`UIPC_OPTIX_ROOT` / `OptiX_ROOT` supplies the SDK; `UIPC_OPTIX_NVCC` /
+`optix_nvcc` selects the shader compiler, defaulting to the native CUDA
+compiler. The 2026-10-27 experiment explicitly uses CUDA 13.4 for both.
+The core and backend share `UIPC_WITH_OPTIX` so unavailable selectors are
+rejected by the scene schema. See
+[the backend guide](../docs/development/single_ef_optix.md).
+
 ## Test System
 
 **C++ (Catch2, `apps/tests/`)**: `uipc_add_test(<name>)` produces `uipc_test_<name>`, linked against the `app` utility library (`AssetDir`, etc.):

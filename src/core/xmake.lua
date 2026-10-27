@@ -28,6 +28,11 @@ target("uipc_core")
     else
         add_defines("UIPC_WITH_CUDA_LEGACY_COLLISION=0")
     end
+    if has_config("optix") then
+        add_defines("UIPC_WITH_OPTIX=1", {public = true})
+    else
+        add_defines("UIPC_WITH_OPTIX=0", {public = true})
+    end
 
     on_load(function (target)
         import("core.base.semver")

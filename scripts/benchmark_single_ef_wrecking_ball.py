@@ -22,6 +22,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 METHODS = ("info_stackless_bvh", "single_ef_bvh")
+AVAILABLE_METHODS = (*METHODS, "single_ef_optix")
 AUDIT_ENV = "UIPC_SINGLE_EF_AUDIT_FILE"
 
 
@@ -363,6 +364,14 @@ def audit_summary(path: Path) -> dict[str, Any]:
         "ccd_used_single_ef": 0,
         "ccd_fallback": 0,
         "dcd_fallback": 0,
+        "optix_requested_detect_records": 0,
+        "dcd_optix_launch_records": 0,
+        "ccd_optix_launch_records": 0,
+        "optix_builds": 0,
+        "optix_refits": 0,
+        "optix_launches": 0,
+        "optix_execution_errors": 0,
+        "executed_backends": {},
         "nonempty_detect_records": 0,
         "nonempty_active_records": 0,
         "nonempty_ccd_single_records": 0,
@@ -419,6 +428,42 @@ def audit_summary(path: Path) -> dict[str, Any]:
                 summary["ccd_used_single_ef" if used is True else "ccd_fallback"] += 1
                 if used is True and "detect_sequence" in record:
                     ccd_single_sequences.add(record["detect_sequence"])
+            requested_backend = record.get("requested_backend")
+            executed_backend = record.get("executed_backend")
+            if executed_backend is not None:
+                if not isinstance(executed_backend, str):
+                    raise ValueError(f"Audit line {line_number}: invalid executed_backend")
+                summary["executed_backends"][executed_backend] = (
+                    summary["executed_backends"].get(executed_backend, 0) + 1
+                )
+            if requested_backend == "optix":
+                summary["optix_requested_detect_records"] += 1
+            if requested_backend == "optix" or executed_backend == "optix":
+                counters = {}
+                for name in ("builds", "refits", "launches"):
+                    value = record.get("optix_" + name)
+                    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                        raise ValueError(f"Audit line {line_number}: invalid optix_{name}")
+                    counters[name] = value
+                    summary["optix_" + name] += value
+                valid_execution = (
+                    requested_backend == "optix"
+                    and executed_backend == "optix"
+                    and used is True
+                    and counters["launches"] > 0
+                    and counters["builds"] + counters["refits"] > 0
+                )
+                if valid_execution:
+                    if alpha == 0:
+                        summary["dcd_optix_launch_records"] += 1
+                    elif isinstance(alpha, (int, float)) and alpha > 0:
+                        summary["ccd_optix_launch_records"] += 1
+                elif (
+                    used is True
+                    or executed_backend != "info_stackless_fallback"
+                    or any(counters.values())
+                ):
+                    summary["optix_execution_errors"] += 1
         for key in (
             "dcd_single_calls",
             "dcd_fallback_calls",
@@ -563,7 +608,9 @@ def audit_summary(path: Path) -> dict[str, Any]:
     return summary
 
 
-def validate_swept_audit(summary: dict[str, Any]) -> None:
+def validate_swept_audit(
+    summary: dict[str, Any], *, require_optix: bool = False
+) -> None:
     """Require the new wrecking-ball path while keeping old audit files readable."""
     if summary["mismatches"]:
         raise ValueError("Candidate/active/TOI audit reported mismatches")
@@ -591,6 +638,18 @@ def validate_swept_audit(summary: dict[str, Any]) -> None:
         raise ValueError("Audit needs nonempty candidate and active records")
     if summary["unknown_records"]:
         raise ValueError("Audit contains unrecognized record phases")
+    if require_optix and (
+        summary["optix_requested_detect_records"] != summary["detect_records"]
+        or summary["dcd_optix_launch_records"] != summary["dcd_used_single_ef"]
+        or summary["ccd_optix_launch_records"] != summary["ccd_used_single_ef"]
+        or summary["optix_execution_errors"]
+        or summary["dcd_fallback"]
+        or not summary["optix_builds"]
+        or not summary["optix_launches"]
+    ):
+        raise ValueError(
+            "OptiX audit requires actual OptiX builds and launches for every DCD/CCD detect"
+        )
 
 
 def collision_timer_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -771,7 +830,9 @@ def run_one(
             result["collision_timers"] = collision_timer_summary(payload)
         if args.phase == "audit":
             result["audit"] = audit_summary(directory / "audit.jsonl")
-            validate_swept_audit(result["audit"])
+            validate_swept_audit(
+                result["audit"], require_optix=method == "single_ef_optix"
+            )
         result["success"] = True
     except (OSError, ValueError, TypeError, KeyError) as error:
         result.update(success=False, error=str(error))
@@ -803,6 +864,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--warmup", type=int, default=30)
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument(
+        "--methods",
+        nargs=2,
+        choices=AVAILABLE_METHODS,
+        default=METHODS,
+        metavar=("BASELINE", "COMPARISON"),
+        help="Two methods run in alternating order; audit runs selected Single-EF methods",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--build-dir",
@@ -810,6 +879,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Artifact directory; native executable and CUDA backend must match its files",
     )
     args = parser.parse_args(argv)
+    if args.methods[0] == args.methods[1]:
+        parser.error("--methods must select two different methods")
     if args.phase == "smoke":
         args.frames, args.warmup = 3, 1
     if args.frames <= 0 or args.warmup < 0 or args.warmup >= args.frames:
@@ -830,6 +901,7 @@ def main(argv: list[str] | None = None) -> int:
         "phase": args.phase,
         "frames": args.frames,
         "warmup": args.warmup,
+        "requested_methods": list(args.methods),
         "session": str(session),
         "runs": [],
         "failures": [],
@@ -854,7 +926,12 @@ def main(argv: list[str] | None = None) -> int:
         if any(v.get("missing") for v in report["before"]["inputs"].values()):
             raise ValueError("Scene inputs are missing")
         dump(session / "metadata-before.json", report["before"])
-        methods = (METHODS[1],) if args.phase == "audit" else METHODS
+        methods = (
+            tuple(method for method in args.methods if method.startswith("single_ef_"))
+            if args.phase == "audit"
+            else tuple(args.methods)
+        )
+        report["executed_methods"] = list(methods)
         repeats = args.repeats if args.phase == "throughput" else 1
         for repeat in range(repeats):
             for method in methods:
@@ -899,6 +976,8 @@ def main(argv: list[str] | None = None) -> int:
                     "pair": index // 2 + 1,
                     "baseline_run": baseline["directory"],
                     "single_ef_run": actual["directory"],
+                    "baseline_method": baseline["method"],
+                    "comparison_method": actual["method"],
                 }
                 if baseline["success"] and actual["success"]:
                     try:

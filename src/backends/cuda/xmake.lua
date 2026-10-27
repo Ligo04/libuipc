@@ -1,7 +1,20 @@
 includes("components.lua")
+if has_config("optix") then
+    add_requires("optix", {system = true})
+    includes("optix.lua")
+end
 
 target("cuda")
     add_rules("backend")
+    if has_config("optix") then
+        add_packages("optix")
+        add_rules("uipc.optix.ptx")
+        if is_plat("linux") then
+            add_syslinks("dl", "cuda")
+        elseif is_plat("windows") then
+            add_links("cuda")
+        end
+    end
     uipc_add_cuda_component_sources()
     if has_config("dev") then
         add_rules("clangd")

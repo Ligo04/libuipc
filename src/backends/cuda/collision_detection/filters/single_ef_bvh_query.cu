@@ -44,7 +44,7 @@ namespace
     __global__ void make_query_proxies(SingleEFBVHQuery::PrimitiveBounds points,
                                        SingleEFBVHQuery::PrimitiveBounds edges,
                                        EdgeEdgePredicate     ee_pred,
-                                       CBufferView<IndexT>    vertices,
+                                       CBufferView<IndexT>   vertices,
                                        CBufferView<Vector2i> edge_vertices,
                                        CBufferView<Vector2i> owned_vertices,
                                        BufferView<AABB>      boxes,
@@ -431,6 +431,13 @@ bool SingleEFBVHQuery::prepare_topology(const bvh_simplex_detail::PointTriangleP
     return true;
 }
 
+void SingleEFBVHQuery::set_backend(Backend backend)
+{
+    if(backend == Backend::Optix && !OptixEFBVH::compiled())
+        throw std::runtime_error("OptiX Single-EF support is not enabled in this build");
+    m_backend = backend;
+}
+
 bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                               const bvh_simplex_detail::PointTrianglePredicate& pt_pred,
                               const bvh_simplex_detail::EdgeEdgePredicate& ee_pred,
@@ -440,8 +447,10 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                               PrimitiveBounds                triangles,
                               InfoStacklessBVH::QueryBuffer& pts,
                               InfoStacklessBVH::QueryBuffer& ees,
-                              bool reuse_bvh_topology)
+                              bool                           reuse_bvh_topology)
 {
+    m_last_statistics              = {};
+    const auto previous_statistics = m_optix.statistics();
     UIPC_ASSERT(pt_pred.alpha == ee_pred.alpha && pt_pred.alpha >= 0.0,
                 "Single EF PT and EE queries must share a nonnegative alpha");
     if(!prepare_topology(pt_pred, ee_pred))
@@ -459,22 +468,34 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
     m_leaf_boxes.resize_discard(leaf_count);
     m_leaf_bids.resize_discard(leaf_count);
     m_leaf_cids.resize_discard(leaf_count);
-    make_query_proxies<<<(query_count + 255) / 256, 256>>>(
-        points, edges, ee_pred, pt_pred.Vs, m_edge_vertices, m_owned_vertices, m_query_boxes, m_query_bids, m_query_cids, m_query_segments);
+    make_query_proxies<<<(query_count + 255) / 256, 256>>>(points,
+                                                           edges,
+                                                           ee_pred,
+                                                           pt_pred.Vs,
+                                                           m_edge_vertices,
+                                                           m_owned_vertices,
+                                                           m_query_boxes,
+                                                           m_query_bids,
+                                                           m_query_cids,
+                                                           m_query_segments);
     make_leaf_proxies<<<(leaf_count + 255) / 256, 256>>>(
         points, edges, triangles, m_triangle_vertices, m_owned_edges, m_leaf_boxes, m_leaf_bids, m_leaf_cids);
-    if(!reuse_bvh_topology || !triangle_bvh.refit(m_leaf_boxes, m_leaf_bids, m_leaf_cids))
+    if(m_backend == Backend::Optix)
+        m_optix.update(m_query_boxes, m_query_bids, m_query_cids, m_leaf_boxes, m_leaf_bids, m_leaf_cids, reuse_bvh_topology);
+    else if(!reuse_bvh_topology || !triangle_bvh.refit(m_leaf_boxes, m_leaf_bids, m_leaf_cids))
         triangle_bvh.build(m_leaf_boxes, m_leaf_bids, m_leaf_cids);
 
-    const SizeT pair_limit = std::numeric_limits<IndexT>::max() - 1;
-    const auto  chunk_size =
-        std::min({query_count, std::max(SizeT{1}, max_chunk_edges), pair_limit / leaf_count});
+    const SizeT pair_limit   = std::numeric_limits<IndexT>::max() - 1;
+    const SizeT launch_limit = m_backend == Backend::Optix ?
+                                   OptixEFBVH::max_query_count :
+                                   std::numeric_limits<SizeT>::max();
+    const auto  chunk_size   = std::min(
+        {query_count, std::max(SizeT{1}, max_chunk_edges), pair_limit / leaf_count, launch_limit});
     m_query_counts.resize_discard(3);
     m_chunk_base.resize_discard(2);
     for(;;)
     {
-        const auto capacity =
-            std::min(m_ef_pairs.m_pairs.size(), chunk_size * leaf_count);
+        const auto capacity = std::min(m_ef_pairs.m_pairs.size(), chunk_size * leaf_count);
         m_masks.resize_discard(capacity);
         m_pt_counts.resize_discard(capacity + 1);
         m_ee_counts.resize_discard(capacity + 1);
@@ -498,7 +519,9 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
             };
             // Swept edges are bilinear patches. Use only their full swept AABB,
             // with the original lightweight tag predicate and no static slab.
-            if(pt_pred.alpha != 0.0)
+            if(m_backend == Backend::Optix)
+                m_optix.launch_query(start, count, node_pred, m_ef_pairs);
+            else if(pt_pred.alpha != 0.0)
                 run(node_pred);
             else
                 run(EdgeFaceNodePredicate{node_pred,
@@ -570,8 +593,15 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
             grow_candidates(ees.m_pairs, counts[1], triangle_bvh.config().reserve_ratio);
             continue;
         }
-        pts.m_size = counts[0];
-        ees.m_size = counts[1];
+        pts.m_size                      = counts[0];
+        ees.m_size                      = counts[1];
+        const auto completed_statistics = m_optix.statistics();
+        m_last_statistics.builds =
+            completed_statistics.builds - previous_statistics.builds;
+        m_last_statistics.refits =
+            completed_statistics.refits - previous_statistics.refits;
+        m_last_statistics.launches =
+            completed_statistics.launches - previous_statistics.launches;
         return true;
     }
 }

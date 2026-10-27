@@ -240,7 +240,7 @@ over the configured fallback bounds.
 
 | Key | Type | Default | Valid domain / choices | Meaning |
 | --- | --- | --- | --- | --- |
-| `collision_detection/method` | string | `"info_stackless_bvh"` | `"info_stackless_bvh"`; optionally `"info_stackless_bvh_v0"`, `"stackless_bvh"`, `"linear_bvh"` | Broad-phase trajectory filter. Keep the default unless benchmarking or diagnosing the broad phase. |
+| `collision_detection/method` | string | `"info_stackless_bvh"` | `"info_stackless_bvh"`, `"single_ef_bvh"`; optionally `"single_ef_optix"`, `"info_stackless_bvh_v0"`, `"stackless_bvh"`, `"linear_bvh"` | Broad-phase trajectory filter. Optional values depend on the compiled backend features described below. |
 | `sanity_check/enable` | flag | `1` | `0`, `1` | Runs pre-initialization intersection and distance checks. A failed check makes the world invalid. |
 | `sanity_check/mode` | string | `"normal"` | `"normal"`, `"quiet"` | `normal` also writes diagnostic geometry when a check fails; `quiet` reports the failure without exporting that geometry. |
 | `diff_sim/enable` | flag | `0` | `0`, `1` | Initializes differentiable-simulation state. Calling non-const `scene.diff_sim()` sets this flag automatically; do so before world initialization. |
@@ -256,6 +256,12 @@ The three alternate collision selectors are compiled only when
 filter implementations and remove their names from the schema enum, so scene
 construction rejects a serialized or manually edited unavailable selector.
 The machine-readable entry exposes this state in `conditionalValues`.
+
+The optional `single_ef_optix` selector requires `UIPC_WITH_OPTIX=ON` (CMake)
+or `optix=true` (XMake), both disabled by default. The schema enum omits this
+selector when OptiX is disabled. It uses the same Single-EF ownership and
+exact contact/CCD predicates with OptiX EF candidate enumeration; see the
+[backend experiment](../development/single_ef_optix.md).
 
 ## Effective-value precedence
 

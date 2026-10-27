@@ -78,6 +78,9 @@ target_compile_options(cuda PRIVATE
 # Compile sources are owned by internal domain OBJECT targets and receive one
 # final CUDA device-link in the public backend library.
 include(${CMAKE_CURRENT_LIST_DIR}/components.cmake)
+if(UIPC_WITH_OPTIX)
+    include(${PROJECT_SOURCE_DIR}/cmake/uipc_optix.cmake)
+endif()
 
 file(GLOB_RECURSE CUDA_HEADERS CONFIGURE_DEPENDS "*.h" "*.hpp" "*.inl")
 target_sources(cuda PRIVATE ${CUDA_HEADERS})

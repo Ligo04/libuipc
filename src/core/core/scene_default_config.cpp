@@ -302,6 +302,9 @@ static SceneConfigContract make_scene_config_contract()
         Json{{"exclusiveMinimum", 0.0}});
 
     Json collision_methods = Json::array({"info_stackless_bvh", "single_ef_bvh"});
+#if defined(UIPC_WITH_OPTIX) && UIPC_WITH_OPTIX
+    collision_methods.push_back("single_ef_optix");
+#endif
 #if !defined(UIPC_WITH_CUDA_LEGACY_COLLISION) || UIPC_WITH_CUDA_LEGACY_COLLISION
     constexpr bool legacy_collision_built = true;
     collision_methods.push_back("info_stackless_bvh_v0");

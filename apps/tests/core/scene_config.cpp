@@ -31,6 +31,9 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
     const auto& methods            = collision.at("enum");
     const auto& conditional_values = collision.at("conditionalValues");
     const bool legacy_collision_built = conditional_values.at("enabled").get<bool>();
+    const auto optix_method_count = std::ranges::count(methods, Json("single_ef_optix"));
+    REQUIRE(optix_method_count == (UIPC_WITH_OPTIX ? 1 : 0));
+    const bool optix_collision_built = optix_method_count == 1;
     REQUIRE(collision.at("default") == "info_stackless_bvh");
     REQUIRE(methods.front() == "info_stackless_bvh");
     REQUIRE(std::ranges::count(methods, Json("single_ef_bvh")) == 1);
@@ -84,6 +87,13 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
         config                                  = Scene::default_config();
         config["collision_detection"]["method"] = "single_ef_bvh";
         REQUIRE_NOTHROW(Scene{config});
+
+        config                                  = Scene::default_config();
+        config["collision_detection"]["method"] = "single_ef_optix";
+        if(optix_collision_built)
+            REQUIRE_NOTHROW(Scene{config});
+        else
+            REQUIRE_THROWS(Scene{config});
 
         config                                      = Scene::default_config();
         config["contact"]["adaptive"]["min_kappa"]  = 2.0e9;

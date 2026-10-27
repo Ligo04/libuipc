@@ -149,6 +149,10 @@ record it here in the same commit.**
 
 ## Task-scoped (recorded for context, not general policy)
 
+- 2026-10-27 Single-EF OptiX experiment: compile both the native CUDA backend
+  and the OptiX device program with CUDA 13.4. Wrecking-ball comparisons must
+  execute 1,000 frames per method. (Set 2026-10-27.)
+
 - 2026-10-03 audit follow-up: prioritize the fourth proposed stage, a matching
   source/runtime performance baseline followed by measured optimizations. Defer
   the first three audit-remediation stages; do not fold their correctness,

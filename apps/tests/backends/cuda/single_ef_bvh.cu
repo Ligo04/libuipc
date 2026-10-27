@@ -5,6 +5,10 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
+#include <iostream>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -12,8 +16,34 @@ namespace test_single_ef_bvh
 {
 using namespace uipc;
 using namespace uipc::backend::cuda;
-namespace ct = uipc::backend::cuda_tool;
-using Pair   = std::pair<IndexT, IndexT>;
+namespace ct  = uipc::backend::cuda_tool;
+using Pair    = std::pair<IndexT, IndexT>;
+using Backend = SingleEFBVHQuery::Backend;
+
+std::vector<Backend> query_backends()
+{
+    std::vector<Backend> result{Backend::Cuda};
+    if(OptixEFBVH::compiled())
+        result.push_back(Backend::Optix);
+    return result;
+}
+
+void check_backend_execution(const SingleEFBVHQuery& query, bool supported)
+{
+    const auto stats = query.statistics();
+    if(query.backend() == Backend::Optix && supported)
+    {
+        CHECK(stats.builds > 0);
+        CHECK(stats.launches > 0);
+        CHECK(query.last_statistics().launches > 0);
+    }
+    else
+    {
+        CHECK(stats.builds == 0);
+        CHECK(stats.refits == 0);
+        CHECK(stats.launches == 0);
+    }
+}
 
 template <typename T>
 void upload(ct::DeviceBuffer<T>& device, const std::vector<T>& host)
@@ -98,10 +128,10 @@ struct Mesh
     {
         const auto base = static_cast<IndexT>(positions.size());
         const std::array<Vector3, 5> added = {Vector3{0.2, 0.2, 0.025},
-                                               Vector3{-0.1, 0.2, 0.01},
-                                               Vector3{0.8, 0.2, 0.01},
-                                               Vector3{0.3, -0.1, 0.02},
-                                               Vector3{0.3, 0.8, 0.02}};
+                                              Vector3{-0.1, 0.2, 0.01},
+                                              Vector3{0.8, 0.2, 0.01},
+                                              Vector3{0.3, -0.1, 0.02},
+                                              Vector3{0.3, 0.8, 0.02}};
         for(SizeT i = 0; i < added.size(); ++i)
         {
             positions.push_back(added[i]);
@@ -306,7 +336,7 @@ std::vector<Pair> read_pairs(const InfoStacklessBVH::QueryBuffer& buffer, bool c
     return result;
 }
 
-void check_mesh(Mesh& mesh, SizeT chunk, bool check_cpu = true)
+void check_mesh(Mesh& mesh, SizeT chunk, Backend backend, bool check_cpu = true)
 {
     mesh.send();
     InfoStacklessBVH baseline_e, baseline_t, single_t;
@@ -330,6 +360,7 @@ void check_mesh(Mesh& mesh, SizeT chunk, bool check_cpu = true)
     pts.reserve(1);
     ees.reserve(1);
     SingleEFBVHQuery query;
+    query.set_backend(backend);
     query.max_chunk_edges = chunk;
     REQUIRE(query.detect(single_t,
                          mesh.pt(),
@@ -340,6 +371,7 @@ void check_mesh(Mesh& mesh, SizeT chunk, bool check_cpu = true)
                          mesh.triangle_bounds.view(),
                          pts,
                          ees));
+    check_backend_execution(query, true);
     auto actual_pt = read_pairs(pts, false);
     auto actual_ee = read_pairs(ees, true);
     REQUIRE(!actual_pt.empty());
@@ -377,11 +409,14 @@ void check_mesh(Mesh& mesh, SizeT chunk, bool check_cpu = true)
                          pts,
                          ees,
                          true));
+    check_backend_execution(query, true);
+    if(backend == Backend::Optix)
+        CHECK(query.last_statistics().refits > 0);
     CHECK(read_pairs(pts, false) == actual_pt);
     CHECK(read_pairs(ees, true) == actual_ee);
 }
 
-void check_unsupported(Mesh& mesh)
+void check_unsupported(Mesh& mesh, Backend backend)
 {
     mesh.send();
     InfoStacklessBVH              triangle_bvh;
@@ -395,6 +430,7 @@ void check_unsupported(Mesh& mesh)
         out->m_cpNum.copy_from(1);
     }
     SingleEFBVHQuery query;
+    query.set_backend(backend);
     CHECK_FALSE(query.detect(triangle_bvh,
                              mesh.pt(),
                              mesh.ee(),
@@ -404,6 +440,7 @@ void check_unsupported(Mesh& mesh)
                              mesh.triangle_bounds.view(),
                              pts,
                              ees));
+    check_backend_execution(query, false);
     CHECK(pts.size() == 1);
     CHECK(ees.size() == 1);
     CHECK(static_cast<int>(pts.m_cpNum) == 1);
@@ -417,10 +454,12 @@ void check_unsupported(Mesh& mesh)
 TEST_CASE("single EF BVH preserves DCD candidates", "[cuda][single_ef_bvh]")
 {
     using namespace test_single_ef_bvh;
+    const auto backend = GENERATE_COPY(Catch::Generators::from_range(query_backends()));
+    CAPTURE(static_cast<int>(backend));
     SECTION("surface rows and global IDs differ; one-edge chunks")
     {
         Mesh mesh(4);
-        check_mesh(mesh, 1);
+        check_mesh(mesh, 1, backend);
     }
     SECTION("more than 64 nearby faces, retry and cross-chunk uniqueness")
     {
@@ -430,24 +469,24 @@ TEST_CASE("single EF BVH preserves DCD candidates", "[cuda][single_ef_bvh]")
         for(const auto& box : mesh.triangle_bounds.boxes)
             overlaps += mesh.edge_bounds.boxes[0].intersects(box);
         REQUIRE(overlaps > 64);
-        check_mesh(mesh, 2);
+        check_mesh(mesh, 2, backend);
     }
     SECTION("EF capacity overflow replays the complete query")
     {
         Mesh mesh(160);
-        check_mesh(mesh, std::numeric_limits<SizeT>::max());
+        check_mesh(mesh, std::numeric_limits<SizeT>::max(), backend);
     }
     SECTION("contact mask")
     {
         Mesh mesh(4);
         mesh.contact_mask = {1, 0, 0, 1};
-        check_mesh(mesh, 2);
+        check_mesh(mesh, 2, backend);
     }
     SECTION("subscene mask")
     {
         Mesh mesh(4);
         mesh.subscene_mask = {1, 0, 0, 1};
-        check_mesh(mesh, 2);
+        check_mesh(mesh, 2, backend);
     }
     SECTION("different primitive expansion and activation thresholds")
     {
@@ -460,14 +499,14 @@ TEST_CASE("single EF BVH preserves DCD candidates", "[cuda][single_ef_bvh]")
                 mesh.dhats[v]         = t % 2 ? 0.04 : 0.003;
                 mesh.thicknesses[v]   = t % 2 ? 0.005 : 0.001;
             }
-        check_mesh(mesh, 1);
+        check_mesh(mesh, 1, backend);
     }
     SECTION("mixed contact IDs with all contacts allowed")
     {
         Mesh mesh(4);
         for(auto v : mesh.vertices)
             mesh.contacts[v] = v % 2;
-        check_mesh(mesh, 2);
+        check_mesh(mesh, 2, backend);
     }
     SECTION("slanted edges overlap corner boxes without crossing them")
     {
@@ -491,86 +530,88 @@ TEST_CASE("single EF BVH preserves DCD candidates", "[cuda][single_ef_bvh]")
         std::fill(mesh.dhats.begin(), mesh.dhats.end(), 0.005);
         mesh.send();
         REQUIRE(mesh.edge_bounds.boxes[0].intersects(mesh.triangle_bounds.boxes[2]));
-        check_mesh(mesh, 1);
+        check_mesh(mesh, 1, backend);
     }
     SECTION("body self collision disabled")
     {
         Mesh mesh(4);
         mesh.self = {0, 0};
-        check_mesh(mesh, 2);
+        check_mesh(mesh, 2, backend);
     }
     SECTION("zero-length geometry with distinct vertex IDs")
     {
         Mesh mesh(3);
         mesh.positions[2] = mesh.positions[1];
         // Flagged degenerate predicates are compared to the existing GPU path.
-        check_mesh(mesh, 1, false);
+        check_mesh(mesh, 1, backend, false);
     }
     SECTION("wire edge connecting surface vertices")
     {
         Mesh mesh(2);
         mesh.edges.emplace_back(1, 4);
-        check_mesh(mesh, 1);
+        check_mesh(mesh, 1, backend);
     }
     SECTION("isolated particle near triangle interiors")
     {
         Mesh mesh(2);
         mesh.positions[0] = Vector3{0.2, 0.2, 0.025};
         mesh.vertices.push_back(0);
-        check_mesh(mesh, 1);
+        check_mesh(mesh, 1, backend);
     }
     SECTION("particles and wire edges share the PT and EE proxy tree")
     {
         Mesh mesh(4);
         mesh.add_codimensional_geometry();
-        check_mesh(mesh, 1);
+        check_mesh(mesh, 1, backend);
     }
     SECTION("mixed-dimensional EF capacity overflow and chunk replay")
     {
         Mesh mesh(160);
         mesh.add_codimensional_geometry();
-        check_mesh(mesh, std::numeric_limits<SizeT>::max());
+        check_mesh(mesh, std::numeric_limits<SizeT>::max(), backend);
     }
     SECTION("mixed-dimensional contact, subscene and self-collision masks")
     {
         Mesh mesh(8);
         mesh.add_codimensional_geometry();
-        mesh.contact_mask = {1, 0, 0, 1};
-        mesh.subscene_mask = {1, 0, 0, 1};
-        mesh.self = {0, 1};
+        mesh.contact_mask   = {1, 0, 0, 1};
+        mesh.subscene_mask  = {1, 0, 0, 1};
+        mesh.self           = {0, 1};
         const auto expected = mesh.all_pairs();
         REQUIRE(!expected.first.empty());
         REQUIRE(!expected.second.empty());
-        check_mesh(mesh, 2);
+        check_mesh(mesh, 2, backend);
     }
     SECTION("pure codimensional topology does not publish partial output")
     {
         Mesh mesh(0);
         mesh.add_codimensional_geometry();
-        check_unsupported(mesh);
+        check_unsupported(mesh, backend);
     }
     SECTION("duplicate vertex does not publish partial output")
     {
         Mesh mesh(2);
         mesh.vertices.push_back(mesh.vertices.front());
-        check_unsupported(mesh);
+        check_unsupported(mesh, backend);
     }
     SECTION("missing triangle edge does not publish partial output")
     {
         Mesh mesh(2);
         mesh.edges.pop_back();
-        check_unsupported(mesh);
+        check_unsupported(mesh, backend);
     }
     SECTION("empty surface does not publish partial output")
     {
         Mesh mesh(0);
-        check_unsupported(mesh);
+        check_unsupported(mesh, backend);
     }
 }
 
 TEST_CASE("single EF BVH retains reusable candidate output storage", "[cuda][single_ef_bvh]")
 {
     using namespace test_single_ef_bvh;
+    const auto backend = GENERATE_COPY(Catch::Generators::from_range(query_backends()));
+    CAPTURE(static_cast<int>(backend));
     Mesh mesh(8);
     for(IndexT layer = 2; layer < static_cast<IndexT>(mesh.triangles.size()); ++layer)
         for(IndexT vertex : mesh.triangles[layer])
@@ -609,6 +650,7 @@ TEST_CASE("single EF BVH retains reusable candidate output storage", "[cuda][sin
         output->reserve(reserved_slots);
     }
     SingleEFBVHQuery query;
+    query.set_backend(backend);
     query.max_chunk_edges = 2;
 
     auto check_dcd = [&](const std::vector<Pair>& expected_pts,
@@ -625,6 +667,7 @@ TEST_CASE("single EF BVH retains reusable candidate output storage", "[cuda][sin
                              mesh.triangle_bounds.view(),
                              pts,
                              ees));
+        check_backend_execution(query, true);
         CHECK(pts.m_pairs.size() >= pt_storage_size);
         CHECK(ees.m_pairs.size() >= ee_storage_size);
         CHECK(pts.size() == expected_pts.size());
@@ -728,7 +771,8 @@ namespace test_single_ef_bvh
 {
 void check_swept_candidates(Mesh&                       mesh,
                             const std::vector<Vector3>& motion,
-                            const std::vector<Float>&   alphas)
+                            const std::vector<Float>&   alphas,
+                            Backend                     backend)
 {
     InfoStacklessBVH              baseline_e, baseline_t, single_t;
     InfoStacklessBVH::QueryBuffer baseline_pt, baseline_ee, pts, ees;
@@ -738,6 +782,7 @@ void check_swept_candidates(Mesh&                       mesh,
         output->reserve(1);
     }
     SingleEFBVHQuery query;
+    query.set_backend(backend);
     query.max_chunk_edges = 1;
     bool saw_swept_pt = false, saw_swept_ee = false;
     auto compare = [&](const std::vector<Vector3>& dxs, Float alpha)
@@ -774,6 +819,7 @@ void check_swept_candidates(Mesh&                       mesh,
                              pts,
                              ees,
                              true));
+        check_backend_execution(query, true);
         const auto expected_pt = read_pairs(baseline_pt, false);
         const auto expected_ee = read_pairs(baseline_ee, true);
         const auto actual_pt   = read_pairs(pts, false);
@@ -811,9 +857,11 @@ void check_swept_candidates(Mesh&                       mesh,
 TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][single_ef_bvh]")
 {
     using namespace test_single_ef_bvh;
+    const auto backend = GENERATE_COPY(Catch::Generators::from_range(query_backends()));
+    CAPTURE(static_cast<int>(backend));
     SECTION("particles and rods cross triangle surfaces during the sweep")
     {
-        Mesh mesh(2);
+        Mesh       mesh(2);
         const auto first_codim = mesh.positions.size();
         mesh.add_codimensional_geometry();
         std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
@@ -822,17 +870,17 @@ TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][singl
             mesh.positions[v].z() += 1.0;
             motion[v] = Vector3{0, 0, -2};
         }
-        check_swept_candidates(mesh, motion, {0.25, 0.5, 1.0});
+        check_swept_candidates(mesh, motion, {0.25, 0.5, 1.0}, backend);
     }
     SECTION("deforming wires and a moving isolated particle")
     {
-        Mesh mesh(3);
+        Mesh       mesh(3);
         const auto first_codim = mesh.positions.size();
         mesh.add_codimensional_geometry();
         std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
         for(SizeT v = first_codim; v < mesh.positions.size(); ++v)
             motion[v] = Vector3{v % 2 ? 0.1 : -0.1, 0.05, v % 2 ? 0.5 : -0.5};
-        check_swept_candidates(mesh, motion, {0.3, 0.8, 1.0});
+        check_swept_candidates(mesh, motion, {0.3, 0.8, 1.0}, backend);
     }
     SECTION("intermediate crossing without initial or final DCD contact")
     {
@@ -855,7 +903,7 @@ TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][singl
             mesh.positions[vertex] = start[vertex] + 0.5 * motion[vertex];
         REQUIRE(!mesh.all_pairs().first.empty());
         mesh.positions = start;
-        check_swept_candidates(mesh, motion, {0.25, 0.75, 1.0});
+        check_swept_candidates(mesh, motion, {0.25, 0.75, 1.0}, backend);
     }
     SECTION("different endpoint velocities, rotating and deforming triangles")
     {
@@ -875,13 +923,13 @@ TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][singl
                 mesh.dhats[vertex]       = 0.03 + 0.02 * layer;
                 mesh.thicknesses[vertex] = 0.001 * (layer + 1);
             }
-        check_swept_candidates(mesh, motion, {0.125, 0.5, 1.0});
+        check_swept_candidates(mesh, motion, {0.125, 0.5, 1.0}, backend);
     }
     SECTION("positive alpha with zero displacement")
     {
         Mesh                 mesh(3);
         std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
-        check_swept_candidates(mesh, motion, {0.25, 1.0});
+        check_swept_candidates(mesh, motion, {0.25, 1.0}, backend);
     }
     SECTION("contact masks, subscenes and disabled body self collision")
     {
@@ -892,7 +940,7 @@ TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][singl
         std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
         for(IndexT vertex : mesh.vertices)
             motion[vertex] = Vector3{0.05 * mesh.bodies[vertex], 0, -0.02};
-        check_swept_candidates(mesh, motion, {0.5, 1.0});
+        check_swept_candidates(mesh, motion, {0.5, 1.0}, backend);
     }
     SECTION("a collapsed edge opens during the sweep")
     {
@@ -900,7 +948,7 @@ TEST_CASE("single EF BVH preserves swept CCD candidate multisets", "[cuda][singl
         mesh.positions[2] = mesh.positions[1];
         std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
         motion[2] = Vector3{0.2, 0, 0.4};
-        check_swept_candidates(mesh, motion, {0.5, 1.0});
+        check_swept_candidates(mesh, motion, {0.5, 1.0}, backend);
     }
 }
 
@@ -979,6 +1027,8 @@ TEST_CASE("segment AABB slab test handles closed GPU boundaries", "[cuda][single
 TEST_CASE("single EF slab pruning preserves EE hits after float cancellation", "[cuda][single_ef_bvh]")
 {
     using namespace test_single_ef_bvh;
+    const auto backend = GENERATE_COPY(Catch::Generators::from_range(query_backends()));
+    CAPTURE(static_cast<int>(backend));
     Mesh mesh(2);
     mesh.positions[1] = Vector3{1.00000008, 0, 0};
     mesh.positions[2] = Vector3{1.00000008, 0, 1e-4};
@@ -1019,5 +1069,218 @@ TEST_CASE("single EF slab pruning preserves EE hits after float cancellation", "
     const auto expected_ee = read_pairs(baseline_ee, true);
     REQUIRE(std::binary_search(expected_ee.begin(), expected_ee.end(), witness));
     // Float point bounds can reject a CPU PT hit here; use native bounds as the full oracle.
-    check_mesh(mesh, 1, false);
+    check_mesh(mesh, 1, backend, false);
+}
+
+TEST_CASE("OptiX EF traversal preserves closed AABB overlap", "[cuda][single_ef_bvh][optix]")
+{
+    using namespace test_single_ef_bvh;
+    if(!OptixEFBVH::compiled())
+        SKIP("OptiX support is disabled in this build");
+
+    auto box = [](Vector3 lower, Vector3 upper)
+    {
+        AABB result;
+        result.extend(lower.cast<float>()).extend(upper.cast<float>());
+        return result;
+    };
+    const Float       after_one = std::nextafter(1.0f, 2.0f);
+    constexpr Float   tiny = 1e-20, huge = 1e20;
+    std::vector<AABB> leaves  = {box({0, 0, 0}, {0, 0, 0}),
+                                 box({1, 1, 1}, {1, 1, 1}),
+                                 box({after_one, 0, 0}, {2, 1, 1}),
+                                 box({huge, huge, huge}, {huge, huge, huge}),
+                                 box({tiny, -tiny, -tiny}, {2 * tiny, tiny, tiny})};
+    std::vector<AABB> queries = {box({0, 0, 0}, {0, 0, 0}),
+                                 box({0, 0, 0}, {1, 1, 1}),
+                                 box({after_one, 1, 1}, {after_one, 1, 1}),
+                                 box({huge, huge, huge}, {huge, huge, huge}),
+                                 box({tiny, 0, 0}, {2 * tiny, 0, 0}),
+                                 box({-1, -1, -1}, {-0.5, -0.5, -0.5}),
+                                 box({1, 0, 0}, {1, 1, 1}),
+                                 box({-huge, -huge, -huge}, {huge, huge, huge})};
+
+    Mesh mesh(1);
+    mesh.send();
+    ct::DeviceBuffer<AABB>   d_queries, d_leaves;
+    ct::DeviceBuffer<IndexT> query_tags, leaf_tags;
+    upload(query_tags, std::vector<IndexT>(queries.size(), 0));
+    upload(leaf_tags, std::vector<IndexT>(leaves.size(), 0));
+    OptixEFBVH                    tree;
+    InfoStacklessBVH::QueryBuffer output;
+    for(int pass = 0; pass < 3; ++pass)
+    {
+        CAPTURE(pass);
+        upload(d_queries, queries);
+        upload(d_leaves, leaves);
+        tree.update(d_queries, query_tags, query_tags, d_leaves, leaf_tags, leaf_tags, pass == 1);
+        REQUIRE_THROWS_AS(tree.launch_query(0, OptixEFBVH::max_query_count + 1, mesh.node(), output),
+                          std::overflow_error);
+        constexpr SizeT chunk_size = 3;
+        for(SizeT start = 0; start < queries.size(); start += chunk_size)
+        {
+            CAPTURE(start);
+            const auto count = std::min(chunk_size, queries.size() - start);
+            output.m_pairs.resize_discard(count * leaves.size());
+            tree.launch_query(start, count, mesh.node(), output);
+            const int actual_count = static_cast<int>(output.m_cpNum);
+            REQUIRE(actual_count >= 0);
+            REQUIRE(static_cast<SizeT>(actual_count) <= output.m_pairs.size());
+            output.m_size = actual_count;
+            std::vector<Pair> expected;
+            for(SizeT query = 0; query < count; ++query)
+                for(SizeT leaf = 0; leaf < leaves.size(); ++leaf)
+                    if(queries[start + query].intersects(leaves[leaf]))
+                        expected.emplace_back(query, leaf);
+            const auto actual = read_pairs(output, false);
+            CHECK(actual == expected);
+            CHECK(std::adjacent_find(actual.begin(), actual.end()) == actual.end());
+        }
+        for(auto* boxes : {&queries, &leaves})
+            for(auto& bound : *boxes)
+            {
+                bound.min().array() += 0.125f;
+                bound.max().array() += 0.125f;
+            }
+    }
+    CHECK(tree.statistics().builds == 2);
+    CHECK(tree.statistics().refits == 1);
+    CHECK(tree.statistics().launches == 9);
+}
+
+TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix_benchmark]")
+{
+    using namespace test_single_ef_bvh;
+    if(!OptixEFBVH::compiled())
+        SKIP("OptiX support is disabled in this build");
+
+    Mesh             mesh(0);
+    constexpr IndexT side    = 32;
+    constexpr Float  spacing = 0.04, gap = 0.001;
+    std::set<Pair>   unique_edges;
+    for(IndexT layer = 0; layer < 2; ++layer)
+    {
+        const auto base = static_cast<IndexT>(mesh.positions.size());
+        for(IndexT row = 0; row < side; ++row)
+            for(IndexT column = 0; column < side; ++column)
+            {
+                mesh.vertices.push_back(static_cast<IndexT>(mesh.positions.size()));
+                mesh.positions.emplace_back(column * spacing, row * spacing, layer * gap);
+                mesh.bodies.push_back(layer);
+                mesh.contacts.push_back(0);
+                mesh.subscenes.push_back(0);
+            }
+        for(IndexT row = 0; row < side - 1; ++row)
+            for(IndexT column = 0; column < side - 1; ++column)
+            {
+                const IndexT a = base + row * side + column;
+                for(const Vector3i& face : {Vector3i{a, a + 1, a + side},
+                                            Vector3i{a + 1, a + side + 1, a + side}})
+                {
+                    mesh.triangles.push_back(face);
+                    for(int edge = 0; edge < 3; ++edge)
+                    {
+                        const auto first = face[edge], second = face[(edge + 1) % 3];
+                        unique_edges.emplace(std::min(first, second),
+                                             std::max(first, second));
+                    }
+                }
+            }
+    }
+    for(const auto& [first, second] : unique_edges)
+        mesh.edges.emplace_back(first, second);
+    mesh.radius = 0.003;
+    mesh.dhats.assign(mesh.positions.size(), mesh.radius);
+    mesh.thicknesses.assign(mesh.positions.size(), 0.0);
+    mesh.self = {0, 0};
+    std::vector<Vector3> motion(mesh.positions.size(), Vector3::Zero());
+    for(IndexT vertex : mesh.vertices)
+        if(mesh.bodies[vertex] == 1)
+            motion[vertex] = Vector3{0.005, 0, -2 * gap};
+
+    constexpr int calls = 20, repeats = 5;
+    for(Float alpha : {0.0, 1.0})
+    {
+        // Primitive bounds and motion stay unchanged throughout each timed scope.
+        mesh.send(motion, alpha);
+        auto pt_pred  = mesh.pt();
+        auto ee_pred  = mesh.ee();
+        pt_pred.alpha = ee_pred.alpha = alpha;
+        for(bool reuse : {false, true})
+        {
+            const std::string scope = std::string{alpha == 0.0 ? "dcd" : "ccd"}
+                                      + (reuse ? "_refit_query" : "_build_query");
+            CAPTURE(scope);
+            std::array<SingleEFBVHQuery, 2>              queries;
+            std::array<InfoStacklessBVH, 2>              trees;
+            std::array<InfoStacklessBVH::QueryBuffer, 2> pts, ees;
+            queries[1].set_backend(Backend::Optix);
+            auto detect = [&](SizeT backend)
+            {
+                return queries[backend].detect(trees[backend],
+                                               pt_pred,
+                                               ee_pred,
+                                               mesh.node(),
+                                               mesh.point_bounds.view(),
+                                               mesh.edge_bounds.view(),
+                                               mesh.triangle_bounds.view(),
+                                               pts[backend],
+                                               ees[backend],
+                                               reuse);
+            };
+            for(SizeT backend = 0; backend < queries.size(); ++backend)
+                for(int warmup = 0; warmup < 3; ++warmup)
+                    REQUIRE(detect(backend));
+            const auto expected_pt = read_pairs(pts[0], false);
+            const auto expected_ee = read_pairs(ees[0], true);
+            REQUIRE_FALSE(expected_pt.empty());
+            REQUIRE_FALSE(expected_ee.empty());
+            REQUIRE(read_pairs(pts[1], false) == expected_pt);
+            REQUIRE(read_pairs(ees[1], true) == expected_ee);
+
+            for(int repeat = 1; repeat <= repeats; ++repeat)
+                for(SizeT backend = 0; backend < queries.size(); ++backend)
+                {
+                    CAPTURE(repeat, backend);
+                    REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
+                    const auto before    = queries[backend].statistics();
+                    const auto start     = std::chrono::steady_clock::now();
+                    bool       supported = true;
+                    for(int call = 0; call < calls; ++call)
+                        supported &= detect(backend);
+                    const auto   status = cudaDeviceSynchronize();
+                    const auto   stop   = std::chrono::steady_clock::now();
+                    const double milliseconds =
+                        std::chrono::duration<double, std::milli>(stop - start).count() / calls;
+                    REQUIRE(status == cudaSuccess);
+                    REQUIRE(supported);
+                    REQUIRE(read_pairs(pts[backend], false) == expected_pt);
+                    REQUIRE(read_pairs(ees[backend], true) == expected_ee);
+                    check_backend_execution(queries[backend], true);
+                    const auto after = queries[backend].statistics();
+                    if(backend == 1)
+                    {
+                        REQUIRE(after.launches - before.launches >= calls);
+                        REQUIRE((reuse ? after.refits - before.refits :
+                                         after.builds - before.builds)
+                                == calls);
+                    }
+                    const Json result{
+                        {"method", backend == 0 ? "single_ef_bvh" : "single_ef_optix"},
+                        {"scope", scope},
+                        {"repeat", repeat},
+                        {"calls", calls},
+                        {"ms_per_call", milliseconds},
+                        {"vertices", mesh.vertices.size()},
+                        {"edges", mesh.edges.size()},
+                        {"triangles", mesh.triangles.size()},
+                        {"pt_count", pts[backend].size()},
+                        {"ee_count", ees[backend].size()},
+                        {"optix_builds", after.builds - before.builds},
+                        {"optix_refits", after.refits - before.refits},
+                        {"optix_launches", after.launches - before.launches}};
+                    std::cout << "SINGLE_EF_BENCHMARK " << result.dump() << '\n';
+                }
+        }
+    }
 }

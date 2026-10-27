@@ -7,7 +7,7 @@ std::string_view expected_filter_type(std::string_view method)
 {
     if(method == "info_stackless_bvh")
         return "InfoStacklessBVHSimplexTrajectoryFilter";
-    if(method == "single_ef_bvh")
+    if(method == "single_ef_bvh" || method == "single_ef_optix")
         return "SingleEFBVHSimplexTrajectoryFilter";
     if(method == "info_stackless_bvh_v0")
         return "InfoStacklessBVHV0SimplexTrajectoryFilter";

@@ -33,6 +33,8 @@ else()
 endif()
 target_compile_definitions(uipc_core PRIVATE
     "UIPC_WITH_CUDA_LEGACY_COLLISION=${UIPC_CUDA_LEGACY_COLLISION_BUILT}")
+target_compile_definitions(uipc_core PUBLIC
+    "UIPC_WITH_OPTIX=$<BOOL:${UIPC_WITH_OPTIX}>")
 
 # ------------------------------------------------------------------------------
 # set the target source files
