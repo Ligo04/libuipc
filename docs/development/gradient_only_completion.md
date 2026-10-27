@@ -16,7 +16,8 @@ Four families are constitutions (SNH3D, Baraff-Witkin shell, ABD ARAP and spheri
 joint), two are half-plane contact models, and four are FEM/ABD BDF1/BDF2 inertia.
 The source audit now finds **24 specialized derivative kernel families and zero
 explicit global derivative kernels taking a runtime gradient-only flag**.
-Nine families already using separate gradient and Hessian launches are preserved.
+This measured snapshot preserved nine families with separate gradient/Hessian launches.
+They have since been unified in the [follow-up change](gradient_only_split_unification.md).
 
 Changed production sources:
 

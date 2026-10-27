@@ -1,3 +1,4 @@
+#include <utils/constraint_gradient_hessian_launch.h>
 #include <finite_element/finite_element_constraint.h>
 #include <uipc/builtin/attribute_name.h>
 
@@ -40,7 +41,8 @@ namespace
         }
     }
 
-    __global__ void SoftPositionConstraint_do_compute_gradient_hessian_k1_kernel(
+    template <bool GradientOnly>
+    __global__ void SoftPositionConstraint_do_compute_gradient_hessian_kernel(
         Float                                  substep_ratio,
         cuda_tool::BufferView<IndexT>          indices,
         cuda_tool::CBufferView<Vector3>        xs,
@@ -50,6 +52,7 @@ namespace
         cuda_tool::CBufferView<Float>          masses,
         cuda_tool::DoubletVectorView<Float, 3> gradients,
         cuda_tool::CBufferView<IndexT>         is_fixed,
+        cuda_tool::TripletMatrixView<Float, 3> hessians,
         int                                    n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -74,35 +77,72 @@ namespace
         }
 
         gradients(I).write(i, G);
-    }
 
-    __global__ void SoftPositionConstraint_do_compute_gradient_hessian_k2_kernel(
-        cuda_tool::BufferView<IndexT>          indices,
-        cuda_tool::BufferView<Float>           strength_ratio,
-        cuda_tool::CBufferView<Float>          masses,
-        cuda_tool::TripletMatrixView<Float, 3> hessians,
-        cuda_tool::CBufferView<IndexT>         is_fixed,
-        int                                    n)
-    {
-        int I = blockIdx.x * blockDim.x + threadIdx.x;
-        if(I >= n)
-            return;
-        auto i = indices(I);
+        if constexpr(!GradientOnly)
+        {
+            int I = blockIdx.x * blockDim.x + threadIdx.x;
+            if(I >= n)
+                return;
+            auto i = indices(I);
 
-        Matrix3x3 H;
-        if(is_fixed(i))
-        {
-            H = Matrix3x3::Zero();
+            Matrix3x3 H;
+            if(is_fixed(i))
+            {
+                H = Matrix3x3::Zero();
+            }
+            else
+            {
+                Float m = masses(i);
+                Float s = strength_ratio(I);
+                H       = s * m * Matrix3x3::Identity();
+            }
+            hessians(I).write(i, i, H);
         }
-        else
-        {
-            Float m = masses(i);
-            Float s = strength_ratio(I);
-            H       = s * m * Matrix3x3::Identity();
-        }
-        hessians(I).write(i, i, H);
     }
 }  // namespace
+
+void launch_soft_position_constraint_gradient_hessian(const SoftPositionConstraintGradientHessianLaunchInfo& info)
+{
+    const int n_gradient = static_cast<int>(info.indices.size());
+    const int n_hessian  = static_cast<int>(info.indices.size());
+    if(info.gradient_only)
+    {
+        if(n_gradient <= 0)
+            return;
+        auto k = SoftPositionConstraint_do_compute_gradient_hessian_kernel<true>;
+        k<<<cuda_tool::best_grid_dim(n_gradient, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            info.substep_ratio,
+            info.indices,
+            info.xs,
+            info.x_prevs,
+            info.aim_positions,
+            info.strength_ratio,
+            info.masses,
+            info.gradients,
+            info.is_fixed,
+            info.hessians,
+            n_gradient);
+    }
+    else
+    {
+        const int n = n_gradient > n_hessian ? n_gradient : n_hessian;
+        if(n <= 0)
+            return;
+        auto k = SoftPositionConstraint_do_compute_gradient_hessian_kernel<false>;
+        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            info.substep_ratio,
+            info.indices,
+            info.xs,
+            info.x_prevs,
+            info.aim_positions,
+            info.strength_ratio,
+            info.masses,
+            info.gradients,
+            info.is_fixed,
+            info.hessians,
+            n_gradient);
+    }
+}
 
 class SoftPositionConstraint final : public FiniteElementConstraint
 {
@@ -213,37 +253,17 @@ class SoftPositionConstraint final : public FiniteElementConstraint
 
     void do_compute_gradient_hessian(FiniteElementAnimator::ComputeGradientHessianInfo& info) override
     {
-        int n = (int)constrained_vertices.size();
-        if(n > 0)
-        {
-            auto k = SoftPositionConstraint_do_compute_gradient_hessian_k1_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                info.substep_ratio(),
-                constrained_vertices.view(),
-                info.xs(),
-                info.x_prevs(),
-                aim_positions.view(),
-                strength_ratios.view(),
-                info.masses(),
-                info.gradients(),
-                info.is_fixed(),
-                n);
-        }
-
-        if(info.gradient_only())
-            return;
-
-        if(n > 0)
-        {
-            auto k = SoftPositionConstraint_do_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                constrained_vertices.view(),
-                strength_ratios.view(),
-                info.masses(),
-                info.hessians(),
-                info.is_fixed(),
-                n);
-        }
+        launch_soft_position_constraint_gradient_hessian({info.substep_ratio(),
+                                                          constrained_vertices.view(),
+                                                          info.xs(),
+                                                          info.x_prevs(),
+                                                          aim_positions.view(),
+                                                          strength_ratios.view(),
+                                                          info.masses(),
+                                                          info.gradients(),
+                                                          info.is_fixed(),
+                                                          info.hessians(),
+                                                          info.gradient_only()});
     }
 };
 

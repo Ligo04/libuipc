@@ -1873,7 +1873,9 @@
     "Shared GPU conditions, no exclusive-device acceptance.",
     "No full-frame speedup, full Python suite, CMake build, CI or sanitizer default extended API-reporting claim.",
     "Sanitizer explicit API reporting with matching CUDA 13.4 tool; combined synccheck used synchronization limit 64.",
-    "Existing nine separate gradient/Hessian families were preserved.",
+    "Nine split families were preserved in this measured snapshot and have since been unified; see followup_report.",
     "The CUDA wheel still depends on external libcudart.so.13."
-  ]
+  ],
+  "measurement_revision": "4c719b0b30330562250b8c4ae91056a78dc35d22",
+  "followup_report": "docs/development/gradient_only_split_unification.md"
 }

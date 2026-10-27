@@ -1,0 +1,1702 @@
+{
+  "date": "2026-10-27",
+  "base_commit": "4c719b0b30330562250b8c4ae91056a78dc35d22",
+  "branch": "codex/single-ef-bvh",
+  "hardware": {
+    "gpu": "RTX 5090",
+    "architecture": "sm_120",
+    "driver": "590.48.01",
+    "nvcc": "13.4.92",
+    "scalar": "FP64"
+  },
+  "build_jobs": 4,
+  "configuration_sha256": "984b9672202f8f9a65a45a0caf7b7fe4c23d179d059411d77ac8a439cda9876b",
+  "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1",
+  "baseline_backend_sha256": "36abc348492e4916cb02db6a18b8dcb32f93fe7f6ad39556e9a0596683e680b5",
+  "baseline": "Base revision plus the same internal test dispatch interfaces; original separate G and H kernel bodies/launch configurations retained",
+  "source_inventory": {
+    "specialized_derivative_kernel_families": 33,
+    "runtime_gradient_only_global_kernels": 0,
+    "remaining_split_gradient_hessian_kernels": 0
+  },
+  "unified_families": [
+    {
+      "name": "RevoluteJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_revolute_joint.cu",
+      "shared_lane_pitch": 32
+    },
+    {
+      "name": "DrivingRevoluteJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_revolute_joint.cu",
+      "shared_lane_pitch": 16
+    },
+    {
+      "name": "RevoluteJointLimit",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_revolute_joint.cu",
+      "shared_lane_pitch": 16
+    },
+    {
+      "name": "PrismaticJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_prismatic_joint.cu",
+      "shared_lane_pitch": 32
+    },
+    {
+      "name": "DrivingPrismaticJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_prismatic_joint.cu",
+      "shared_lane_pitch": 32
+    },
+    {
+      "name": "PrismaticJointLimit",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_prismatic_joint.cu",
+      "shared_lane_pitch": 32
+    },
+    {
+      "name": "SoftTransformConstraint",
+      "path": "src/backends/cuda/affine_body/constraints/soft_transform_constraint.cu",
+      "shared_lane_pitch": 0
+    },
+    {
+      "name": "ExternalArticulationConstraint",
+      "path": "src/backends/cuda/affine_body/constraints/external_articulation_constraint.cu",
+      "shared_lane_pitch": 16
+    },
+    {
+      "name": "SoftPositionConstraint",
+      "path": "src/backends/cuda/finite_element/constraints/soft_position_constraint.cu",
+      "shared_lane_pitch": 0
+    }
+  ],
+  "original_host_extents": [
+    {
+      "kind": "DrivingRevoluteJoint",
+      "original_count_owner": "is_constrained",
+      "launch_body_ids_view": "revolute_joint->body_ids.cview().subview(0, is_constrained.size())"
+    },
+    {
+      "kind": "RevoluteJointLimit",
+      "original_count_owner": "lowers",
+      "launch_body_ids_view": "revolute_joint->body_ids.cview().subview(0, lowers.size())"
+    },
+    {
+      "kind": "DrivingPrismaticJoint",
+      "original_count_owner": "is_constrained",
+      "launch_body_ids_view": "prismatic_joint->body_ids.cview().subview(0, is_constrained.size())"
+    },
+    {
+      "kind": "PrismaticJointLimit",
+      "original_count_owner": "ref_qs",
+      "launch_body_ids_view": "prismatic_joint->body_ids.cview().subview(0, ref_qs.size())"
+    }
+  ],
+  "tests": {
+    "release-contract": {
+      "root_cases": 1,
+      "assertions": 224884,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.543,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    },
+    "release-cuda-full": {
+      "root_cases": 82,
+      "assertions": 28946977,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 17.009,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    },
+    "release-core-full": {
+      "root_cases": 38,
+      "assertions": 1295,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.041,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    },
+    "release-simulations": {
+      "root_cases": 30,
+      "assertions": 6784,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 12.783,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    },
+    "release-memcheck": {
+      "root_cases": 1,
+      "assertions": 224884,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 6.443,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    },
+    "release-racecheck": {
+      "root_cases": 1,
+      "assertions": 224884,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 7.301,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    },
+    "release-synccheck": {
+      "root_cases": 1,
+      "assertions": 224884,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.956,
+      "native_backend_sha256": "ab85aba40d5e2679881e590704c23129bb0d49ca88bdb74f4d34a974b2e570d1"
+    }
+  },
+  "derivative_parity": [
+    {
+      "kind": "revolute",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "driving_revolute",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 5.551115123125783e-17,
+      "max_scaled_difference": 4.7619617933037193e-17
+    },
+    {
+      "kind": "revolute_limit",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "prismatic",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "driving_prismatic",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "prismatic_limit",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "soft_transform",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 5484,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "external_articulation",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 15384,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "soft_position",
+      "elements": 33,
+      "hessian_elements": 33,
+      "compared_values": 732,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "external_articulation",
+      "elements": 33,
+      "hessian_elements": 0,
+      "compared_values": 1128,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    },
+    {
+      "kind": "external_articulation",
+      "elements": 33,
+      "hessian_elements": 67,
+      "compared_values": 30072,
+      "max_abs_difference": 0.0,
+      "max_scaled_difference": 0.0
+    }
+  ],
+  "resources": [
+    {
+      "kind": "RevoluteJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_revolute_joint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 3520,
+          "SHARED": 10240,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 88,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 3520,
+          "SHARED": 10240,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 88,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "DrivingRevoluteJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_revolute_joint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 3200,
+          "SHARED": 19456,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 98,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 3184,
+          "SHARED": 19456,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 98,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "RevoluteJointLimit",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_revolute_joint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 7920,
+          "SHARED": 19456,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 142,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 7920,
+          "SHARED": 19456,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 142,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "PrismaticJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_prismatic_joint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 15584,
+          "SHARED": 21760,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 128,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 15584,
+          "SHARED": 21760,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 128,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "DrivingPrismaticJoint",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_prismatic_joint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 2960,
+          "SHARED": 21760,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 80,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 2960,
+          "SHARED": 21760,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 80,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "PrismaticJointLimit",
+      "path": "src/backends/cuda/affine_body/constitutions/affine_body_prismatic_joint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 7664,
+          "SHARED": 21760,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 98,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 7696,
+          "SHARED": 21760,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 98,
+          "STACK": 128,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "SoftTransformConstraint",
+      "path": "src/backends/cuda/affine_body/constraints/soft_transform_constraint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 2224,
+          "SHARED": 0,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 255,
+          "STACK": 2160,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 2304,
+          "SHARED": 0,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 255,
+          "STACK": 2160,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "ExternalArticulationConstraint",
+      "path": "src/backends/cuda/affine_body/constraints/external_articulation_constraint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 255,
+          "STACK": 14320,
+          "SHARED": 19456,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 118,
+          "STACK": 176,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 255,
+          "STACK": 14320,
+          "SHARED": 19456,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 118,
+          "STACK": 176,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    },
+    {
+      "kind": "SoftPositionConstraint",
+      "path": "src/backends/cuda/finite_element/constraints/soft_position_constraint.cu",
+      "baseline": [
+        {
+          "mode": "hessian",
+          "REG": 34,
+          "STACK": 96,
+          "SHARED": 0,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient",
+          "REG": 40,
+          "STACK": 48,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ],
+      "specialized": [
+        {
+          "mode": "gradient_and_hessian",
+          "REG": 40,
+          "STACK": 96,
+          "SHARED": 0,
+          "LOCAL": 0
+        },
+        {
+          "mode": "gradient_only",
+          "REG": 40,
+          "STACK": 48,
+          "SHARED": 0,
+          "LOCAL": 0
+        }
+      ]
+    }
+  ],
+  "benchmark": [
+    {
+      "elements": 4096,
+      "processes_per_variant": 5,
+      "warmup_batches": 8,
+      "timed_batches": 40,
+      "order": "baseline, specialized, alternating five times",
+      "timing": "CUDA events over logical derivative calls, including host submission gaps; a baseline full call launches G and H separately",
+      "gpu_processes_before": "",
+      "gpu_processes_after": "",
+      "all_process_observations_empty": false,
+      "observed_process_names": [
+        "uipc_test_backend_cuda"
+      ],
+      "summary": [
+        {
+          "kind": "revolute",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 22.549598693847656,
+            "min_us": 22.54400062561035,
+            "max_us": 22.694400787353516,
+            "samples_us": [
+              22.549598693847656,
+              22.54400062561035,
+              22.694400787353516,
+              22.549598693847656,
+              22.652799606323242
+            ]
+          },
+          "specialized": {
+            "median_us": 22.651199340820312,
+            "min_us": 22.53999900817871,
+            "max_us": 22.70639991760254,
+            "samples_us": [
+              22.651199340820312,
+              22.540800094604492,
+              22.669599533081055,
+              22.53999900817871,
+              22.70639991760254
+            ]
+          },
+          "median_ratio": 0.9955145577307442,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "revolute",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 71.79840087890625,
+            "min_us": 63.495201110839844,
+            "max_us": 75.82079315185547,
+            "samples_us": [
+              75.82079315185547,
+              63.6056022644043,
+              74.36000061035156,
+              63.495201110839844,
+              71.79840087890625
+            ]
+          },
+          "specialized": {
+            "median_us": 43.04159927368164,
+            "min_us": 42.99919891357422,
+            "max_us": 43.115196228027344,
+            "samples_us": [
+              43.04159927368164,
+              42.99919891357422,
+              43.115196228027344,
+              43.049598693847656,
+              43.0359992980957
+            ]
+          },
+          "median_ratio": 1.668116475467684,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "driving_revolute",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 66.12079620361328,
+            "min_us": 61.28240203857422,
+            "max_us": 67.73519897460938,
+            "samples_us": [
+              61.28240203857422,
+              67.73519897460938,
+              61.473602294921875,
+              66.8552017211914,
+              66.12079620361328
+            ]
+          },
+          "specialized": {
+            "median_us": 66.00080108642578,
+            "min_us": 61.514404296875,
+            "max_us": 71.5103988647461,
+            "samples_us": [
+              71.5103988647461,
+              68.24639892578125,
+              61.53200149536133,
+              61.514404296875,
+              66.00080108642578
+            ]
+          },
+          "median_ratio": 1.0018180857688435,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "driving_revolute",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 474.43121337890625,
+            "min_us": 451.739990234375,
+            "max_us": 484.04644775390625,
+            "samples_us": [
+              474.43121337890625,
+              472.08636474609375,
+              484.04644775390625,
+              451.739990234375,
+              474.5647888183594
+            ]
+          },
+          "specialized": {
+            "median_us": 415.18719482421875,
+            "min_us": 380.4280090332031,
+            "max_us": 429.407958984375,
+            "samples_us": [
+              380.4280090332031,
+              390.6951904296875,
+              429.407958984375,
+              415.18719482421875,
+              418.94476318359375
+            ]
+          },
+          "median_ratio": 1.1426923067311123,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "revolute_limit",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 59.407196044921875,
+            "min_us": 59.34159469604492,
+            "max_us": 66.39839935302734,
+            "samples_us": [
+              59.407196044921875,
+              66.39839935302734,
+              59.34159469604492,
+              59.391197204589844,
+              64.14320373535156
+            ]
+          },
+          "specialized": {
+            "median_us": 65.65599822998047,
+            "min_us": 59.534400939941406,
+            "max_us": 73.14640808105469,
+            "samples_us": [
+              70.41680145263672,
+              73.14640808105469,
+              59.534400939941406,
+              65.65599822998047,
+              65.37999725341797
+            ]
+          },
+          "median_ratio": 0.9048251134165956,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "revolute_limit",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 510.70477294921875,
+            "min_us": 486.51116943359375,
+            "max_us": 515.8952026367188,
+            "samples_us": [
+              510.70477294921875,
+              504.83599853515625,
+              515.8952026367188,
+              486.51116943359375,
+              515.6192016601562
+            ]
+          },
+          "specialized": {
+            "median_us": 440.82080078125,
+            "min_us": 425.64080810546875,
+            "max_us": 446.0039978027344,
+            "samples_us": [
+              433.11517333984375,
+              425.64080810546875,
+              442.66558837890625,
+              440.82080078125,
+              446.0039978027344
+            ]
+          },
+          "median_ratio": 1.158531475928804,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "prismatic",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 34.83919906616211,
+            "min_us": 34.83760070800781,
+            "max_us": 34.98719787597656,
+            "samples_us": [
+              34.83760070800781,
+              34.83760070800781,
+              34.860801696777344,
+              34.83919906616211,
+              34.98719787597656
+            ]
+          },
+          "specialized": {
+            "median_us": 34.853599548339844,
+            "min_us": 34.825599670410156,
+            "max_us": 34.86320114135742,
+            "samples_us": [
+              34.853599548339844,
+              34.83359909057617,
+              34.825599670410156,
+              34.85599899291992,
+              34.86320114135742
+            ]
+          },
+          "median_ratio": 0.9995868294131927,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 328.7799987792969,
+            "min_us": 303.55841064453125,
+            "max_us": 344.9728088378906,
+            "samples_us": [
+              303.55841064453125,
+              330.7991943359375,
+              328.7799987792969,
+              308.45037841796875,
+              344.9728088378906
+            ]
+          },
+          "specialized": {
+            "median_us": 281.3064270019531,
+            "min_us": 267.56719970703125,
+            "max_us": 293.1776123046875,
+            "samples_us": [
+              282.5128173828125,
+              267.56719970703125,
+              293.1776123046875,
+              278.51361083984375,
+              281.3064270019531
+            ]
+          },
+          "median_ratio": 1.1687610634541745,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "driving_prismatic",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 28.714401245117188,
+            "min_us": 28.689599990844727,
+            "max_us": 28.799999237060547,
+            "samples_us": [
+              28.799999237060547,
+              28.715999603271484,
+              28.689599990844727,
+              28.69040298461914,
+              28.714401245117188
+            ]
+          },
+          "specialized": {
+            "median_us": 28.715999603271484,
+            "min_us": 28.688800811767578,
+            "max_us": 28.826400756835938,
+            "samples_us": [
+              28.714401245117188,
+              28.715999603271484,
+              28.826400756835938,
+              28.717601776123047,
+              28.688800811767578
+            ]
+          },
+          "median_ratio": 0.9999443391079406,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "driving_prismatic",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 232.6632080078125,
+            "min_us": 224.03280639648438,
+            "max_us": 249.2615966796875,
+            "samples_us": [
+              229.4456024169922,
+              232.6632080078125,
+              224.03280639648438,
+              249.2615966796875,
+              238.4792022705078
+            ]
+          },
+          "specialized": {
+            "median_us": 212.5072021484375,
+            "min_us": 201.2239990234375,
+            "max_us": 226.5240020751953,
+            "samples_us": [
+              201.2239990234375,
+              202.88241577148438,
+              212.5072021484375,
+              226.5240020751953,
+              212.72958374023438
+            ]
+          },
+          "median_ratio": 1.0948485776274817,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic_limit",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 28.665599822998047,
+            "min_us": 28.66080093383789,
+            "max_us": 28.688800811767578,
+            "samples_us": [
+              28.665599822998047,
+              28.688800811767578,
+              28.680801391601562,
+              28.663198471069336,
+              28.66080093383789
+            ]
+          },
+          "specialized": {
+            "median_us": 28.684803009033203,
+            "min_us": 28.63759994506836,
+            "max_us": 28.833599090576172,
+            "samples_us": [
+              28.684803009033203,
+              28.81679916381836,
+              28.833599090576172,
+              28.663997650146484,
+              28.63759994506836
+            ]
+          },
+          "median_ratio": 0.999330544956885,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic_limit",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 175.61119079589844,
+            "min_us": 171.65280151367188,
+            "max_us": 186.33358764648438,
+            "samples_us": [
+              181.31280517578125,
+              175.61119079589844,
+              172.50399780273438,
+              171.65280151367188,
+              186.33358764648438
+            ]
+          },
+          "specialized": {
+            "median_us": 151.2392120361328,
+            "min_us": 141.94000244140625,
+            "max_us": 162.1248016357422,
+            "samples_us": [
+              141.94000244140625,
+              158.72879028320312,
+              151.2392120361328,
+              148.11439514160156,
+              162.1248016357422
+            ]
+          },
+          "median_ratio": 1.1611485436326054,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "soft_transform",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 47.124000549316406,
+            "min_us": 47.12160110473633,
+            "max_us": 47.1255989074707,
+            "samples_us": [
+              47.12479782104492,
+              47.12160110473633,
+              47.122398376464844,
+              47.124000549316406,
+              47.1255989074707
+            ]
+          },
+          "specialized": {
+            "median_us": 47.19040298461914,
+            "min_us": 47.05120086669922,
+            "max_us": 47.33040237426758,
+            "samples_us": [
+              47.33040237426758,
+              47.05120086669922,
+              47.30400085449219,
+              47.08399963378906,
+              47.19040298461914
+            ]
+          },
+          "median_ratio": 0.9985928826392015,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "soft_transform",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 114.5927963256836,
+            "min_us": 110.6416015625,
+            "max_us": 122.75920104980469,
+            "samples_us": [
+              114.5927963256836,
+              120.96240234375,
+              110.6416015625,
+              114.42960357666016,
+              122.75920104980469
+            ]
+          },
+          "specialized": {
+            "median_us": 112.6055908203125,
+            "min_us": 105.27119445800781,
+            "max_us": 129.55520629882812,
+            "samples_us": [
+              112.6055908203125,
+              105.27119445800781,
+              105.28399658203125,
+              129.55520629882812,
+              124.6528091430664
+            ]
+          },
+          "median_ratio": 1.0176474852704438,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "external_articulation",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 86.37919616699219,
+            "min_us": 81.39759826660156,
+            "max_us": 86.79280090332031,
+            "samples_us": [
+              81.65760040283203,
+              86.79280090332031,
+              81.39759826660156,
+              86.37919616699219,
+              86.41600036621094
+            ]
+          },
+          "specialized": {
+            "median_us": 86.65680694580078,
+            "min_us": 81.39200592041016,
+            "max_us": 87.31279754638672,
+            "samples_us": [
+              86.72000122070312,
+              81.39200592041016,
+              81.53919982910156,
+              86.65680694580078,
+              87.31279754638672
+            ]
+          },
+          "median_ratio": 0.9967964342491614,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "external_articulation",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 1293.593505859375,
+            "min_us": 1286.716796875,
+            "max_us": 1315.301513671875,
+            "samples_us": [
+              1301.410400390625,
+              1315.301513671875,
+              1293.593505859375,
+              1293.4288330078125,
+              1286.716796875
+            ]
+          },
+          "specialized": {
+            "median_us": 1198.783935546875,
+            "min_us": 1174.711181640625,
+            "max_us": 1230.583984375,
+            "samples_us": [
+              1198.783935546875,
+              1195.7320556640625,
+              1230.583984375,
+              1174.711181640625,
+              1203.0216064453125
+            ]
+          },
+          "median_ratio": 1.0790881221387478,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "soft_position",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 4.73360013961792,
+            "min_us": 4.438399791717529,
+            "max_us": 4.962399959564209,
+            "samples_us": [
+              4.73360013961792,
+              4.962399959564209,
+              4.741600036621094,
+              4.438399791717529,
+              4.6631999015808105
+            ]
+          },
+          "specialized": {
+            "median_us": 4.715199947357178,
+            "min_us": 4.624800205230713,
+            "max_us": 5.247200012207031,
+            "samples_us": [
+              4.624800205230713,
+              4.656799793243408,
+              4.827199935913086,
+              4.715199947357178,
+              5.247200012207031
+            ]
+          },
+          "median_ratio": 1.0039023143167143,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "soft_position",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 12.656000137329102,
+            "min_us": 12.617600440979004,
+            "max_us": 13.18079948425293,
+            "samples_us": [
+              13.18079948425293,
+              12.6264009475708,
+              12.656000137329102,
+              12.617600440979004,
+              12.663200378417969
+            ]
+          },
+          "specialized": {
+            "median_us": 10.235199928283691,
+            "min_us": 10.210400581359863,
+            "max_us": 10.264799118041992,
+            "samples_us": [
+              10.235199928283691,
+              10.258399963378906,
+              10.264799118041992,
+              10.210400581359863,
+              10.230399131774902
+            ]
+          },
+          "median_ratio": 1.2365171394801808,
+          "ranges_overlap": false
+        }
+      ]
+    },
+    {
+      "elements": 65536,
+      "processes_per_variant": 5,
+      "warmup_batches": 8,
+      "timed_batches": 40,
+      "order": "baseline, specialized, alternating five times",
+      "timing": "CUDA events over logical derivative calls, including host submission gaps; a baseline full call launches G and H separately",
+      "gpu_processes_before": "",
+      "gpu_processes_after": "677800, /home/ligo/.codex/worktrees/libuipc-optimization/libuipc/build/xmake-cuda134/linux/x86_64/release/uipc_test_backend_cuda, 8478 MiB",
+      "all_process_observations_empty": false,
+      "observed_process_names": [
+        "uipc_test_backend_cuda"
+      ],
+      "summary": [
+        {
+          "kind": "revolute",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 28.7023983001709,
+            "min_us": 28.692800521850586,
+            "max_us": 28.860000610351562,
+            "samples_us": [
+              28.692800521850586,
+              28.7023983001709,
+              28.693599700927734,
+              28.860000610351562,
+              28.852001190185547
+            ]
+          },
+          "specialized": {
+            "median_us": 28.726398468017578,
+            "min_us": 28.684803009033203,
+            "max_us": 28.848800659179688,
+            "samples_us": [
+              28.725601196289062,
+              28.848800659179688,
+              28.684803009033203,
+              28.844799041748047,
+              28.726398468017578
+            ]
+          },
+          "median_ratio": 0.9991645256932087,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "revolute",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 1060.133544921875,
+            "min_us": 1054.806396484375,
+            "max_us": 1076.516845703125,
+            "samples_us": [
+              1058.370361328125,
+              1060.133544921875,
+              1076.516845703125,
+              1054.806396484375,
+              1075.0767822265625
+            ]
+          },
+          "specialized": {
+            "median_us": 1059.443115234375,
+            "min_us": 1028.460693359375,
+            "max_us": 1065.7568359375,
+            "samples_us": [
+              1049.3736572265625,
+              1059.443115234375,
+              1061.629638671875,
+              1065.7568359375,
+              1028.460693359375
+            ]
+          },
+          "median_ratio": 1.000651691136194,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "driving_revolute",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 77.8656005859375,
+            "min_us": 68.43360137939453,
+            "max_us": 86.1904067993164,
+            "samples_us": [
+              77.91120147705078,
+              77.8656005859375,
+              68.43360137939453,
+              86.1904067993164,
+              69.00240325927734
+            ]
+          },
+          "specialized": {
+            "median_us": 74.44080352783203,
+            "min_us": 68.69999694824219,
+            "max_us": 87.12800598144531,
+            "samples_us": [
+              68.69999694824219,
+              74.44080352783203,
+              68.83439636230469,
+              87.12800598144531,
+              81.19440460205078
+            ]
+          },
+          "median_ratio": 1.0460069867035355,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "driving_revolute",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 3529.118408203125,
+            "min_us": 3480.81201171875,
+            "max_us": 3562.08251953125,
+            "samples_us": [
+              3480.81201171875,
+              3509.473388671875,
+              3534.08984375,
+              3562.08251953125,
+              3529.118408203125
+            ]
+          },
+          "specialized": {
+            "median_us": 3553.88623046875,
+            "min_us": 3537.5234375,
+            "max_us": 3620.300048828125,
+            "samples_us": [
+              3537.5234375,
+              3584.188720703125,
+              3541.97119140625,
+              3620.300048828125,
+              3553.88623046875
+            ]
+          },
+          "median_ratio": 0.9930307779542065,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "revolute_limit",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 104.797607421875,
+            "min_us": 98.95120239257812,
+            "max_us": 113.54640197753906,
+            "samples_us": [
+              104.06080627441406,
+              104.89520263671875,
+              98.95120239257812,
+              104.797607421875,
+              113.54640197753906
+            ]
+          },
+          "specialized": {
+            "median_us": 112.552001953125,
+            "min_us": 106.35919189453125,
+            "max_us": 114.71439361572266,
+            "samples_us": [
+              106.35919189453125,
+              112.552001953125,
+              108.15679931640625,
+              114.70880126953125,
+              114.71439361572266
+            ]
+          },
+          "median_ratio": 0.9311038951179251,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "revolute_limit",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 3905.85595703125,
+            "min_us": 3893.266357421875,
+            "max_us": 3929.71337890625,
+            "samples_us": [
+              3905.85595703125,
+              3893.266357421875,
+              3893.55712890625,
+              3911.11083984375,
+              3929.71337890625
+            ]
+          },
+          "specialized": {
+            "median_us": 3913.223388671875,
+            "min_us": 3893.884765625,
+            "max_us": 3932.198486328125,
+            "samples_us": [
+              3932.198486328125,
+              3893.884765625,
+              3913.223388671875,
+              3895.93359375,
+              3926.084716796875
+            ]
+          },
+          "median_ratio": 0.9981172984752282,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 43.20720291137695,
+            "min_us": 43.04719924926758,
+            "max_us": 43.459999084472656,
+            "samples_us": [
+              43.25440216064453,
+              43.04719924926758,
+              43.1343994140625,
+              43.459999084472656,
+              43.20720291137695
+            ]
+          },
+          "specialized": {
+            "median_us": 43.23760223388672,
+            "min_us": 43.096797943115234,
+            "max_us": 43.3671989440918,
+            "samples_us": [
+              43.15840148925781,
+              43.23760223388672,
+              43.096797943115234,
+              43.3671989440918,
+              43.36640167236328
+            ]
+          },
+          "median_ratio": 0.9992969239518573,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 2775.71923828125,
+            "min_us": 2770.72705078125,
+            "max_us": 2787.20556640625,
+            "samples_us": [
+              2775.71923828125,
+              2773.33740234375,
+              2787.20556640625,
+              2784.4521484375,
+              2770.72705078125
+            ]
+          },
+          "specialized": {
+            "median_us": 2815.88720703125,
+            "min_us": 2780.76806640625,
+            "max_us": 2829.99755859375,
+            "samples_us": [
+              2829.99755859375,
+              2815.88720703125,
+              2780.76806640625,
+              2828.592041015625,
+              2784.67138671875
+            ]
+          },
+          "median_ratio": 0.9857352351863736,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "driving_prismatic",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 32.68239974975586,
+            "min_us": 32.421600341796875,
+            "max_us": 35.907997131347656,
+            "samples_us": [
+              35.907997131347656,
+              32.421600341796875,
+              32.47119903564453,
+              32.68239974975586,
+              32.76799774169922
+            ]
+          },
+          "specialized": {
+            "median_us": 32.534400939941406,
+            "min_us": 32.45759963989258,
+            "max_us": 32.74799728393555,
+            "samples_us": [
+              32.534400939941406,
+              32.74799728393555,
+              32.52159881591797,
+              32.68400192260742,
+              32.45759963989258
+            ]
+          },
+          "median_ratio": 1.0045489944655093,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "driving_prismatic",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 1622.8607177734375,
+            "min_us": 1611.0047607421875,
+            "max_us": 1628.1768798828125,
+            "samples_us": [
+              1623.930419921875,
+              1611.0047607421875,
+              1617.22314453125,
+              1628.1768798828125,
+              1622.8607177734375
+            ]
+          },
+          "specialized": {
+            "median_us": 1614.739990234375,
+            "min_us": 1598.6663818359375,
+            "max_us": 1636.352783203125,
+            "samples_us": [
+              1612.644775390625,
+              1614.739990234375,
+              1616.600830078125,
+              1598.6663818359375,
+              1636.352783203125
+            ]
+          },
+          "median_ratio": 1.0050291239383276,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic_limit",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 35.0447998046875,
+            "min_us": 34.913597106933594,
+            "max_us": 35.131202697753906,
+            "samples_us": [
+              35.0447998046875,
+              35.131202697753906,
+              34.913597106933594,
+              35.055999755859375,
+              35.02799987792969
+            ]
+          },
+          "specialized": {
+            "median_us": 34.99599838256836,
+            "min_us": 34.898399353027344,
+            "max_us": 35.139198303222656,
+            "samples_us": [
+              35.139198303222656,
+              34.93439865112305,
+              34.898399353027344,
+              35.024803161621094,
+              34.99599838256836
+            ]
+          },
+          "median_ratio": 1.001394485780507,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "prismatic_limit",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 1867.1800537109375,
+            "min_us": 1857.322265625,
+            "max_us": 1884.4224853515625,
+            "samples_us": [
+              1884.4224853515625,
+              1867.1800537109375,
+              1861.4697265625,
+              1879.1904296875,
+              1857.322265625
+            ]
+          },
+          "specialized": {
+            "median_us": 1841.0159912109375,
+            "min_us": 1833.1888427734375,
+            "max_us": 1855.810302734375,
+            "samples_us": [
+              1855.810302734375,
+              1850.317626953125,
+              1833.1888427734375,
+              1838.792724609375,
+              1841.0159912109375
+            ]
+          },
+          "median_ratio": 1.0142117518940128,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "soft_transform",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 224.8055877685547,
+            "min_us": 213.48080444335938,
+            "max_us": 234.84799194335938,
+            "samples_us": [
+              224.8055877685547,
+              229.5872039794922,
+              213.48080444335938,
+              214.4704132080078,
+              234.84799194335938
+            ]
+          },
+          "specialized": {
+            "median_us": 240.82638549804688,
+            "min_us": 205.6864013671875,
+            "max_us": 297.6847839355469,
+            "samples_us": [
+              237.1031951904297,
+              240.82638549804688,
+              243.86239624023438,
+              205.6864013671875,
+              297.6847839355469
+            ]
+          },
+          "median_ratio": 0.9334757373185667,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "soft_transform",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 634.4896240234375,
+            "min_us": 619.39599609375,
+            "max_us": 645.8887939453125,
+            "samples_us": [
+              645.8887939453125,
+              634.4896240234375,
+              642.1048583984375,
+              625.1112060546875,
+              619.39599609375
+            ]
+          },
+          "specialized": {
+            "median_us": 590.2448120117188,
+            "min_us": 576.9744262695312,
+            "max_us": 615.0904541015625,
+            "samples_us": [
+              596.0927734375,
+              576.9744262695312,
+              590.2448120117188,
+              590.1544189453125,
+              615.0904541015625
+            ]
+          },
+          "median_ratio": 1.0749601031831522,
+          "ranges_overlap": false
+        },
+        {
+          "kind": "external_articulation",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 93.589599609375,
+            "min_us": 88.2511978149414,
+            "max_us": 104.81599426269531,
+            "samples_us": [
+              94.95680236816406,
+              93.589599609375,
+              104.81599426269531,
+              88.2511978149414,
+              88.30400085449219
+            ]
+          },
+          "specialized": {
+            "median_us": 95.78480529785156,
+            "min_us": 88.11119842529297,
+            "max_us": 97.85919952392578,
+            "samples_us": [
+              88.11119842529297,
+              97.85919952392578,
+              95.95040130615234,
+              93.9072036743164,
+              95.78480529785156
+            ]
+          },
+          "median_ratio": 0.9770819006036462,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "external_articulation",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 14044.6064453125,
+            "min_us": 13947.158203125,
+            "max_us": 14665.5625,
+            "samples_us": [
+              13947.158203125,
+              14090.9267578125,
+              13966.9375,
+              14044.6064453125,
+              14665.5625
+            ]
+          },
+          "specialized": {
+            "median_us": 14186.892578125,
+            "min_us": 14083.15625,
+            "max_us": 14310.685546875,
+            "samples_us": [
+              14266.7529296875,
+              14186.892578125,
+              14163.880859375,
+              14083.15625,
+              14310.685546875
+            ]
+          },
+          "median_ratio": 0.9899705920779373,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "soft_position",
+          "gradient_only": true,
+          "baseline": {
+            "median_us": 6.203199863433838,
+            "min_us": 6.133599758148193,
+            "max_us": 6.275200366973877,
+            "samples_us": [
+              6.159999847412109,
+              6.203199863433838,
+              6.133599758148193,
+              6.275200366973877,
+              6.242400169372559
+            ]
+          },
+          "specialized": {
+            "median_us": 6.156000137329102,
+            "min_us": 6.110400199890137,
+            "max_us": 6.185600280761719,
+            "samples_us": [
+              6.110400199890137,
+              6.185600280761719,
+              6.123200416564941,
+              6.160799980163574,
+              6.156000137329102
+            ]
+          },
+          "median_ratio": 1.0076672717757955,
+          "ranges_overlap": true
+        },
+        {
+          "kind": "soft_position",
+          "gradient_only": false,
+          "baseline": {
+            "median_us": 14.326398849487305,
+            "min_us": 14.300000190734863,
+            "max_us": 14.354400634765625,
+            "samples_us": [
+              14.300000190734863,
+              14.34320068359375,
+              14.354400634765625,
+              14.326398849487305,
+              14.300000190734863
+            ]
+          },
+          "specialized": {
+            "median_us": 10.281599998474121,
+            "min_us": 10.255999565124512,
+            "max_us": 10.310400009155273,
+            "samples_us": [
+              10.255999565124512,
+              10.281599998474121,
+              10.27280044555664,
+              10.299200057983398,
+              10.310400009155273
+            ]
+          },
+          "median_ratio": 1.393401693473143,
+          "ranges_overlap": false
+        }
+      ]
+    }
+  ],
+  "trace": {
+    "tool": "Nsight Systems 2026.5.1",
+    "separate_reference_full_call_launches": 2,
+    "unified_full_call_launches": 1,
+    "final_instances": 18,
+    "launches_per_instance": 48,
+    "gradient_only_shared_bytes": 0,
+    "nsight_compute_counters_collected": false
+  },
+  "limits": [
+    "No full-frame speedup claim.",
+    "No CMake build, full Python suite or CI acceptance.",
+    "Matching CUDA 13.4 Compute Sanitizer with explicit API reporting; default extended reporting not claimed.",
+    "GPU clocks were not locked; before/after process observations do not establish exclusive-device ownership.",
+    "Wheel still requires external libcudart.so.13."
+  ]
+}

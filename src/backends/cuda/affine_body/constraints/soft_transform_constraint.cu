@@ -1,3 +1,4 @@
+#include <utils/constraint_gradient_hessian_launch.h>
 #include <affine_body/affine_body_constraint.h>
 #include <affine_body/utils.h>
 #include <uipc/builtin/attribute_name.h>
@@ -73,7 +74,8 @@ namespace
         }
     }
 
-    __global__ void soft_transform_constraint_compute_gradient_hessian_k1_kernel(
+    template <bool GradientOnly>
+    __global__ void soft_transform_constraint_compute_gradient_hessian_kernel(
         Float                                       substep_ratio,
         cuda_tool::BufferView<IndexT>               indices,
         cuda_tool::CBufferView<Vector12>            qs,
@@ -83,6 +85,7 @@ namespace
         cuda_tool::CBufferView<ABDJacobiDyadicMass> body_masses,
         cuda_tool::DoubletVectorView<Float, 12>     gradients,
         cuda_tool::CBufferView<IndexT>              is_fixed,
+        cuda_tool::TripletMatrixView<Float, 12>     hessians,
         int                                         n)
     {
         int I = blockIdx.x * blockDim.x + threadIdx.x;
@@ -109,35 +112,72 @@ namespace
         }
 
         gradients(I).write(i, G);
-    }
 
-    __global__ void soft_transform_constraint_compute_gradient_hessian_k2_kernel(
-        cuda_tool::BufferView<IndexT>               indices,
-        cuda_tool::BufferView<Vector2>              strength_ratios,
-        cuda_tool::CBufferView<ABDJacobiDyadicMass> body_masses,
-        cuda_tool::TripletMatrixView<Float, 12>     hessians,
-        cuda_tool::CBufferView<IndexT>              is_fixed,
-        int                                         n)
-    {
-        int I = blockIdx.x * blockDim.x + threadIdx.x;
-        if(I >= n)
-            return;
-        auto i = indices(I);
-
-        Matrix12x12 M;
-        if(is_fixed(i))
+        if constexpr(!GradientOnly)
         {
-            M.setZero();
-        }
-        else
-        {
-            Vector2 s = strength_ratios(I);
-            M         = compute_constraint_mass(body_masses(i), s(0), s(1));
-        }
+            int I = blockIdx.x * blockDim.x + threadIdx.x;
+            if(I >= n)
+                return;
+            auto i = indices(I);
 
-        hessians(I).write(i, i, M);
+            Matrix12x12 M;
+            if(is_fixed(i))
+            {
+                M.setZero();
+            }
+            else
+            {
+                Vector2 s = strength_ratios(I);
+                M         = compute_constraint_mass(body_masses(i), s(0), s(1));
+            }
+
+            hessians(I).write(i, i, M);
+        }
     }
 }  // namespace
+
+void launch_soft_transform_constraint_gradient_hessian(const SoftTransformConstraintGradientHessianLaunchInfo& info)
+{
+    const int n_gradient = static_cast<int>(info.indices.size());
+    const int n_hessian  = static_cast<int>(info.indices.size());
+    if(info.gradient_only)
+    {
+        if(n_gradient <= 0)
+            return;
+        auto k = soft_transform_constraint_compute_gradient_hessian_kernel<true>;
+        k<<<cuda_tool::best_grid_dim(n_gradient, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            info.substep_ratio,
+            info.indices,
+            info.qs,
+            info.q_prevs,
+            info.aim_transforms,
+            info.strength_ratios,
+            info.body_masses,
+            info.gradients,
+            info.is_fixed,
+            info.hessians,
+            n_gradient);
+    }
+    else
+    {
+        const int n = n_gradient > n_hessian ? n_gradient : n_hessian;
+        if(n <= 0)
+            return;
+        auto k = soft_transform_constraint_compute_gradient_hessian_kernel<false>;
+        k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
+            info.substep_ratio,
+            info.indices,
+            info.qs,
+            info.q_prevs,
+            info.aim_transforms,
+            info.strength_ratios,
+            info.body_masses,
+            info.gradients,
+            info.is_fixed,
+            info.hessians,
+            n_gradient);
+    }
+}
 
 class SoftTransformConstraint final : public AffineBodyConstraint
 {
@@ -254,37 +294,17 @@ class SoftTransformConstraint final : public AffineBodyConstraint
 
     void do_compute_gradient_hessian(AffineBodyAnimator::ComputeGradientHessianInfo& info) override
     {
-        int n = (int)constrained_bodies.size();
-        if(n > 0)
-        {
-            auto k = soft_transform_constraint_compute_gradient_hessian_k1_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                info.substep_ratio(),
-                constrained_bodies.view(),
-                info.qs(),
-                info.q_prevs(),
-                aim_transforms.view(),
-                strength_ratios.view(),
-                info.body_masses(),
-                info.gradients(),
-                info.is_fixed(),
-                n);
-        }
-
-        if(info.gradient_only())
-            return;
-
-        if(n > 0)
-        {
-            auto k = soft_transform_constraint_compute_gradient_hessian_k2_kernel;
-            k<<<cuda_tool::best_grid_dim(n, k), cuda_tool::best_block_dim(k), 0, nullptr>>>(
-                constrained_bodies.view(),
-                strength_ratios.view(),
-                info.body_masses(),
-                info.hessians(),
-                info.is_fixed(),
-                n);
-        }
+        launch_soft_transform_constraint_gradient_hessian({info.substep_ratio(),
+                                                           constrained_bodies.view(),
+                                                           info.qs(),
+                                                           info.q_prevs(),
+                                                           aim_transforms.view(),
+                                                           strength_ratios.view(),
+                                                           info.body_masses(),
+                                                           info.gradients(),
+                                                           info.is_fixed(),
+                                                           info.hessians(),
+                                                           info.gradient_only()});
     }
 };
 
