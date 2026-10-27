@@ -120,6 +120,47 @@ class SingleEFAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "mismatches"):
                     validate_swept_audit(self.summarize(changed), require_optix=True)
 
+    def test_group_culling_records_count_only_detect_invocations(self) -> None:
+        records = matching_records(optix=True)
+        for record in records:
+            record.update(
+                optix_culling_statistics_enabled=True,
+                optix_group_size=16,
+                optix_group_count=3,
+                optix_group_tests=8,
+                optix_body_rejections=2,
+                optix_contact_rejections=1,
+                optix_skipped_leaves=40,
+                optix_leaf_tests=12,
+                optix_emitted_pairs=4,
+            )
+        summary = self.summarize(records)
+        validate_swept_audit(summary, require_optix=True)
+        self.assertEqual(summary["optix_culling_records"], 2)
+        self.assertEqual(summary["optix_grouped_detect_records"], 2)
+        self.assertEqual(summary["optix_group_sizes"], [16])
+        self.assertEqual(summary["optix_group_count_range"], [3, 3])
+        self.assertEqual(summary["optix_skipped_leaves"], 80)
+        records[0]["optix_group_tests"] = 1
+        with self.assertRaisesRegex(ValueError, "inconsistent OptiX culling"):
+            self.summarize(records)
+
+    def test_flat_reference_cannot_claim_group_pruning(self) -> None:
+        records = matching_records(optix=True)
+        records[0].update(
+            optix_culling_statistics_enabled=True,
+            optix_group_size=1,
+            optix_group_count=3,
+            optix_group_tests=1,
+            optix_body_rejections=1,
+            optix_contact_rejections=0,
+            optix_skipped_leaves=1,
+            optix_leaf_tests=1,
+            optix_emitted_pairs=1,
+        )
+        with self.assertRaisesRegex(ValueError, "flat OptiX reports"):
+            self.summarize(records)
+
 
 if __name__ == "__main__":
     unittest.main()

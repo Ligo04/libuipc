@@ -320,40 +320,52 @@ void BVHSimplexPipeline::audit_detect(DetectInfo& info, CandidateMethod method, 
     bool equal = pp["equal"].get<bool>() && pe["equal"].get<bool>()
                  && pt["equal"].get<bool>() && ee["equal"].get<bool>();
     const bool optix_requested = single_ef.backend() == SingleEFBVHQuery::Backend::Optix;
-    const auto optix_total = single_ef.statistics();
-    const auto optix_call  = single_ef.last_statistics();
-    write_record(Json{{"detect_sequence", m_audit_sequence},
-                      {"phase", "candidates"},
-                      {"comparison", "canonical_multiset"},
-                      {"alpha", m_audit_alpha},
-                      {"mode", m_audit_alpha == 0.0 ? "DCD" : "CCD"},
-                      {"used_single_ef", used_single_ef},
-                      {"requested_backend", optix_requested ? "optix" : "cuda"},
-                      {"executed_backend",
-                       !used_single_ef ? "info_stackless_fallback" :
-                       optix_requested ? "optix" :
-                                         "cuda"},
-                      {"optix_builds", optix_call.builds},
-                      {"optix_refits", optix_call.refits},
-                      {"optix_launches", optix_call.launches},
-                      {"optix_builds_total", optix_total.builds},
-                      {"optix_refits_total", optix_total.refits},
-                      {"optix_launches_total", optix_total.launches},
-                      {"codim_vertices", info.codim_vertices().size()},
-                      {"isolated_point_proxies",
-                       used_single_ef ? single_ef.isolated_point_count() : 0},
-                      {"standalone_edge_proxies",
-                       used_single_ef ? single_ef.standalone_edge_count() : 0},
-                      {"equal", equal},
-                      {"dcd_single_calls", m_audit_dcd_single},
-                      {"dcd_fallback_calls", m_audit_dcd_fallback},
-                      {"ccd_single_calls", m_audit_ccd_single},
-                      {"ccd_fallback_calls", m_audit_ccd_fallback},
-                      {"toi_compared", false},
-                      {"PP", pp},
-                      {"PE", pe},
-                      {"PT", pt},
-                      {"EE", ee}});
+    const auto optix_total        = single_ef.statistics();
+    const auto optix_call         = single_ef.last_statistics();
+    const auto optix_cull         = single_ef.last_culling_statistics();
+    const bool culling_statistics = used_single_ef && optix_requested
+                                    && single_ef.optix_culling_statistics_enabled();
+    write_record(Json{
+        {"detect_sequence", m_audit_sequence},
+        {"phase", "candidates"},
+        {"comparison", "canonical_multiset"},
+        {"alpha", m_audit_alpha},
+        {"mode", m_audit_alpha == 0.0 ? "DCD" : "CCD"},
+        {"used_single_ef", used_single_ef},
+        {"requested_backend", optix_requested ? "optix" : "cuda"},
+        {"executed_backend",
+         !used_single_ef ? "info_stackless_fallback" :
+         optix_requested ? "optix" :
+                           "cuda"},
+        {"optix_builds", optix_call.builds},
+        {"optix_refits", optix_call.refits},
+        {"optix_launches", optix_call.launches},
+        {"optix_builds_total", optix_total.builds},
+        {"optix_refits_total", optix_total.refits},
+        {"optix_launches_total", optix_total.launches},
+        {"optix_group_size", optix_requested ? single_ef.optix_group_size() : 0},
+        {"optix_group_count",
+         used_single_ef && optix_requested ? single_ef.optix_group_count() : 0},
+        {"optix_culling_statistics_enabled", culling_statistics},
+        {"optix_group_tests", optix_cull.group_tests},
+        {"optix_body_rejections", optix_cull.body_rejections},
+        {"optix_contact_rejections", optix_cull.contact_rejections},
+        {"optix_skipped_leaves", optix_cull.skipped_leaves},
+        {"optix_leaf_tests", optix_cull.leaf_tests},
+        {"optix_emitted_pairs", optix_cull.emitted_pairs},
+        {"codim_vertices", info.codim_vertices().size()},
+        {"isolated_point_proxies", used_single_ef ? single_ef.isolated_point_count() : 0},
+        {"standalone_edge_proxies", used_single_ef ? single_ef.standalone_edge_count() : 0},
+        {"equal", equal},
+        {"dcd_single_calls", m_audit_dcd_single},
+        {"dcd_fallback_calls", m_audit_dcd_fallback},
+        {"ccd_single_calls", m_audit_ccd_single},
+        {"ccd_fallback_calls", m_audit_ccd_fallback},
+        {"toi_compared", false},
+        {"PP", pp},
+        {"PE", pe},
+        {"PT", pt},
+        {"EE", ee}});
     if(!equal)
         throw std::runtime_error("Single EF candidate audit mismatch; see audit JSONL");
 }

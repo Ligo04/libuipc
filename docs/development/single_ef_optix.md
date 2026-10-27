@@ -57,21 +57,67 @@ or with unsupported ownership topology retain the existing informative-BVH
 fallback. Intermediate pair counts, acceleration-structure memory, and
 runtime can differ even when final candidate multisets agree.
 
+## Group-root metadata culling
+
+The OptiX BVH is opaque: this adapter cannot install the native CUDA
+`NodePredicate` on its private internal nodes. Instead, each custom primitive
+represents a bounded group of original EF leaves. Its intersection program
+checks the group's original AABB, body ID and contact ID before any-hit scans
+the children. A disabled same-body or contact-table pair rejects the complete
+group. This is application-defined subtree culling, not a callback inside
+OptiX's private BVH.
+
+Leaves are spatially sorted by Morton code, then stably grouped by the full
+`(body ID, contact ID)` key. Each equal-key run is split into bounded groups.
+The default maximum is 16 leaves per group. Set `UIPC_OPTIX_EF_GROUP_SIZE` to
+an integer in `[1, 64]` before initializing the OptiX backend; `1` selects
+the flat reference implementation. The variable is an experimental process
+setting with no units, not a scene configuration key. The native CUDA method
+ignores it.
+
+Rebuilds, leaf-count changes and group-size changes recreate membership.
+Refits keep membership but recompute union boxes and aggregate tags: a mixed
+body or contact tag becomes `-1` independently, so only a uniform tag can
+reject a group. Exact per-leaf predicates remain in the child scan. Outputs
+retain original leaf IDs and chunk-local query IDs; overflow sizing still
+uses the original leaf count. Changing a live body/contact mask does not
+require rebuilding membership. Regrouping includes one device-to-host group
+count readback; refitting does not.
+
+OptiX's single-any-hit flag limits collection to one invocation per group
+primitive. Larger groups reduce primitive callbacks but loosen bounds and
+can increase child AABB checks on allowed groups. Grouping is therefore not
+by itself evidence of a speedup.
+
+This representation follows NVIDIA's guidance on
+[custom primitives containing groups](https://forums.developer.nvidia.com/t/aabb-for-multiple-custom-primitives/179242).
+
 ## Evidence
 
 `UIPC_SINGLE_EF_AUDIT_FILE` runs the existing baseline on the same simulation
 state. Candidate records additionally identify `requested_backend`,
 `executed_backend`, and actual per-detect `optix_builds`, `optix_refits`, and
 `optix_launches`, plus cumulative counters. A fallback record cannot establish
-OptiX performance.
+OptiX performance. Audit candidate records also contain group size/count and
+optional culling counters. Counters are enabled by the audit-file variable
+and disabled in ordinary runs. `group_tests`, `body_rejections` and
+`contact_rejections` count intersection-program invocations. `skipped_leaves`
+sums the child counts of metadata-rejected invocations; it excludes geometry
+rejections and does not count unique rejected candidate pairs. `leaf_tests`
+and `emitted_pairs` include all launches and overflow replays within a detect.
+Flat mode has zero group-culling counters. Counter readbacks and atomics belong
+only in diagnostic runs.
 
 Use separate uninstrumented throughput runs and instrumented diagnostic runs.
 Compare `single_ef_bvh` with `single_ef_optix` using the same executable and
 configuration. The hidden fixed-state benchmark measures complete
 `SingleEFBVHQuery::detect` calls on a deterministic two-layer grid, excluding
 primitive-bound preparation and initialization. It checks candidate multisets
-before and after every sample, with three warmup calls and five alternating
-samples of twenty calls per backend for DCD/CCD build/refit scopes.
+before and after every sample, with three warmup calls, one untimed diagnostic
+call, and five interleaved samples of twenty calls for DCD/CCD build/refit
+scopes. Variants are native CUDA, flat OptiX, and OptiX group sizes 8, 16 and
+32. Separate `SINGLE_EF_CULLING` records describe identical-state work; all
+timed samples assert that diagnostic counters are disabled.
 
 ```bash
 xmake run backend_cuda '[single_ef_optix_benchmark]'
@@ -89,10 +135,14 @@ with their tested source revision and runtime hashes. Independent trajectories
 can change floating-point accumulation order and solver work; their wall-time
 difference alone does not isolate traversal throughput.
 
-The 2026-10-27 RTX 5090 experiment used CUDA 13.4 and five alternating
+The original flat-mode 2026-10-27 RTX 5090 experiment used CUDA 13.4 and five alternating
 1,000-frame runs per method, with 30 warmup frames. Native and OptiX medians
 were 38.499 and 38.678 ms/frame, with overlapping ranges: no stable end-to-end
 gain was demonstrated. Both same-state 1,000-frame collision audits passed.
 Scene diagnostics found faster DCD but slower CCD candidate detection. The
 option remains experimental; see the
 [complete experiment record](https://github.com/Ligo04/libuipc/blob/codex/single-ef-optix/agent_docs/performance/2026-10-27-single-ef-optix.md).
+
+The group-root follow-up passes the full suites, all three sanitizer modes
+and a 1,000-frame same-state audit. Its performance comparison awaits an
+uncontended GPU; see the [grouped validation record](https://github.com/Ligo04/libuipc/blob/codex/single-ef-optix/agent_docs/performance/2026-10-27-optix-group-culling.md).

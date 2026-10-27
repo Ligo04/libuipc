@@ -3,7 +3,10 @@
 #include <cuda_tool/cub.h>
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <cstdlib>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -435,6 +438,21 @@ void SingleEFBVHQuery::set_backend(Backend backend)
 {
     if(backend == Backend::Optix && !OptixEFBVH::compiled())
         throw std::runtime_error("OptiX Single-EF support is not enabled in this build");
+    if(backend == Backend::Optix)
+    {
+        if(const char* value = std::getenv("UIPC_OPTIX_EF_GROUP_SIZE"))
+        {
+            const std::string_view setting{value};
+            SizeT                  size = 0;
+            const auto [end, error] =
+                std::from_chars(setting.data(), setting.data() + setting.size(), size);
+            if(error != std::errc{} || end != setting.data() + setting.size())
+                throw std::invalid_argument("UIPC_OPTIX_EF_GROUP_SIZE must be an integer in [1, 64]");
+            m_optix.set_group_size(size);
+        }
+        const char* audit = std::getenv("UIPC_SINGLE_EF_AUDIT_FILE");
+        enable_optix_culling_statistics(audit && *audit);
+    }
     m_backend = backend;
 }
 
@@ -450,6 +468,7 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
                               bool                           reuse_bvh_topology)
 {
     m_last_statistics              = {};
+    m_last_culling_statistics      = {};
     const auto previous_statistics = m_optix.statistics();
     UIPC_ASSERT(pt_pred.alpha == ee_pred.alpha && pt_pred.alpha >= 0.0,
                 "Single EF PT and EE queries must share a nonnegative alpha");
@@ -602,6 +621,8 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH& triangle_bvh,
             completed_statistics.refits - previous_statistics.refits;
         m_last_statistics.launches =
             completed_statistics.launches - previous_statistics.launches;
+        if(m_backend == Backend::Optix && m_optix_culling_statistics_enabled)
+            m_last_culling_statistics = m_optix.culling_statistics();
         return true;
     }
 }

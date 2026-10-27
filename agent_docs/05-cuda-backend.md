@@ -260,7 +260,12 @@ with a custom-AABB GAS. Its adapter is `collision_detection/optix_ef_bvh.cu`;
 the separate OptiX device program lives in `collision_detection/optix/`.
 The scene schema exposes that selector only when `UIPC_WITH_OPTIX` is enabled.
 Build/refit/launch counters in the same-state audit distinguish actual OptiX
-execution from unsupported-topology fallback. See
+execution from unsupported-topology fallback. OptiX group roots aggregate
+body/contact tags and reject a bounded subtree before scanning original
+leaves. Morton/tag grouping defaults to 16 leaves; `UIPC_OPTIX_EF_GROUP_SIZE=1`
+retains flat traversal. Mixed tags on refit disable only the corresponding
+group predicate. OptiX private internal nodes remain opaque. Audit-only
+culling counters include overflow replays and are disabled during timing. See
 [the experiment guide](../docs/development/single_ef_optix.md).
 
 `collision_detection/method = "info_stackless_bvh"` selects the optimized

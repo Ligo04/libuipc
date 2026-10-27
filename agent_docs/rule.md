@@ -151,7 +151,9 @@ record it here in the same commit.**
 
 - 2026-10-27 Single-EF OptiX experiment: compile both the native CUDA backend
   and the OptiX device program with CUDA 13.4. Wrecking-ball comparisons must
-  execute 1,000 frames per method. (Set 2026-10-27.)
+  execute 1,000 frames per method. During the group-culling follow-up, wait
+  until the concurrent Kit workload stops using the GPU before performance
+  measurements; compilation and correctness checks may continue. (Set 2026-10-27.)
 
 - 2026-10-03 audit follow-up: prioritize the fourth proposed stage, a matching
   source/runtime performance baseline followed by measured optimizations. Defer

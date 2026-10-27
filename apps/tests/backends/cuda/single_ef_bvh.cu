@@ -1077,6 +1077,8 @@ TEST_CASE("OptiX EF traversal preserves closed AABB overlap", "[cuda][single_ef_
     using namespace test_single_ef_bvh;
     if(!OptixEFBVH::compiled())
         SKIP("OptiX support is disabled in this build");
+    const auto group_size = GENERATE(SizeT{1}, OptixEFBVH::default_group_size);
+    CAPTURE(group_size);
 
     auto box = [](Vector3 lower, Vector3 upper)
     {
@@ -1106,7 +1108,8 @@ TEST_CASE("OptiX EF traversal preserves closed AABB overlap", "[cuda][single_ef_
     ct::DeviceBuffer<IndexT> query_tags, leaf_tags;
     upload(query_tags, std::vector<IndexT>(queries.size(), 0));
     upload(leaf_tags, std::vector<IndexT>(leaves.size(), 0));
-    OptixEFBVH                    tree;
+    OptixEFBVH tree;
+    tree.set_group_size(group_size);
     InfoStacklessBVH::QueryBuffer output;
     for(int pass = 0; pass < 3; ++pass)
     {
@@ -1146,6 +1149,224 @@ TEST_CASE("OptiX EF traversal preserves closed AABB overlap", "[cuda][single_ef_
     CHECK(tree.statistics().builds == 2);
     CHECK(tree.statistics().refits == 1);
     CHECK(tree.statistics().launches == 9);
+}
+
+namespace test_single_ef_bvh
+{
+struct GroupedEFCase
+{
+    static constexpr SizeT tag_count = 12;
+    std::vector<AABB>      queries, leaves;
+    std::vector<IndexT>    query_bids, query_cids, leaf_bids, leaf_cids;
+    std::vector<IndexT>    self = std::vector<IndexT>(tag_count, 1);
+    std::vector<IndexT>    mask = std::vector<IndexT>(tag_count * tag_count, 1);
+    ct::DeviceBuffer<AABB> d_queries, d_leaves;
+    ct::DeviceBuffer<IndexT> d_query_bids, d_query_cids, d_leaf_bids, d_leaf_cids, d_self;
+    ct::DeviceBuffer2D<IndexT>    d_mask{ct::Extent2D{tag_count, tag_count}};
+    OptixEFBVH                    tree;
+    InfoStacklessBVH::QueryBuffer output;
+
+    GroupedEFCase(SizeT leaf_count, SizeT query_count)
+        : query_bids(query_count, 0)
+        , query_cids(query_count, 0)
+        , leaf_bids(leaf_count, 0)
+        , leaf_cids(leaf_count, 0)
+    {
+        AABB box;
+        box.extend(Vector3::Zero().cast<float>()).extend(Vector3::Ones().cast<float>());
+        queries.assign(query_count, box);
+        leaves.assign(leaf_count, box);
+        tree.enable_culling_statistics(true);
+    }
+
+    void send_masks()
+    {
+        upload(d_self, self);
+        d_mask.view().copy_from(mask.data());
+    }
+
+    void update(bool reuse)
+    {
+        upload(d_queries, queries);
+        upload(d_leaves, leaves);
+        upload(d_query_bids, query_bids);
+        upload(d_query_cids, query_cids);
+        upload(d_leaf_bids, leaf_bids);
+        upload(d_leaf_cids, leaf_cids);
+        send_masks();
+        tree.update(d_queries, d_query_bids, d_query_cids, d_leaves, d_leaf_bids, d_leaf_cids, reuse);
+    }
+
+    void check_query(SizeT start,
+                     SizeT count,
+                     SizeT capacity = std::numeric_limits<SizeT>::max())
+    {
+        std::vector<Pair> expected;
+        for(SizeT local = 0; local < count; ++local)
+            for(SizeT leaf = 0; leaf < leaves.size(); ++leaf)
+            {
+                const auto query = start + local;
+                const auto qb = query_bids[query], qc = query_cids[query];
+                const auto lb = leaf_bids[leaf], lc = leaf_cids[leaf];
+                const bool body_reject = qb >= 0 && lb >= 0 && qb == lb && !self[qb];
+                const bool contact_reject =
+                    qc >= 0 && lc >= 0 && !mask[qc * tag_count + lc];
+                if(!body_reject && !contact_reject
+                   && queries[query].intersects(leaves[leaf]))
+                    expected.emplace_back(local, leaf);
+            }
+        capacity = std::min(capacity, count * leaves.size());
+        output.m_pairs.resize_discard(capacity);
+        const bvh_simplex_detail::NodePredicate predicate{d_self.view(), d_mask.cviewer()};
+        tree.launch_query(start, count, predicate, output);
+        const int required = static_cast<int>(output.m_cpNum);
+        REQUIRE(required >= 0);
+        REQUIRE(static_cast<SizeT>(required) == expected.size());
+        if(static_cast<SizeT>(required) > capacity)
+        {
+            output.m_pairs.resize_discard(required);
+            tree.launch_query(start, count, predicate, output);
+            REQUIRE(static_cast<int>(output.m_cpNum) == required);
+        }
+        output.m_size     = required;
+        const auto actual = read_pairs(output, false);
+        CHECK(actual == expected);
+        CHECK(std::adjacent_find(actual.begin(), actual.end()) == actual.end());
+    }
+};
+}  // namespace test_single_ef_bvh
+
+TEST_CASE("OptiX EF groups reject metadata before scanning children", "[cuda][single_ef_bvh][optix]")
+{
+    using namespace test_single_ef_bvh;
+    if(!OptixEFBVH::compiled())
+        SKIP("OptiX support is disabled in this build");
+
+    SECTION("disabled body skips every child; changing its mask needs no GAS update")
+    {
+        GroupedEFCase test(48, 4);
+        test.self[0] = 0;
+        test.update(false);
+        test.check_query(1, 2);
+        const auto rejected = test.tree.culling_statistics();
+        REQUIRE(rejected.group_tests > 0);
+        REQUIRE(rejected.body_rejections > 0);
+        REQUIRE(rejected.skipped_leaves >= 96);
+        REQUIRE(rejected.leaf_tests == 0);
+        REQUIRE(rejected.emitted_pairs == 0);
+        test.self[0] = 1;
+        test.send_masks();
+        test.check_query(1, 2, 1);
+        const auto allowed = test.tree.culling_statistics();
+        CHECK(allowed.body_rejections == rejected.body_rejections);
+        CHECK(allowed.leaf_tests > 0);
+        CHECK(allowed.emitted_pairs >= 96);
+        CHECK(test.tree.statistics().builds == 1);
+        CHECK(test.tree.statistics().refits == 0);
+    }
+    SECTION("contact IDs above eight reject groups and track live mask changes")
+    {
+        GroupedEFCase test(32, 3);
+        std::fill(test.query_cids.begin(), test.query_cids.end(), 9);
+        std::fill(test.leaf_bids.begin(), test.leaf_bids.end(), 1);
+        std::fill(test.leaf_cids.begin(), test.leaf_cids.end(), 11);
+        test.mask[9 * test.tag_count + 11] = 0;
+        test.update(false);
+        test.check_query(0, 3);
+        const auto rejected = test.tree.culling_statistics();
+        REQUIRE(rejected.contact_rejections > 0);
+        REQUIRE(rejected.body_rejections == 0);
+        REQUIRE(rejected.skipped_leaves >= 96);
+        REQUIRE(rejected.leaf_tests == 0);
+        REQUIRE(rejected.emitted_pairs == 0);
+        test.mask[9 * test.tag_count + 11] = 1;
+        test.send_masks();
+        test.check_query(2, 1);
+        const auto allowed = test.tree.culling_statistics();
+        CHECK(allowed.contact_rejections == rejected.contact_rejections);
+        CHECK(allowed.leaf_tests > 0);
+        CHECK(allowed.emitted_pairs == 32);
+        CHECK(test.tree.statistics().refits == 0);
+    }
+    SECTION("twelve shuffled tag groups preserve original IDs across grouping modes")
+    {
+        GroupedEFCase test(96, 4);
+        test.query_bids = test.query_cids = {0, 7, 9, 11};
+        std::fill(test.self.begin(), test.self.end(), 0);
+        for(SizeT leaf = 0; leaf < test.leaves.size(); ++leaf)
+            test.leaf_bids[leaf] = test.leaf_cids[leaf] = (leaf * 5) % test.tag_count;
+        for(SizeT row = 0; row < test.tag_count; ++row)
+            for(SizeT column = 0; column < test.tag_count; ++column)
+                test.mask[row * test.tag_count + column] = (row + column) % 3 != 0;
+        for(SizeT group_size : {SizeT{1}, SizeT{8}, SizeT{16}, SizeT{64}, SizeT{1}})
+        {
+            CAPTURE(group_size);
+            test.tree.set_group_size(group_size);
+            CHECK(test.tree.group_size() == group_size);
+            test.update(true);
+            test.check_query(0, 2, 1);
+            test.check_query(2, 2, 1);
+            const auto stats = test.tree.culling_statistics();
+            CHECK(stats.emitted_pairs > 0);
+            if(group_size == 1)
+            {
+                CHECK(stats.group_tests == 0);
+                CHECK(stats.body_rejections == 0);
+                CHECK(stats.contact_rejections == 0);
+                CHECK(stats.skipped_leaves == 0);
+            }
+            else
+            {
+                CHECK(test.tree.group_count() >= test.tag_count);
+                CHECK(stats.group_tests > 0);
+                CHECK(stats.body_rejections > 0);
+                CHECK(stats.contact_rejections > 0);
+            }
+        }
+    }
+    SECTION("refit recomputes mixed and invalid aggregate tags")
+    {
+        GroupedEFCase test(48, 2);
+        test.tree.set_group_size(OptixEFBVH::max_group_size);
+        test.self[0] = 0;
+        test.update(false);
+        REQUIRE(test.tree.group_count() == 1);
+        test.check_query(0, 2);
+        REQUIRE(test.tree.culling_statistics().leaf_tests == 0);
+        for(SizeT leaf = 0; leaf < test.leaves.size(); ++leaf)
+            test.leaf_bids[leaf] = test.leaf_cids[leaf] = leaf % 2;
+        test.update(true);
+        test.check_query(0, 2);
+        const auto mixed = test.tree.culling_statistics();
+        CHECK(mixed.body_rejections == 0);
+        CHECK(mixed.contact_rejections == 0);
+        CHECK(mixed.leaf_tests > 0);
+        CHECK(mixed.emitted_pairs == 48);
+        for(SizeT leaf = 0; leaf < test.leaves.size(); ++leaf)
+            test.leaf_bids[leaf] = test.leaf_cids[leaf] = leaf % 2 ? -1 : 0;
+        std::fill(test.mask.begin(), test.mask.end(), 0);
+        test.update(true);
+        test.check_query(0, 2);
+        const auto partly_invalid = test.tree.culling_statistics();
+        CHECK(partly_invalid.body_rejections == 0);
+        CHECK(partly_invalid.contact_rejections == 0);
+        CHECK(partly_invalid.leaf_tests > 0);
+        CHECK(partly_invalid.emitted_pairs == 48);
+        std::fill(test.query_bids.begin(), test.query_bids.end(), -1);
+        std::fill(test.query_cids.begin(), test.query_cids.end(), -1);
+        std::fill(test.leaf_bids.begin(), test.leaf_bids.end(), -1);
+        std::fill(test.leaf_cids.begin(), test.leaf_cids.end(), -1);
+        std::fill(test.self.begin(), test.self.end(), 0);
+        std::fill(test.mask.begin(), test.mask.end(), 0);
+        test.update(true);
+        test.check_query(0, 2);
+        const auto invalid = test.tree.culling_statistics();
+        CHECK(invalid.body_rejections == 0);
+        CHECK(invalid.contact_rejections == 0);
+        CHECK(invalid.leaf_tests > 0);
+        CHECK(invalid.emitted_pairs == 96);
+        CHECK(test.tree.statistics().refits == 3);
+    }
 }
 
 TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix_benchmark]")
@@ -1211,10 +1432,21 @@ TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix
             const std::string scope = std::string{alpha == 0.0 ? "dcd" : "ccd"}
                                       + (reuse ? "_refit_query" : "_build_query");
             CAPTURE(scope);
-            std::array<SingleEFBVHQuery, 2>              queries;
-            std::array<InfoStacklessBVH, 2>              trees;
-            std::array<InfoStacklessBVH::QueryBuffer, 2> pts, ees;
-            queries[1].set_backend(Backend::Optix);
+            constexpr std::array<const char*, 5> methods = {"single_ef_bvh",
+                                                            "single_ef_optix_flat",
+                                                            "single_ef_optix_grouped8",
+                                                            "single_ef_optix_grouped16",
+                                                            "single_ef_optix_grouped32"};
+            constexpr std::array<SizeT, 5>  group_sizes  = {0, 1, 8, 16, 32};
+            std::array<SingleEFBVHQuery, 5> queries;
+            std::array<InfoStacklessBVH, 5> trees;
+            std::array<InfoStacklessBVH::QueryBuffer, 5> pts, ees;
+            for(SizeT backend = 1; backend < queries.size(); ++backend)
+            {
+                queries[backend].set_backend(Backend::Optix);
+                queries[backend].set_optix_group_size(group_sizes[backend]);
+                queries[backend].enable_optix_culling_statistics(false);
+            }
             auto detect = [&](SizeT backend)
             {
                 return queries[backend].detect(trees[backend],
@@ -1235,13 +1467,44 @@ TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix
             const auto expected_ee = read_pairs(ees[0], true);
             REQUIRE_FALSE(expected_pt.empty());
             REQUIRE_FALSE(expected_ee.empty());
-            REQUIRE(read_pairs(pts[1], false) == expected_pt);
-            REQUIRE(read_pairs(ees[1], true) == expected_ee);
+            for(SizeT backend = 1; backend < queries.size(); ++backend)
+            {
+                REQUIRE(read_pairs(pts[backend], false) == expected_pt);
+                REQUIRE(read_pairs(ees[backend], true) == expected_ee);
+                REQUIRE_FALSE(queries[backend].optix_culling_statistics_enabled());
+            }
+            // Keep diagnostic atomics and their readback outside all timed samples.
+            for(SizeT backend = 0; backend < queries.size(); ++backend)
+            {
+                queries[backend].enable_optix_culling_statistics(backend != 0);
+                REQUIRE(detect(backend));
+                const auto stats = queries[backend].last_culling_statistics();
+                queries[backend].enable_optix_culling_statistics(false);
+                REQUIRE(read_pairs(pts[backend], false) == expected_pt);
+                REQUIRE(read_pairs(ees[backend], true) == expected_ee);
+                if(backend != 0)
+                {
+                    REQUIRE(queries[backend].last_statistics().launches > 0);
+                    const Json diagnostic{
+                        {"method", methods[backend]},
+                        {"scope", scope},
+                        {"group_size", queries[backend].optix_group_size()},
+                        {"group_count", queries[backend].optix_group_count()},
+                        {"group_tests", stats.group_tests},
+                        {"body_rejections", stats.body_rejections},
+                        {"contact_rejections", stats.contact_rejections},
+                        {"skipped_leaves", stats.skipped_leaves},
+                        {"leaf_tests", stats.leaf_tests},
+                        {"emitted_pairs", stats.emitted_pairs}};
+                    std::cout << "SINGLE_EF_CULLING " << diagnostic.dump() << '\n';
+                }
+            }
 
             for(int repeat = 1; repeat <= repeats; ++repeat)
                 for(SizeT backend = 0; backend < queries.size(); ++backend)
                 {
                     CAPTURE(repeat, backend);
+                    REQUIRE_FALSE(queries[backend].optix_culling_statistics_enabled());
                     REQUIRE(cudaDeviceSynchronize() == cudaSuccess);
                     const auto before    = queries[backend].statistics();
                     const auto start     = std::chrono::steady_clock::now();
@@ -1258,7 +1521,7 @@ TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix
                     REQUIRE(read_pairs(ees[backend], true) == expected_ee);
                     check_backend_execution(queries[backend], true);
                     const auto after = queries[backend].statistics();
-                    if(backend == 1)
+                    if(backend != 0)
                     {
                         REQUIRE(after.launches - before.launches >= calls);
                         REQUIRE((reuse ? after.refits - before.refits :
@@ -1266,7 +1529,7 @@ TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix
                                 == calls);
                     }
                     const Json result{
-                        {"method", backend == 0 ? "single_ef_bvh" : "single_ef_optix"},
+                        {"method", methods[backend]},
                         {"scope", scope},
                         {"repeat", repeat},
                         {"calls", calls},
@@ -1276,6 +1539,11 @@ TEST_CASE("single EF fixed-state native and OptiX timings", "[.][single_ef_optix
                         {"triangles", mesh.triangles.size()},
                         {"pt_count", pts[backend].size()},
                         {"ee_count", ees[backend].size()},
+                        {"optix_group_size",
+                         backend == 0 ? 0 : queries[backend].optix_group_size()},
+                        {"optix_group_count", queries[backend].optix_group_count()},
+                        {"culling_statistics_enabled",
+                         queries[backend].optix_culling_statistics_enabled()},
                         {"optix_builds", after.builds - before.builds},
                         {"optix_refits", after.refits - before.refits},
                         {"optix_launches", after.launches - before.launches}};

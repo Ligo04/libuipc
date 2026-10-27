@@ -41,31 +41,33 @@ extern "C" __global__ void __raygen__ef()
 
 extern "C" __global__ void __miss__ef() {}
 
-extern "C" __global__ void __intersection__ef()
+namespace
 {
-    const int    local_query = static_cast<int>(optixGetLaunchIndex().x);
-    const Proxy& query =
-        uipc_optix_ef_params.queries[uipc_optix_ef_params.query_start + local_query];
-    const Proxy& leaf = uipc_optix_ef_params.leaves[optixGetPrimitiveIndex()];
+__forceinline__ __device__ bool intersects(const Proxy& query, const Proxy& leaf)
+{
     for(int axis = 0; axis < 3; ++axis)
         if(query.lower[axis] > leaf.upper[axis] || leaf.lower[axis] > query.upper[axis])
-            return;
+            return false;
+    return true;
+}
+
+// 0 accepts, 1 rejects a homogeneous body, 2 rejects a contact-table entry.
+__forceinline__ __device__ int tag_rejection(const Proxy& query, const Proxy& leaf)
+{
     if(query.bid >= 0 && query.bid == leaf.bid
        && !uipc_optix_ef_params.body_self_collision[query.bid])
-        return;
+        return 1;
     if(query.cid >= 0 && leaf.cid >= 0)
     {
         const char* row = reinterpret_cast<const char*>(uipc_optix_ef_params.contact_masks)
                           + query.cid * uipc_optix_ef_params.contact_mask_pitch;
         if(!reinterpret_cast<const int*>(row)[leaf.cid])
-            return;
+            return 2;
     }
-    // Any-hit owns emission: REQUIRE_SINGLE_ANYHIT_CALL prevents duplicate EF
-    // pairs when the acceleration structure internally replicates primitives.
-    optixReportIntersection(optixGetRayTmin(), 0);
+    return 0;
 }
 
-extern "C" __global__ void __anyhit__ef()
+__forceinline__ __device__ void emit_pair(int leaf)
 {
     const int index = atomicAdd(uipc_optix_ef_params.pair_count, 1);
     if(index >= 0
@@ -73,8 +75,76 @@ extern "C" __global__ void __anyhit__ef()
     {
         uipc_optix_ef_params.pairs[2ull * index] =
             static_cast<int>(optixGetLaunchIndex().x);
-        uipc_optix_ef_params.pairs[2ull * index + 1] =
-            static_cast<int>(optixGetPrimitiveIndex());
+        uipc_optix_ef_params.pairs[2ull * index + 1] = leaf;
+    }
+    if(uipc_optix_ef_params.culling)
+        atomicAdd(&uipc_optix_ef_params.culling->emitted_pairs, 1ull);
+}
+}  // namespace
+
+extern "C" __global__ void __intersection__ef()
+{
+    const int    local_query = static_cast<int>(optixGetLaunchIndex().x);
+    const Proxy& query =
+        uipc_optix_ef_params.queries[uipc_optix_ef_params.query_start + local_query];
+    const int primitive = static_cast<int>(optixGetPrimitiveIndex());
+    auto*     counters  = uipc_optix_ef_params.culling;
+    if(uipc_optix_ef_params.groups)
+    {
+        const Group& group = uipc_optix_ef_params.groups[primitive];
+        if(counters)
+            atomicAdd(&counters->group_tests, 1ull);
+        if(!intersects(query, group.bounds))
+            return;
+        const int rejected = tag_rejection(query, group.bounds);
+        if(rejected)
+        {
+            if(counters)
+            {
+                atomicAdd(rejected == 1 ? &counters->body_rejections : &counters->contact_rejections,
+                          1ull);
+                atomicAdd(&counters->skipped_leaves,
+                          static_cast<unsigned long long>(group.count));
+            }
+            return;
+        }
+    }
+    else
+    {
+        const Proxy& leaf = uipc_optix_ef_params.leaves[primitive];
+        if(counters)
+            atomicAdd(&counters->leaf_tests, 1ull);
+        if(!intersects(query, leaf) || tag_rejection(query, leaf))
+            return;
+    }
+    // Report exactly one hit per group. Any-hit emits children once even if
+    // OptiX internally replicates this custom primitive during construction.
+    optixReportIntersection(optixGetRayTmin(), 0);
+}
+
+extern "C" __global__ void __anyhit__ef()
+{
+    const int primitive = static_cast<int>(optixGetPrimitiveIndex());
+    if(uipc_optix_ef_params.groups)
+    {
+        const Group& group       = uipc_optix_ef_params.groups[primitive];
+        const int    local_query = static_cast<int>(optixGetLaunchIndex().x);
+        const Proxy& query =
+            uipc_optix_ef_params.queries[uipc_optix_ef_params.query_start + local_query];
+        for(int offset = 0; offset < group.count; ++offset)
+        {
+            const int leaf_index =
+                uipc_optix_ef_params.group_leaf_indices[group.begin + offset];
+            const Proxy& leaf = uipc_optix_ef_params.leaves[leaf_index];
+            if(uipc_optix_ef_params.culling)
+                atomicAdd(&uipc_optix_ef_params.culling->leaf_tests, 1ull);
+            if(intersects(query, leaf) && !tag_rejection(query, leaf))
+                emit_pair(leaf_index);
+        }
+    }
+    else
+    {
+        emit_pair(primitive);
     }
     optixIgnoreIntersection();
 }

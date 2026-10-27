@@ -1,5 +1,19 @@
 # Handoff — Current State of the Repo
 
+> **OptiX group-root metadata culling (2026-10-27)**: application-defined
+> groups now reject disabled body/contact pairs before child scanning; default
+> size 16, size 1 retains flat traversal. OptiX private BVH nodes remain opaque.
+> Final full core/CUDA/sim suites and 21 Python tests pass. Memcheck, synccheck
+> and OptiX initcheck all report zero errors after explicit launch-parameter
+> padding initialization and a bounded CUB scan-tail capacity reservation.
+> The 1,000-frame grouped same-state audit passes all candidate/contact checks
+> and 463,200,693 pairwise TOIs, with real body-group rejection and no fallback.
+> Native ON/OFF and PTX compile probes pass with CUDA 13.4.
+> **Performance remains pending**: the owner requires waiting for the concurrent
+> Kit GPU workload to stop. No new throughput or profiler claim is made.
+> Evidence and continuation: `performance/2026-10-27-optix-group-culling.md`;
+> local validation, prepared three-variant runner: `output/optix-group-culling/`.
+
 > **Optional Single-EF OptiX experiment (2026-10-27)**: branch
 > `codex/single-ef-optix` starts at `755b3d62`. The optional `single_ef_optix`
 > selector replaces EF enumeration with a custom-AABB GAS, retaining CUDA

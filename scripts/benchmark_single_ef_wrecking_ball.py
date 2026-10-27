@@ -182,6 +182,7 @@ def host_facts() -> dict[str, Any]:
                 "LD_LIBRARY_PATH",
                 "UIPC_ENGINE_DEFAULT_CONFIG",
                 "XMAKE_CONFIGDIR",
+                "UIPC_OPTIX_EF_GROUP_SIZE",
             )
             if k in os.environ
         },
@@ -371,6 +372,16 @@ def audit_summary(path: Path) -> dict[str, Any]:
         "optix_refits": 0,
         "optix_launches": 0,
         "optix_execution_errors": 0,
+        "optix_culling_records": 0,
+        "optix_grouped_detect_records": 0,
+        "optix_group_sizes": [],
+        "optix_group_count_range": None,
+        "optix_group_tests": 0,
+        "optix_body_rejections": 0,
+        "optix_contact_rejections": 0,
+        "optix_skipped_leaves": 0,
+        "optix_leaf_tests": 0,
+        "optix_emitted_pairs": 0,
         "executed_backends": {},
         "nonempty_detect_records": 0,
         "nonempty_active_records": 0,
@@ -464,6 +475,38 @@ def audit_summary(path: Path) -> dict[str, Any]:
                     or any(counters.values())
                 ):
                     summary["optix_execution_errors"] += 1
+                if record.get("optix_culling_statistics_enabled") is True:
+                    if not valid_execution:
+                        raise ValueError(f"Audit line {line_number}: culling counters without OptiX execution")
+                    size, groups = record.get("optix_group_size"), record.get("optix_group_count")
+                    if (isinstance(size, bool) or not isinstance(size, int)
+                            or not 1 <= size <= 64 or isinstance(groups, bool)
+                            or not isinstance(groups, int) or groups < 1):
+                        raise ValueError(f"Audit line {line_number}: invalid OptiX grouping")
+                    culling = {}
+                    for name in ("group_tests", "body_rejections", "contact_rejections",
+                                 "skipped_leaves", "leaf_tests", "emitted_pairs"):
+                        value = record.get("optix_" + name)
+                        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                            raise ValueError(f"Audit line {line_number}: invalid optix_{name}")
+                        culling[name] = value
+                        summary["optix_" + name] += value
+                    rejections = culling["body_rejections"] + culling["contact_rejections"]
+                    if rejections > culling["group_tests"] or culling["skipped_leaves"] < rejections:
+                        raise ValueError(f"Audit line {line_number}: inconsistent OptiX culling counters")
+                    if size == 1 and any(culling[key] for key in
+                                        ("group_tests", "body_rejections", "contact_rejections", "skipped_leaves")):
+                        raise ValueError(f"Audit line {line_number}: flat OptiX reports group culling")
+                    summary["optix_culling_records"] += 1
+                    summary["optix_grouped_detect_records"] += int(size > 1)
+                    if size not in summary["optix_group_sizes"]:
+                        summary["optix_group_sizes"].append(size)
+                        summary["optix_group_sizes"].sort()
+                    bounds = summary["optix_group_count_range"]
+                    summary["optix_group_count_range"] = (
+                        [groups, groups] if bounds is None else
+                        [min(bounds[0], groups), max(bounds[1], groups)]
+                    )
         for key in (
             "dcd_single_calls",
             "dcd_fallback_calls",
@@ -796,6 +839,7 @@ def run_one(
             "environment_overrides": {
                 AUDIT_ENV: env.get(AUDIT_ENV),
                 "UIPC_BENCHMARK_TIMERS": env["UIPC_BENCHMARK_TIMERS"],
+                "UIPC_OPTIX_EF_GROUP_SIZE": env.get("UIPC_OPTIX_EF_GROUP_SIZE"),
             },
         },
     )

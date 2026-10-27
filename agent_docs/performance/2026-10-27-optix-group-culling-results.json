@@ -1,0 +1,949 @@
+{
+  "status": "implementation validated; uncontended performance pending Kit release",
+  "audit_is_performance_evidence": false,
+  "frames": 1000,
+  "audit": {
+    "records": 33446,
+    "detect_records": 13326,
+    "active_records": 13457,
+    "toi_records": 6663,
+    "dcd_used_single_ef": 6663,
+    "ccd_used_single_ef": 6663,
+    "ccd_fallback": 0,
+    "dcd_fallback": 0,
+    "optix_requested_detect_records": 13326,
+    "dcd_optix_launch_records": 6663,
+    "ccd_optix_launch_records": 6663,
+    "optix_builds": 1001,
+    "optix_refits": 12325,
+    "optix_launches": 13338,
+    "optix_execution_errors": 0,
+    "optix_culling_records": 13326,
+    "optix_grouped_detect_records": 13326,
+    "optix_group_sizes": [
+      16
+    ],
+    "optix_group_count_range": [
+      1308,
+      1308
+    ],
+    "optix_group_tests": 7991551764,
+    "optix_body_rejections": 1472757678,
+    "optix_contact_rejections": 0,
+    "optix_skipped_leaves": 22965024776,
+    "optix_leaf_tests": 7604083060,
+    "optix_emitted_pairs": 1776792818,
+    "executed_backends": {
+      "optix": 13326
+    },
+    "nonempty_detect_records": 13271,
+    "nonempty_active_records": 13402,
+    "nonempty_ccd_single_records": 6636,
+    "toi_single_ccd_records": 6663,
+    "nonempty_toi_single_ccd_records": 6636,
+    "mismatches": 0,
+    "unknown_records": 0,
+    "cumulative_calls": {
+      "dcd_single_calls": 6663,
+      "dcd_fallback_calls": 0,
+      "ccd_single_calls": 6663,
+      "ccd_fallback_calls": 0
+    },
+    "families": {
+      "detect/PT": {
+        "actual_count": 125442928,
+        "baseline_count": 125442928,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "detect/EE": {
+        "actual_count": 392385481,
+        "baseline_count": 392385481,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "detect/PP": {
+        "actual_count": 0,
+        "baseline_count": 0,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "detect/PE": {
+        "actual_count": 0,
+        "baseline_count": 0,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "active/PT": {
+        "actual_count": 14774955,
+        "baseline_count": 14774955,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "active/EE": {
+        "actual_count": 52848811,
+        "baseline_count": 52848811,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "active/PP": {
+        "actual_count": 3127093,
+        "baseline_count": 3127093,
+        "actual_duplicates": 2837689,
+        "baseline_duplicates": 2837689,
+        "missing": 0,
+        "extra": 0
+      },
+      "active/PE": {
+        "actual_count": 39884786,
+        "baseline_count": 39884786,
+        "actual_duplicates": 30714139,
+        "baseline_duplicates": 30714139,
+        "missing": 0,
+        "extra": 0
+      },
+      "toi/PT": {
+        "actual_count": 110046961,
+        "baseline_count": 110046961,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "toi/EE": {
+        "actual_count": 353153732,
+        "baseline_count": 353153732,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "toi/PP": {
+        "actual_count": 0,
+        "baseline_count": 0,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      },
+      "toi/PE": {
+        "actual_count": 0,
+        "baseline_count": 0,
+        "actual_duplicates": 0,
+        "baseline_duplicates": 0,
+        "missing": 0,
+        "extra": 0
+      }
+    },
+    "toi_compared": true,
+    "toi_pairs_compared": {
+      "PT": 110046961,
+      "EE": 353153732
+    },
+    "toi_value_mismatches": {
+      "PT": 0,
+      "EE": 0
+    },
+    "toi_nonfinite_values": {
+      "PT": 0,
+      "EE": 0
+    },
+    "toi_max_abs_diff": {
+      "PT": 0.0,
+      "EE": 0.0
+    },
+    "toi_max_rel_diff": {
+      "PT": 0.0,
+      "EE": 0.0
+    },
+    "toi_minimum_mismatches": 0,
+    "toi_minimum_max_abs_diff": 0.0,
+    "toi_tolerances": [
+      [
+        1e-12,
+        1e-09
+      ]
+    ],
+    "ccd_single_detect_sequences": 6663,
+    "unverified_ccd_single_detect_sequences": 0
+  },
+  "validation": {
+    "verified-focused": {
+      "tests": 3706,
+      "errors": 0,
+      "failures": 0
+    },
+    "verified-full-backend": {
+      "tests": 29473760,
+      "errors": 0,
+      "failures": 0
+    },
+    "verified-full-core": {
+      "tests": 1298,
+      "errors": 0,
+      "failures": 0
+    },
+    "verified-full-sim": {
+      "tests": 14213,
+      "errors": 0,
+      "failures": 0
+    },
+    "verified-initcheck": {
+      "tests": 233,
+      "errors": 0,
+      "failures": 0
+    },
+    "verified-memcheck": {
+      "tests": 3682,
+      "errors": 0,
+      "failures": 0
+    },
+    "verified-synccheck": {
+      "tests": 3682,
+      "errors": 0,
+      "failures": 0
+    },
+    "python_tests": 21,
+    "sanitizer_errors": {
+      "memcheck": 0,
+      "synccheck": 0,
+      "initcheck": 0
+    },
+    "format_and_diff_check": true
+  },
+  "source": {
+    "sha": {
+      "returncode": 0,
+      "stdout": "90dfdc6a79fe67fe84060955e50ec8d82cac8135",
+      "stderr": ""
+    },
+    "status": {
+      "returncode": 0,
+      "stdout": "M agent_docs/05-cuda-backend.md\n M agent_docs/rule.md\n M apps/tests/backends/cuda/single_ef_bvh.cu\n M docs/development/single_ef_optix.md\n M scripts/benchmark_single_ef_wrecking_ball.py\n M scripts/tests/test_single_ef_benchmark_audit.py\n M src/backends/cuda/collision_detection/filters/bvh_simplex_pipeline_audit.cu\n M src/backends/cuda/collision_detection/filters/single_ef_bvh_query.cu\n M src/backends/cuda/collision_detection/filters/single_ef_bvh_query.h\n M src/backends/cuda/collision_detection/optix/ef_device.cu\n M src/backends/cuda/collision_detection/optix/ef_shared.h\n M src/backends/cuda/collision_detection/optix_ef_bvh.cu\n M src/backends/cuda/collision_detection/optix_ef_bvh.h",
+      "stderr": ""
+    },
+    "tracked_diff_sha256": "0aa23361b5fb9bdf97738bad0c22a5b803ff218d5b65804f7264bccf2c286cb0",
+    "changed_source_sha256": {
+      "apps/tests/backends/cuda/single_ef_bvh.cu": "8f139c3be497c3484d0bd8c1ef58b60e7f529ef755e568bff59e067e71692702",
+      "scripts/benchmark_single_ef_wrecking_ball.py": "f49eb26ec884556e9cf71f9fca2197274a9608a01435759182afdb02e03fa41e",
+      "scripts/tests/test_single_ef_benchmark_audit.py": "80df60b25eb47e3f4c5f739bcfe2dc3210274b73f01e51cd83171918310115f7",
+      "src/backends/cuda/collision_detection/filters/bvh_simplex_pipeline_audit.cu": "56dbb6a805510b988887dc36ed7f361cda31e662c09e398307f61d72f0c0b5cc",
+      "src/backends/cuda/collision_detection/filters/single_ef_bvh_query.cu": "76442b072080bc2acbeb787ed0cd5770edcf0cf6a3526dcff974af91c0f2d6f9",
+      "src/backends/cuda/collision_detection/filters/single_ef_bvh_query.h": "4b856c4d09e974de8f30a523963ea9b10191165780932dfc2edecb00a5164324",
+      "src/backends/cuda/collision_detection/optix/ef_device.cu": "3984457cc8eda8a076d8d3e8a043f350e1bc9a9902ae921b20f683e3b6e4d8f8",
+      "src/backends/cuda/collision_detection/optix/ef_shared.h": "96c5b558b0d6e7c3129dced98f3b9e5f4197e1b0bd6e04c561e76b3278bd584d",
+      "src/backends/cuda/collision_detection/optix_ef_bvh.cu": "0d0ed757e262aa351fdd79738638c29244f5abbfbf0002eb625d9121ff2f4af3",
+      "src/backends/cuda/collision_detection/optix_ef_bvh.h": "ede19e75abde398d7793111ce4b9144234d50494ee24ebd220af352fafaf51f4"
+    }
+  },
+  "artifacts": {
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_backend_cuda.so": {
+      "sha256": "0cbe2c7595dfc17f397716594fdc331e8d44c2d1939b4f92b23b6f2090b89278",
+      "bytes": 21255592
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_backend_none.so": {
+      "sha256": "51ebb7f47c77de800ddbb4f4d993ddfcb718971116f82325c51da17659c37d8c",
+      "bytes": 756192
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_constitution.so": {
+      "sha256": "6afd3e24d7a007985f0d852452ae220e153f164bce295e056afdddcfe1e516a8",
+      "bytes": 1112224
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_core.so": {
+      "sha256": "4342a16d5451b1fef47def61132a49551fa95a5ae7303aecca1012ef0c6bc786",
+      "bytes": 4188592
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_geometry.so": {
+      "sha256": "047d681884edcfab68a8f849bef0a5754d8d2c5278967ba92c286c8d39f35aa7",
+      "bytes": 1462480
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_io.so": {
+      "sha256": "b4a52cfe8cf8b0699a0d560eaecc4784974745010f533034921810c9b7e55b71",
+      "bytes": 2273056
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_sanity_check.so": {
+      "sha256": "e9cd6d272e3d5ce596e1eace52979baa4a440108dceb7f1fec62e1581f9c2684",
+      "bytes": 739712
+    },
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/wrecking_ball": {
+      "sha256": "000ac25f939ce7948b08b2d44edef5f4a7e0a734dd0bff793e0aece4b8098e63",
+      "bytes": 666984
+    }
+  },
+  "xmake_config": {
+    "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/.xmake/linux/x86_64/xmake.conf": {
+      "sha256": "4f775ccfa6301a1256e57af29e6752cf3c7a132a2ae1133f9d3d0f717266e220",
+      "bytes": 1049
+    }
+  },
+  "gpu": {
+    "returncode": 0,
+    "stdout": "0, GPU-f9b57e93-9e84-81ad-8d1b-e9d4b4ce3c8b, NVIDIA GeForce RTX 5090, 590.48.01",
+    "stderr": ""
+  },
+  "runtime_identity": {
+    "available": true,
+    "executable": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/wrecking_ball",
+    "loaded_modules": {
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_backend_cuda.so": {
+        "sha256": "0cbe2c7595dfc17f397716594fdc331e8d44c2d1939b4f92b23b6f2090b89278",
+        "bytes": 21255592
+      },
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_constitution.so": {
+        "sha256": "6afd3e24d7a007985f0d852452ae220e153f164bce295e056afdddcfe1e516a8",
+        "bytes": 1112224
+      },
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_core.so": {
+        "sha256": "4342a16d5451b1fef47def61132a49551fa95a5ae7303aecca1012ef0c6bc786",
+        "bytes": 4188592
+      },
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_geometry.so": {
+        "sha256": "047d681884edcfab68a8f849bef0a5754d8d2c5278967ba92c286c8d39f35aa7",
+        "bytes": 1462480
+      },
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_io.so": {
+        "sha256": "b4a52cfe8cf8b0699a0d560eaecc4784974745010f533034921810c9b7e55b71",
+        "bytes": 2273056
+      },
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_sanity_check.so": {
+        "sha256": "e9cd6d272e3d5ce596e1eace52979baa4a440108dceb7f1fec62e1581f9c2684",
+        "bytes": 739712
+      },
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/wrecking_ball": {
+        "sha256": "000ac25f939ce7948b08b2d44edef5f4a7e0a734dd0bff793e0aece4b8098e63",
+        "bytes": 666984
+      }
+    },
+    "cuda_backends": [
+      "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release/libuipc_backend_cuda.so"
+    ]
+  },
+  "audit_session": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/benchmark/audit-20261027T122002.325658Z",
+  "compile_probes": {
+    "schema": 1,
+    "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+    "scope": "Compile-only verification; this script never executes GPU code.",
+    "started_utc": "2026-10-27T12:17:48.335821+00:00",
+    "state": "passed",
+    "git_head": "90dfdc6a79fe67fe84060955e50ec8d82cac8135",
+    "compiler": {
+      "path": "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+      "version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Sep_01_08:45:21_PDT_2026\nCuda compilation tools, release 13.4, V13.4.92\nBuild cuda_13.4.r13.4/compiler.38855100_0\n"
+    },
+    "optix_sdk": "/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0",
+    "environment_include_paths": {},
+    "sources_before": {
+      "src/backends/cuda/collision_detection/optix_ef_bvh.cu": "0d0ed757e262aa351fdd79738638c29244f5abbfbf0002eb625d9121ff2f4af3",
+      "src/backends/cuda/collision_detection/optix/ef_device.cu": "3984457cc8eda8a076d8d3e8a043f350e1bc9a9902ae921b20f683e3b6e4d8f8",
+      "src/backends/cuda/collision_detection/optix_ef_bvh.h": "ede19e75abde398d7793111ce4b9144234d50494ee24ebd220af352fafaf51f4",
+      "src/backends/cuda/collision_detection/optix/ef_shared.h": "96c5b558b0d6e7c3129dced98f3b9e5f4197e1b0bd6e04c561e76b3278bd584d"
+    },
+    "jobs": {
+      "native_off_sdk_free": {
+        "command": [
+          "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+          "-c",
+          "-O3",
+          "-std=c++20",
+          "-arch=sm_120",
+          "-rdc=true",
+          "--expt-relaxed-constexpr",
+          "--extended-lambda",
+          "-DSPDLOG_FMT_EXTERNAL",
+          "-DUIPC_BACKEND_EXPORT_DLL=1",
+          "-Iinclude",
+          "-Isrc",
+          "-Isrc/backends/cuda",
+          "-Isrc/backends/cuda/cuda_tool",
+          "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+          "-I/home/ligo/.xmake/packages/e/eigen/5.0.1/6bf95c0f261f4046aeeea9a65d8f1daf/include/eigen3",
+          "-I/home/ligo/.xmake/packages/f/fmt/12.2.0/63ee3836c55c4efba77d98c480b4ecd3/include",
+          "-I/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/include",
+          "-I/home/ligo/.xmake/packages/n/nlohmann_json/v3.12.0/b36e201b1206419d94ef523b409412cf/include",
+          "-I/home/ligo/.xmake/packages/c/cpptrace/v1.0.4/db6d58155f7c4de9844131fee0ecefee/include",
+          "-DUIPC_WITH_OPTIX=0",
+          "src/backends/cuda/collision_detection/optix_ef_bvh.cu",
+          "-o",
+          "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_bvh_off.o"
+        ],
+        "shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -c -O3 -std=c++20 -arch=sm_120 -rdc=true --expt-relaxed-constexpr --extended-lambda -DSPDLOG_FMT_EXTERNAL -DUIPC_BACKEND_EXPORT_DLL=1 -Iinclude -Isrc -Isrc/backends/cuda -Isrc/backends/cuda/cuda_tool -I/home/ligo/.local/cuda-13.4.3/include/cccl -I/home/ligo/.xmake/packages/e/eigen/5.0.1/6bf95c0f261f4046aeeea9a65d8f1daf/include/eigen3 -I/home/ligo/.xmake/packages/f/fmt/12.2.0/63ee3836c55c4efba77d98c480b4ecd3/include -I/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/include -I/home/ligo/.xmake/packages/n/nlohmann_json/v3.12.0/b36e201b1206419d94ef523b409412cf/include -I/home/ligo/.xmake/packages/c/cpptrace/v1.0.4/db6d58155f7c4de9844131fee0ecefee/include -DUIPC_WITH_OPTIX=0 src/backends/cuda/collision_detection/optix_ef_bvh.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_bvh_off.o",
+        "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+        "log": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/native_off_sdk_free.log",
+        "started_utc": "2026-10-27T12:17:48.344522+00:00",
+        "state": "passed",
+        "returncode": 0,
+        "finished_utc": "2026-10-27T12:18:02.615600+00:00",
+        "elapsed_seconds": 14.270579969044775,
+        "artifact": {
+          "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_bvh_off.o",
+          "bytes": 250624,
+          "sha256": "063d7e534bbc40f2d9540f0e99284b80067ac8122d098d9dde98d7363711790f"
+        }
+      },
+      "ptx": {
+        "command": [
+          "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+          "--ptx",
+          "--gpu-architecture=compute_75",
+          "-std=c++17",
+          "-I/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0/include",
+          "src/backends/cuda/collision_detection/optix/ef_device.cu",
+          "-o",
+          "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/ef_device.ptx"
+        ],
+        "shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc --ptx --gpu-architecture=compute_75 -std=c++17 -I/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0/include src/backends/cuda/collision_detection/optix/ef_device.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/ef_device.ptx",
+        "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+        "log": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/ptx.log",
+        "started_utc": "2026-10-27T12:17:48.344928+00:00",
+        "state": "passed",
+        "returncode": 0,
+        "finished_utc": "2026-10-27T12:17:48.697078+00:00",
+        "elapsed_seconds": 0.312430617865175,
+        "artifact": {
+          "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/ef_device.ptx",
+          "bytes": 15483,
+          "sha256": "5bb12a8f5ac3b06ecd99d42e5c4197c926d6492ca359ad13eb07bf8e85de0fde"
+        }
+      },
+      "embed_ptx": {
+        "command": [
+          "/usr/bin/python3",
+          "scripts/embed_optix_ptx.py",
+          "--input",
+          "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/ef_device.ptx",
+          "--output",
+          "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_device_ptx.h"
+        ],
+        "shell_command": "/usr/bin/python3 scripts/embed_optix_ptx.py --input /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/ef_device.ptx --output /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_device_ptx.h",
+        "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+        "log": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/embed_ptx.log",
+        "started_utc": "2026-10-27T12:17:48.697794+00:00",
+        "state": "passed",
+        "returncode": 0,
+        "finished_utc": "2026-10-27T12:17:48.716985+00:00",
+        "elapsed_seconds": 0.018913315143436193,
+        "artifact": {
+          "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_device_ptx.h",
+          "bytes": 15762,
+          "sha256": "7a065678637b89a902531c7270dfc76d1cc33bfe7b5e92f9aac565a018b805ea"
+        }
+      },
+      "native_on": {
+        "command": [
+          "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+          "-c",
+          "-O3",
+          "-std=c++20",
+          "-arch=sm_120",
+          "-rdc=true",
+          "--expt-relaxed-constexpr",
+          "--extended-lambda",
+          "-DSPDLOG_FMT_EXTERNAL",
+          "-DUIPC_BACKEND_EXPORT_DLL=1",
+          "-Iinclude",
+          "-Isrc",
+          "-Isrc/backends/cuda",
+          "-Isrc/backends/cuda/cuda_tool",
+          "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+          "-I/home/ligo/.xmake/packages/e/eigen/5.0.1/6bf95c0f261f4046aeeea9a65d8f1daf/include/eigen3",
+          "-I/home/ligo/.xmake/packages/f/fmt/12.2.0/63ee3836c55c4efba77d98c480b4ecd3/include",
+          "-I/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/include",
+          "-I/home/ligo/.xmake/packages/n/nlohmann_json/v3.12.0/b36e201b1206419d94ef523b409412cf/include",
+          "-I/home/ligo/.xmake/packages/c/cpptrace/v1.0.4/db6d58155f7c4de9844131fee0ecefee/include",
+          "-DUIPC_WITH_OPTIX=1",
+          "-I/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0/include",
+          "-I/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final",
+          "src/backends/cuda/collision_detection/optix_ef_bvh.cu",
+          "-o",
+          "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_bvh_on.o"
+        ],
+        "shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -c -O3 -std=c++20 -arch=sm_120 -rdc=true --expt-relaxed-constexpr --extended-lambda -DSPDLOG_FMT_EXTERNAL -DUIPC_BACKEND_EXPORT_DLL=1 -Iinclude -Isrc -Isrc/backends/cuda -Isrc/backends/cuda/cuda_tool -I/home/ligo/.local/cuda-13.4.3/include/cccl -I/home/ligo/.xmake/packages/e/eigen/5.0.1/6bf95c0f261f4046aeeea9a65d8f1daf/include/eigen3 -I/home/ligo/.xmake/packages/f/fmt/12.2.0/63ee3836c55c4efba77d98c480b4ecd3/include -I/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/include -I/home/ligo/.xmake/packages/n/nlohmann_json/v3.12.0/b36e201b1206419d94ef523b409412cf/include -I/home/ligo/.xmake/packages/c/cpptrace/v1.0.4/db6d58155f7c4de9844131fee0ecefee/include -DUIPC_WITH_OPTIX=1 -I/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0/include -I/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final src/backends/cuda/collision_detection/optix_ef_bvh.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_bvh_on.o",
+        "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+        "log": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/native_on.log",
+        "started_utc": "2026-10-27T12:17:48.717360+00:00",
+        "state": "passed",
+        "returncode": 0,
+        "finished_utc": "2026-10-27T12:18:05.378727+00:00",
+        "elapsed_seconds": 16.66117295785807,
+        "artifact": {
+          "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/final/optix_ef_bvh_on.o",
+          "bytes": 608976,
+          "sha256": "ec0d69722e6f15b6910669f832b966f2762bc76299bec3c537f07e5d9800f3b9"
+        }
+      }
+    },
+    "scan_reproducer": {
+      "source": {
+        "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu",
+        "bytes": 2514,
+        "sha256": "f12fca67fbac577088f389c91095961f961fd45c456d752cea1a638c2c615fe0"
+      },
+      "note": "Source was extended between historical variants; current source supports all listed rebuild commands. Earlier binaries print fewer metadata fields. No scan probe is executed by this final compile script.",
+      "variants": [
+        {
+          "binary": {
+            "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+            "bytes": 1378600,
+            "sha256": "0020c0e14841ef3c736e8523033326e586a0c927bc091493ec7fd809743b4c93"
+          },
+          "rebuild_command": [
+            "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+            "-O3",
+            "-std=c++17",
+            "-arch=sm_120",
+            "-lineinfo",
+            "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu",
+            "-o",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/home/ligo/.local/cuda-13.4.3/lib64"
+          ],
+          "rebuild_shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -O3 -std=c++17 -arch=sm_120 -lineinfo -I/home/ligo/.local/cuda-13.4.3/include/cccl /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck -Xlinker -rpath -Xlinker /home/ligo/.local/cuda-13.4.3/lib64"
+        },
+        {
+          "binary": {
+            "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic",
+            "bytes": 1329328,
+            "sha256": "98036a5130dc93cf0078e5fcdc592f7b87df19816008d7d79997777e66579d2f"
+          },
+          "rebuild_command": [
+            "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+            "-O3",
+            "-std=c++17",
+            "-arch=sm_120",
+            "-lineinfo",
+            "-DCCCL_DISABLE_WARPSPEED_SCAN",
+            "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu",
+            "-o",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic",
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/home/ligo/.local/cuda-13.4.3/lib64"
+          ],
+          "rebuild_shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -O3 -std=c++17 -arch=sm_120 -lineinfo -DCCCL_DISABLE_WARPSPEED_SCAN -I/home/ligo/.local/cuda-13.4.3/include/cccl /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic -Xlinker -rpath -Xlinker /home/ligo/.local/cuda-13.4.3/lib64"
+        },
+        {
+          "binary": {
+            "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized",
+            "bytes": 1378600,
+            "sha256": "60322e46a3be838d2201b4a131accbb3534d72abbbf48741dc93bb4da8310a2f"
+          },
+          "rebuild_command": [
+            "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+            "-O3",
+            "-std=c++20",
+            "-arch=sm_120",
+            "-lineinfo",
+            "-DPROBE_AMORTIZED_CAPACITY=1",
+            "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu",
+            "-o",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized",
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/home/ligo/.local/cuda-13.4.3/lib64"
+          ],
+          "rebuild_shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -O3 -std=c++20 -arch=sm_120 -lineinfo -DPROBE_AMORTIZED_CAPACITY=1 -I/home/ligo/.local/cuda-13.4.3/include/cccl /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized -Xlinker -rpath -Xlinker /home/ligo/.local/cuda-13.4.3/lib64"
+        },
+        {
+          "binary": {
+            "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized_rdc",
+            "bytes": 1441216,
+            "sha256": "c13c1f280d5a0ad4ec0315039f60e06d2c7b1316f661d2cb6142c3fda3fc8662"
+          },
+          "rebuild_command": [
+            "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+            "-O3",
+            "-std=c++20",
+            "-arch=sm_120",
+            "-lineinfo",
+            "-rdc=true",
+            "-DPROBE_AMORTIZED_CAPACITY=1",
+            "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu",
+            "-o",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized_rdc",
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/home/ligo/.local/cuda-13.4.3/lib64"
+          ],
+          "rebuild_shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -O3 -std=c++20 -arch=sm_120 -lineinfo -rdc=true -DPROBE_AMORTIZED_CAPACITY=1 -I/home/ligo/.local/cuda-13.4.3/include/cccl /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized_rdc -Xlinker -rpath -Xlinker /home/ligo/.local/cuda-13.4.3/lib64"
+        },
+        {
+          "binary": {
+            "path": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_rounded_rdc",
+            "bytes": 1441216,
+            "sha256": "52dd19d7c30fa6428a1af0b907cf100ec17ac7d16d77ceef1d75c2d4c73a4cf2"
+          },
+          "rebuild_command": [
+            "/home/ligo/.local/cuda-13.4.3/bin/nvcc",
+            "-O3",
+            "-std=c++20",
+            "-arch=sm_120",
+            "-lineinfo",
+            "-rdc=true",
+            "-DPROBE_ROUNDED_CAPACITY=1",
+            "-I/home/ligo/.local/cuda-13.4.3/include/cccl",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu",
+            "-o",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_rounded_rdc",
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/home/ligo/.local/cuda-13.4.3/lib64"
+          ],
+          "rebuild_shell_command": "/home/ligo/.local/cuda-13.4.3/bin/nvcc -O3 -std=c++20 -arch=sm_120 -lineinfo -rdc=true -DPROBE_ROUNDED_CAPACITY=1 -I/home/ligo/.local/cuda-13.4.3/include/cccl /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck.cu -o /home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_rounded_rdc -Xlinker -rpath -Xlinker /home/ligo/.local/cuda-13.4.3/lib64"
+        }
+      ],
+      "arguments": "N [prefill]; omit prefill to leave outputs uninitialized. Prefill uses byte 0xa5 and still checks exact prefix results.",
+      "observed_parent_run_metadata": {
+        "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/scan-amortized-summary.json": [
+          {
+            "variant": "amortized",
+            "prefill": false,
+            "returncode": 99,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--check-optix",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized",
+              "5"
+            ]
+          },
+          {
+            "variant": "amortized",
+            "prefill": true,
+            "returncode": 0,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--check-optix",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized",
+              "5",
+              "prefill"
+            ]
+          },
+          {
+            "variant": "amortized_rdc",
+            "prefill": false,
+            "returncode": 99,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--check-optix",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized_rdc",
+              "5"
+            ]
+          },
+          {
+            "variant": "amortized_rdc",
+            "prefill": true,
+            "returncode": 0,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--check-optix",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_amortized_rdc",
+              "5",
+              "prefill"
+            ]
+          }
+        ],
+        "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/scan-classic-summary.json": [
+          {
+            "n": 4,
+            "returncode": 0,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic",
+              "4"
+            ]
+          },
+          {
+            "n": 5,
+            "returncode": 0,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic",
+              "5"
+            ]
+          },
+          {
+            "n": 8,
+            "returncode": 0,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic",
+              "8"
+            ]
+          },
+          {
+            "n": 9,
+            "returncode": 0,
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_classic",
+              "9"
+            ]
+          }
+        ],
+        "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/scan-probe-summary.json": [
+          {
+            "n": 4,
+            "prefill": false,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-4-prefill0.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "4"
+            ]
+          },
+          {
+            "n": 4,
+            "prefill": true,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-4-prefill1.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "4",
+              "prefill"
+            ]
+          },
+          {
+            "n": 5,
+            "prefill": false,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-5-prefill0.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "5"
+            ]
+          },
+          {
+            "n": 5,
+            "prefill": true,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-5-prefill1.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "5",
+              "prefill"
+            ]
+          },
+          {
+            "n": 8,
+            "prefill": false,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-8-prefill0.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "8"
+            ]
+          },
+          {
+            "n": 8,
+            "prefill": true,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-8-prefill1.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "8",
+              "prefill"
+            ]
+          },
+          {
+            "n": 9,
+            "prefill": false,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-9-prefill0.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "9"
+            ]
+          },
+          {
+            "n": 9,
+            "prefill": true,
+            "returncode": 0,
+            "log": "output/optix-group-culling/scan-9-prefill1.log",
+            "command": [
+              "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+              "--tool",
+              "initcheck",
+              "--error-exitcode",
+              "99",
+              "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck",
+              "9",
+              "prefill"
+            ]
+          }
+        ],
+        "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/rounded-scan-1.json": {
+          "pid": 1796833,
+          "command": [
+            "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+            "--tool",
+            "initcheck",
+            "--check-optix",
+            "--error-exitcode",
+            "99",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_rounded_rdc",
+            "1"
+          ],
+          "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+          "started_ns": 1793103370864131489,
+          "state": "finished",
+          "environment": {
+            "XMAKE_CONFIGDIR": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix",
+            "LD_LIBRARY_PATH": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release:/home/ligo/.local/cuda-13.4.3/lib64:/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/lib",
+            "OptiX_ROOT": "/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0"
+          },
+          "returncode": 0,
+          "finished_ns": 1793103371231867398
+        },
+        "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/rounded-scan-2.json": {
+          "pid": 1796879,
+          "command": [
+            "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+            "--tool",
+            "initcheck",
+            "--check-optix",
+            "--error-exitcode",
+            "99",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_rounded_rdc",
+            "2"
+          ],
+          "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+          "started_ns": 1793103371255136857,
+          "state": "finished",
+          "environment": {
+            "XMAKE_CONFIGDIR": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix",
+            "LD_LIBRARY_PATH": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release:/home/ligo/.local/cuda-13.4.3/lib64:/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/lib",
+            "OptiX_ROOT": "/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0"
+          },
+          "returncode": 0,
+          "finished_ns": 1793103371572944628
+        },
+        "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/output/optix-group-culling/rounded-scan-5.json": {
+          "pid": 1796898,
+          "command": [
+            "/home/ligo/.codex/worktrees/single-ef-bvh/libuipc/build/verification/singleef-optimization-integration-20261026-181955/tools/cuda_sanitizer_api-linux-x86_64-13.4.92-archive/compute-sanitizer/compute-sanitizer",
+            "--tool",
+            "initcheck",
+            "--check-optix",
+            "--error-exitcode",
+            "99",
+            "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/optix-group-probe/scan_initcheck_rounded_rdc",
+            "5"
+          ],
+          "cwd": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc",
+          "started_ns": 1793103371595192806,
+          "state": "finished",
+          "environment": {
+            "XMAKE_CONFIGDIR": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix",
+            "LD_LIBRARY_PATH": "/home/ligo/.codex/worktrees/single-ef-optix/libuipc/build/xmake-optix/linux/x86_64/release:/home/ligo/.local/cuda-13.4.3/lib64:/home/ligo/.xmake/packages/s/spdlog/v1.17.0/a1a667a9dc95430fbf835ad16faae73f/lib",
+            "OptiX_ROOT": "/home/ligo/.local/opt/NVIDIA-OptiX-SDK-9.1.0"
+          },
+          "returncode": 0,
+          "finished_ns": 1793103371911051623
+        }
+      }
+    },
+    "sources_after": {
+      "src/backends/cuda/collision_detection/optix_ef_bvh.cu": "0d0ed757e262aa351fdd79738638c29244f5abbfbf0002eb625d9121ff2f4af3",
+      "src/backends/cuda/collision_detection/optix/ef_device.cu": "3984457cc8eda8a076d8d3e8a043f350e1bc9a9902ae921b20f683e3b6e4d8f8",
+      "src/backends/cuda/collision_detection/optix_ef_bvh.h": "ede19e75abde398d7793111ce4b9144234d50494ee24ebd220af352fafaf51f4",
+      "src/backends/cuda/collision_detection/optix/ef_shared.h": "96c5b558b0d6e7c3129dced98f3b9e5f4197e1b0bd6e04c561e76b3278bd584d"
+    },
+    "sources_unchanged": true,
+    "finished_utc": "2026-10-27T12:18:05.380006+00:00"
+  },
+  "not_verified": [
+    "full-project CMake",
+    "full CUDA-enabled OptiX-disabled build",
+    "other GPUs/platforms",
+    "Python wheel packaging"
+  ]
+}

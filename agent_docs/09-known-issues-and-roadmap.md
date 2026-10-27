@@ -1,6 +1,12 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
-Single-EF OptiX experiment (2026-10-27): optional `single_ef_optix` is implemented
+OptiX group-root follow-up (2026-10-27): bounded groups with body/contact
+rejection are implemented and pass the full suites, three sanitizer modes,
+and a 1,000-frame same-state audit. The default group size is 16; size 1 is the
+flat control. Performance comparison is pending the owner's requirement that
+Kit stop using the GPU. See [grouped validation and remaining work](performance/2026-10-27-optix-group-culling.md).
+
+Original flat Single-EF OptiX experiment (2026-10-27): optional `single_ef_optix` is implemented
 and passes focused/full CUDA tests, real-world contact checks, memcheck, and
 synccheck on CUDA 13.4 / OptiX 9.1 / RTX 5090. It remains disabled by default.
 Five alternating 1,000-frame runs per method show no stable end-to-end gain

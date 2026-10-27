@@ -27,6 +27,22 @@ class SingleEFBVHQuery
     {
         return m_last_statistics;
     }
+    void  set_optix_group_size(SizeT size) { m_optix.set_group_size(size); }
+    SizeT optix_group_size() const noexcept { return m_optix.group_size(); }
+    SizeT optix_group_count() const noexcept { return m_optix.group_count(); }
+    void  enable_optix_culling_statistics(bool enabled)
+    {
+        m_optix.enable_culling_statistics(enabled);
+        m_optix_culling_statistics_enabled = enabled;
+    }
+    bool optix_culling_statistics_enabled() const noexcept
+    {
+        return m_optix_culling_statistics_enabled;
+    }
+    OptixEFBVH::CullingStatistics last_culling_statistics() const noexcept
+    {
+        return m_last_culling_statistics;
+    }
 
     struct PrimitiveBounds
     {
@@ -69,9 +85,11 @@ class SingleEFBVHQuery
     }
 
   private:
-    Backend                m_backend = Backend::Cuda;
-    OptixEFBVH             m_optix;
-    OptixEFBVH::Statistics m_last_statistics{};
+    Backend                       m_backend = Backend::Cuda;
+    OptixEFBVH                    m_optix;
+    OptixEFBVH::Statistics        m_last_statistics{};
+    OptixEFBVH::CullingStatistics m_last_culling_statistics{};
+    bool                          m_optix_culling_statistics_enabled = false;
 
     enum class Eligibility
     {
