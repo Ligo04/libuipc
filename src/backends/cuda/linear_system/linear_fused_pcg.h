@@ -35,15 +35,18 @@ namespace uipc::backend::cuda
 // to eliminate per-iteration host synchronizations.  The update kernels read
 // alpha = rz/pAp and beta = rz_new/rz directly from device memory.
 // SpMV and dot(p,Ap) are fused into a single kernel pass.
-// Convergence is checked every `check_interval` iterations via a single D2H copy.
+// Device convergence is checked each iteration. Block replay reads the residual
+// every `check_interval` iterations; the conditional graph exits on device.
 //
 // CUDA graph replay records a block of `check_interval` iterations once per
 // (buffer-set, N) and replays it as one graph launch. The graph path implements
 // the same PCG recurrence with pipelined SpMV clears, fused local-preconditioner
-// update/apply/dot work, and fused direction publication; the uncaptured path
-// keeps the reference kernel sequence. If capture fails (e.g. a preconditioner
-// launches outside the capture stream), the solver permanently falls back to
-// the plain loop for that instance.
+// update/apply/dot work, and fused direction publication. The conditional graph
+// captures two such iterations per WHILE body to alternate the buffers without
+// a host decision; each iteration can stop the remaining work independently.
+// The uncaptured path keeps the reference kernel sequence. If WHILE capture
+// fails, the solver tries block replay; if block capture also fails, the solver
+// uses the plain loop for that instance.
 class LinearFusedPCG : public IterativeSolver
 {
   public:
@@ -62,10 +65,13 @@ class LinearFusedPCG : public IterativeSolver
     void  check_init_rz_nan_inf(Float rz);
     void  check_iter_rz_nan_inf(Float rz, SizeT k);
 
-    // One iteration of the PCG loop body on `stream` (the unit of graph
-    // capture and of the uncaptured fallback path).
+    // Reference iteration for the plain loop, block tails and capture fallback.
     void run_iteration(cuda_tool::DenseVectorView<Float> x, cudaStream_t stream, bool timed);
-    void run_graph_iteration(cuda_tool::DenseVectorView<Float> x, SizeT slot, cudaStream_t stream);
+    void run_graph_iteration(cuda_tool::DenseVectorView<Float> x,
+                             SizeT                             slot,
+                             cudaStream_t                      stream,
+                             cuda_tool::VarView<IndexT> iteration_count  = {},
+                             IndexT                     iteration_budget = 0);
 
     // Capture `interval` iterations into m_graph (no execution during
     // capture); on any failure disable graph replay for this instance.
@@ -84,10 +90,9 @@ class LinearFusedPCG : public IterativeSolver
     DeviceDenseVector p;
     DeviceDenseVector Ap;
 
-    // Block-replay only. The active SpMV clears the opposite slot in-kernel,
+    // Both graph modes. The active SpMV clears the opposite slot in-kernel,
     // and the direction kernel clears the opposite residual-dot slot. This
-    // removes all per-iteration clear nodes without changing the legacy plain
-    // or conditional-graph paths.
+    // removes per-iteration clear nodes while keeping the plain path unchanged.
     std::array<DeviceDenseVector, 2>           m_graph_Ap;
     std::array<cuda_tool::DeviceVar<Float>, 2> m_graph_pAp;
     std::array<cuda_tool::DeviceVar<Float>, 2> m_graph_rz_accum;
@@ -120,7 +125,7 @@ class LinearFusedPCG : public IterativeSolver
     // --- full-GPU while-loop graph (CUDA >= 12.4) ---
     cuda_tool::GraphWhile        m_while;
     cuda_tool::DeviceVar<IndexT> d_iter;
-    std::array<const void*, 12>  m_while_ptrs{};
+    std::array<const void*, 20>  m_while_ptrs{};
     SizeT                        m_while_n                 = 0;
     SizeT                        m_while_max_iter          = 0;
     SizeT                        m_while_layout_generation = 0;
@@ -131,5 +136,7 @@ class LinearFusedPCG : public IterativeSolver
                        cuda_tool::CDenseVectorView<Float> b,
                        SizeT                              max_iter);
     void destroy_while();
+
+    friend class DuplicateLocalPreconditionerTestAccess;
 };
 }  // namespace uipc::backend::cuda

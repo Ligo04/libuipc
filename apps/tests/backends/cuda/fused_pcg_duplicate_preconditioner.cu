@@ -21,8 +21,10 @@
 #include <linear_system/local_preconditioner.h>
 #include <uipc/uipc.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace uipc::backend::cuda
@@ -42,6 +44,38 @@ class DuplicateLocalPreconditionerTestAccess
         system.m_impl.x.copy_to(result);
         return result;
     }
+
+    static LinearFusedPCG& solver(GlobalLinearSystem& system)
+    {
+        return static_cast<LinearFusedPCG&>(*system.m_impl.iterative_solver.view());
+    }
+
+    static bool while_ready(GlobalLinearSystem& system)
+    {
+        return solver(system).m_while.ready();
+    }
+
+    static IndexT while_iterations(GlobalLinearSystem& system)
+    {
+        return solver(system).d_iter;
+    }
+
+    static IndexT while_state(GlobalLinearSystem& system)
+    {
+        return solver(system).d_converged;
+    }
+
+    static std::pair<SizeT, std::vector<Float>> solve_with_budget(GlobalLinearSystem& system,
+                                                                  SizeT max_iter)
+    {
+        auto& impl = system.m_impl;
+        impl.x.buffer_view().fill(Float{0});
+        const SizeT iterations =
+            solver(system).fused_pcg(impl.x.view(), impl.b.cview(), max_iter);
+        std::vector<Float> result;
+        impl.x.copy_to(result);
+        return {iterations, std::move(result)};
+    }
 };
 
 namespace duplicate_preconditioner_test
@@ -50,6 +84,8 @@ namespace duplicate_preconditioner_test
     {
         bool                enabled              = false;
         bool                distinct_eigenvalues = false;
+        bool                preconditioners      = true;
+        IndexT              eigenvalue_count     = 0;
         Float               rhs_scale            = 1;
         GlobalLinearSystem* system               = nullptr;
         std::array<bool, 2> registered{};
@@ -60,6 +96,8 @@ namespace duplicate_preconditioner_test
         SizeT dof_count() const { return distinct_eigenvalues ? 24 : 3; }
         Float diagonal(SizeT i) const
         {
+            if(eigenvalue_count > 0)
+                return Float(i % eigenvalue_count + 1);
             return distinct_eigenvalues ? Float(i + 1) : Float{1};
         }
         Float solution(SizeT i) const { return rhs_scale * Float(i + 1); }
@@ -160,7 +198,7 @@ namespace duplicate_preconditioner_test
       protected:
         void do_build(BuildInfo& info) override
         {
-            if(!state().enabled)
+            if(!state().enabled || !state().preconditioners)
                 throw SimSystemException("duplicate-preconditioner test is inactive");
             info.connect(&require<TestDiagonalSubsystem>());
             state().registered[slot()] = true;
@@ -323,10 +361,10 @@ namespace duplicate_preconditioner_test
             else if(graph_mode == 2)
             {
                 // A conditional graph captures each preconditioner once in the
-                // setup chain and once in the loop body. Reusing that graph for
+                // setup chain and twice in the ping-pong body. Reusing it for
                 // the second solve must not invoke either capture callback again.
                 REQUIRE(state().plain_apply_calls == 0);
-                REQUIRE(state().capture_apply_calls == 4);
+                REQUIRE(state().capture_apply_calls == 6);
             }
 #endif
             else
@@ -370,3 +408,131 @@ TEST_CASE("Fused PCG preserves sequential local preconditioners on one subsystem
         compare_solutions(solve_twice(2, distinct_eigenvalues));
 #endif
 }
+
+#if CUDA_TOOL_GRAPH_WHILE
+TEST_CASE("Fused PCG WHILE preserves ping-pong exits and iteration budgets",
+          "[build_solve_focused][fused_pcg][while_fused]")
+{
+    using namespace uipc;
+    using namespace uipc::backend::cuda;
+    using namespace uipc::backend::cuda::duplicate_preconditioner_test;
+    if(!uipc::backend::cuda_tool::GraphWhile::runtime_supported())
+    {
+        WARN("Conditional CUDA graphs are unavailable");
+        return;
+    }
+
+    IndexT eigenvalues = 3;
+    SECTION("odd convergence after the first slot")
+    {
+        eigenvalues = 1;
+    }
+    SECTION("even convergence after the second slot")
+    {
+        eigenvalues = 2;
+    }
+    SECTION("odd convergence after a complete pair")
+    {
+        eigenvalues = 3;
+    }
+
+    ScopedActivation activation{false};
+    state().preconditioners  = false;
+    state().eigenvalue_count = eigenvalues;
+    const auto   workspace   = fmt::format("{}fused-while-{}/",
+                                       AssetDir::output_path(UIPC_RELATIVE_SOURCE_FILE),
+                                       eigenvalues);
+    core::Engine engine{"cuda", workspace};
+    core::World  world{engine};
+    auto         config                       = core::Scene::default_config();
+    config["contact"]["enable"]               = false;
+    config["contact"]["constitution"]         = "ipc";
+    config["sanity_check"]["enable"]          = false;
+    config["linear_system"]["solver"]         = "fused_pcg";
+    config["linear_system"]["use_cuda_graph"] = 2;
+    config["linear_system"]["tol_rate"]       = Float{1e-24};
+    core::Scene scene{config};
+    world.init(scene);
+    REQUIRE(world.is_valid());
+    REQUIRE(state().system != nullptr);
+    REQUIRE_FALSE(state().registered[0]);
+    REQUIRE_FALSE(state().registered[1]);
+    auto& system = *state().system;
+    using Access = DuplicateLocalPreconditionerTestAccess;
+
+    // Reusing the same graph must reset both the counter and the first slot,
+    // including when a zero-RHS launch skips the body between nonzero solves.
+    for(Float scale : {Float{1}, Float{2}, Float{0}, Float{1}})
+    {
+        state().rhs_scale                = scale;
+        const auto   actual              = Access::solve_once(system);
+        const IndexT expected_iterations = scale == 0 ? 0 : eigenvalues;
+        CAPTURE(eigenvalues, scale);
+        REQUIRE(Access::while_ready(system));
+        REQUIRE(Access::while_iterations(system) == expected_iterations);
+        REQUIRE(system.last_solve_iterations() == static_cast<SizeT>(expected_iterations));
+        REQUIRE(Access::while_state(system) == 1);
+        for(SizeT i = 0; i < actual.size(); ++i)
+            REQUIRE(actual[i] == Catch::Approx(state().solution(i)).margin(1e-11));
+    }
+
+    auto reference = [&](SizeT budget)
+    {
+        const SizeT        n = state().dof_count();
+        std::vector<Float> x(n, 0), r(n), p(n), Ap(n);
+        Float              rz = 0;
+        for(SizeT i = 0; i < n; ++i)
+        {
+            p[i] = r[i] = state().diagonal(i) * state().solution(i);
+            rz += r[i] * r[i];
+        }
+        const Float tolerance = Float{1e-24} * rz;
+        for(SizeT k = 0; k < budget; ++k)
+        {
+            Float pAp = 0;
+            for(SizeT i = 0; i < n; ++i)
+            {
+                Ap[i] = state().diagonal(i) * p[i];
+                pAp += p[i] * Ap[i];
+            }
+            const Float alpha   = rz / pAp;
+            Float       next_rz = 0;
+            for(SizeT i = 0; i < n; ++i)
+            {
+                x[i] += alpha * p[i];
+                r[i] -= alpha * Ap[i];
+                next_rz += r[i] * r[i];
+            }
+            if(next_rz <= tolerance)
+                break;
+            for(SizeT i = 0; i < n; ++i)
+                p[i] = r[i] + (next_rz / rz) * p[i];
+            rz = next_rz;
+        }
+        return x;
+    };
+
+    // Odd/even exhausted budgets must stop in either slot without masquerading
+    // as convergence. A second launch exercises reset and cached graph replay.
+    for(SizeT budget : {SizeT{0}, SizeT{1}, SizeT{2}, SizeT{3}})
+    {
+        const auto expected = reference(budget);
+        for(int replay = 0; replay < 2; ++replay)
+        {
+            const auto [returned_iterations, actual] =
+                Access::solve_with_budget(system, budget + 1);
+            const bool converged = budget >= static_cast<SizeT>(eigenvalues);
+            CAPTURE(eigenvalues, budget, replay);
+            REQUIRE(Access::while_ready(system));
+            REQUIRE(Access::while_iterations(system)
+                    == static_cast<IndexT>(std::min(budget, static_cast<SizeT>(eigenvalues))));
+            REQUIRE(Access::while_state(system) == (converged ? 1 : 2));
+            REQUIRE(returned_iterations
+                    == (converged ? static_cast<SizeT>(eigenvalues) : budget + 1));
+            REQUIRE(actual.size() == expected.size());
+            for(SizeT i = 0; i < actual.size(); ++i)
+                REQUIRE(actual[i] == Catch::Approx(expected[i]).margin(1e-11));
+        }
+    }
+}
+#endif

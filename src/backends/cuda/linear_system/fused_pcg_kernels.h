@@ -31,7 +31,9 @@ void launch_fused_pcg_publish_update_direction(cuda_tool::DenseVectorView<Float>
                                                cuda_tool::VarView<Float> beta,
                                                cuda_tool::VarView<IndexT> converged,
                                                cuda_tool::CVarView<Float> rz_tol,
-                                               cudaStream_t stream);
+                                               cudaStream_t stream,
+                                               cuda_tool::VarView<IndexT> iteration_count = {},
+                                               IndexT iteration_budget = 0);
 
 void launch_fused_pcg_abd_update_apply_dot(cuda_tool::CBufferView<Matrix12x12> diag_inv,
                                            cuda_tool::DenseVectorView<Float>  x,

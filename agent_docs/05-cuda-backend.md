@@ -347,17 +347,26 @@ case2-scale scenes). Two graph modes exist; `graph_mode` is auto-selected in
 - **mode 2 — full-GPU while-loop** (opt-in, toolkit AND driver ≥ CUDA 12.4):
   the whole solve is ONE graph launch — setup chain (reset → r=b → precond →
   p=z → rz=rᵀz → rz_tol=tol·|rz0| on device) → WHILE conditional node whose
-  body is one iteration + a control kernel that publishes convergence and
-  calls `cudaGraphSetConditional`. Exit happens at the exact convergence
-  iteration; zero D2H/H2D inside the loop; a single D2H at the end reads
-  back the iteration count. **Measured SLOWER than mode 1 on case2-scale
-  scenes (median ~226 vs ~203 ms/frame): the WHILE node's per-iteration
-  evaluation costs more than the amortized host check every 5 iterations —
-  so it is opt-in (`use_cuda_graph=2`), useful when freeing the CPU matters
-  more than raw frame time.**
+  body contains two optimized PCG iterations, slot 0 then slot 1, followed by
+  `cudaGraphSetConditional`. Each iteration uses pipelined SpMV clears,
+  fused local update/apply/dot, and fused direction publication. The publisher
+  counts each active iteration once and sets a positive stop state on either
+  convergence or exhaustion of the `max_iter-1` budget. A stop in slot 0 masks
+  slot 1 without advancing the counter. The next body starts again at slot 0,
+  with no per-iteration clear nodes or host buffer selection. Setup resets the
+  first slot and counter for every solve, including zero-RHS early exits.
+  Zero D2H/H2D occurs inside the loop; the final iteration count and stop state
+  are read after `launch_sync()`. The exhausted state is distinct from numerical
+  convergence, so hitting an odd budget cannot report success. This entry point
+  still synchronizes the calling CPU thread. It remains opt-in
+  (`use_cuda_graph=2`); older measurements of the reference WHILE body do not
+  establish the performance of this fused body.
 - **mode 1 — block replay (default)**: `check_interval` iterations captured
   per block via `cuda_tool::GraphCapture`, host convergence check between
-  blocks (same cadence as the plain loop).
+  blocks (same cadence as the plain loop). Full blocks use the same fused
+  iteration without device iteration accounting; incomplete tail blocks use
+  the reference iteration. Both graph modes check convergence on every device
+  iteration. Only mode 1 rounds its returned count to the host-check boundary.
 - **mode 0** — plain launches (config off, or `contact/constitution != ipc`).
 
 Shared infrastructure: `cuda_tool/graph.h` holds `GraphCapture` (flat block

@@ -140,4 +140,40 @@ TEST_CASE("Fused PCG direction state publication is race-free",
         REQUIRE(static_cast<Float>(d_beta) == Float{-13});
         REQUIRE(static_cast<IndexT>(d_converged) == IndexT{1});
     }
+
+    SECTION("conditional iteration accounting stops later ping-pong slots")
+    {
+        d_p.buffer_view().copy_from(p.data());
+        d_rz        = Float{4};
+        d_rz_accum  = Float{2};
+        d_converged = IndexT{0};
+        cuda_tool::DeviceVar<IndexT> iterations{IndexT{0}};
+
+        auto publish = [&]
+        {
+            launch_fused_pcg_publish_update_direction(d_p.view(),
+                                                      d_z.cview(),
+                                                      d_rz.view(),
+                                                      d_rz_accum.view(),
+                                                      d_published.view(),
+                                                      d_next_accum.view(),
+                                                      d_beta.view(),
+                                                      d_converged.view(),
+                                                      d_rz_tol.view(),
+                                                      nullptr,
+                                                      iterations.view(),
+                                                      IndexT{2});
+        };
+        publish();
+        REQUIRE(static_cast<IndexT>(iterations) == IndexT{1});
+        REQUIRE(static_cast<IndexT>(d_converged) == IndexT{0});
+        publish();
+        REQUIRE(static_cast<IndexT>(iterations) == IndexT{2});
+        REQUIRE(static_cast<IndexT>(d_converged) == IndexT{2});
+        publish();
+        REQUIRE(static_cast<IndexT>(iterations) == IndexT{2});
+        REQUIRE(static_cast<IndexT>(d_converged) == IndexT{2});
+        d_p.buffer_view().copy_to(actual.data());
+        require_near(actual, expected);
+    }
 }
