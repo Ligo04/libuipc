@@ -11,8 +11,14 @@
 > zero errors. The CPU-only, OptiX-disabled schema test passes 730 assertions
 > and rejects the optional selector. CMake PTX generation and incremental
 > behavior were checked; a complete CMake build was not run.
-> Fixed-state timings and repeated 1,000-frame comparisons are pending;
-> no performance improvement is claimed yet. Evidence: `output/optix-single-ef/`.
+> Five alternating 1,000-frame runs per method (30 warmup) show no stable
+> end-to-end gain: CUDA median 38.499 ms/frame, OptiX 38.678, with overlapping
+> ranges. Separate diagnostics show faster DCD but slower CCD candidate detection.
+> Both 1,000-frame same-state audits pass, including all pairwise TOIs;
+> independent long trajectories vary, including repeated native runs.
+> The option remains experimental and off by default. Full results and profiling:
+> `agent_docs/performance/2026-10-27-single-ef-optix.md`.
+> Evidence: `output/optix-single-ef/`.
 > Build and query semantics: `docs/development/single_ef_optix.md`.
 
 > **PR #502 Eigen 5 header dependency (2026-10-20)**: Linux XMake uses Eigen

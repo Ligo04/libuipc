@@ -88,3 +88,11 @@ same frame and method options. Correctness and timing results are recorded
 with their tested source revision and runtime hashes. Independent trajectories
 can change floating-point accumulation order and solver work; their wall-time
 difference alone does not isolate traversal throughput.
+
+The 2026-10-27 RTX 5090 experiment used CUDA 13.4 and five alternating
+1,000-frame runs per method, with 30 warmup frames. Native and OptiX medians
+were 38.499 and 38.678 ms/frame, with overlapping ranges: no stable end-to-end
+gain was demonstrated. Both same-state 1,000-frame collision audits passed.
+Scene diagnostics found faster DCD but slower CCD candidate detection. The
+option remains experimental; see the
+[complete experiment record](https://github.com/Ligo04/libuipc/blob/codex/single-ef-optix/agent_docs/performance/2026-10-27-single-ef-optix.md).

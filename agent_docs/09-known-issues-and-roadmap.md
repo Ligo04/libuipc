@@ -3,11 +3,16 @@
 Single-EF OptiX experiment (2026-10-27): optional `single_ef_optix` is implemented
 and passes focused/full CUDA tests, real-world contact checks, memcheck, and
 synccheck on CUDA 13.4 / OptiX 9.1 / RTX 5090. It remains disabled by default.
+Five alternating 1,000-frame runs per method show no stable end-to-end gain
+(38.499 vs 38.678 ms/frame medians, overlapping ranges). Scene diagnostics
+show faster DCD and slower CCD candidates; fixed-state CCD tests also regress.
+Both 1,000-frame same-state audits pass with zero candidate/contact/TOI
+mismatches, while independent long trajectories vary on both implementations.
 The conservative ray construction can enumerate more EF pairs than native DCD
-segment pruning; build/refit cost and full-frame performance still need the
-fixed-state and 1,000-frame comparisons. Only CMake's isolated PTX generation
-has been tested; full-project CMake, other GPUs, and Python wheel packaging
-remain unverified. See `docs/development/single_ef_optix.md` and the handoff.
+segment pruning. Full-project CMake, a full CUDA-enabled/OptiX-disabled build,
+other GPUs/platforms, and Python wheel packaging remain unverified.
+See [the performance record](performance/2026-10-27-single-ef-optix.md) and
+`docs/development/single_ef_optix.md`.
 
 Directional Baraff-Witkin stretch added (2026-10-20): the new three-modulus
 overload independently controls Ka/Kb while retaining old APIs, defaults and

@@ -1,0 +1,713 @@
+{
+  "source_commit": "b64b9f8be8c948be65be14b0eea935a4b650cc16",
+  "base_commit": "755b3d62fa413eccd5dc977988270ab95a1aedbe",
+  "clean_measurement_tree": true,
+  "environment": {
+    "gpu": "RTX 5090",
+    "cpu": "AMD Ryzen 9 9950X",
+    "driver": "590.48.01",
+    "cuda_native_and_ptx": "13.4.92",
+    "optix_sdk": "9.1.0",
+    "native_arch": "sm_120",
+    "ptx_arch": "compute_75",
+    "ptx_version": "9.4",
+    "build": "XMake Release, dev=y, ccache=n"
+  },
+  "protocol": {
+    "frames": 1000,
+    "warmup": 30,
+    "timed_frames": [
+      31,
+      1000
+    ],
+    "repetitions_per_method": 5,
+    "wall_region": "World::advance + retrieve + sync",
+    "timers_and_audit_enabled_in_throughput": false,
+    "body_count": 574
+  },
+  "throughput": {
+    "single_ef_bvh": {
+      "runs": 5,
+      "run_means_ms": [
+        38.072027130927836,
+        38.015975974226805,
+        39.192815346391754,
+        38.49913545051547,
+        38.67755994536083
+      ],
+      "median_run_mean_ms": 38.49913545051547,
+      "range_ms": [
+        38.015975974226805,
+        39.192815346391754
+      ],
+      "run_workload_means": [
+        {
+          "newton_iterations": 6.741237113402062,
+          "line_search_trials": 6.825773195876288,
+          "linear_solver_iterations": 89.14432989690722
+        },
+        {
+          "newton_iterations": 6.74020618556701,
+          "line_search_trials": 6.831958762886598,
+          "linear_solver_iterations": 89.5618556701031
+        },
+        {
+          "newton_iterations": 6.728865979381443,
+          "line_search_trials": 6.808247422680412,
+          "linear_solver_iterations": 87.47938144329896
+        },
+        {
+          "newton_iterations": 6.745360824742268,
+          "line_search_trials": 6.849484536082474,
+          "linear_solver_iterations": 88.6340206185567
+        },
+        {
+          "newton_iterations": 6.735051546391753,
+          "line_search_trials": 6.824742268041237,
+          "linear_solver_iterations": 90.38144329896907
+        }
+      ]
+    },
+    "single_ef_optix": {
+      "runs": 5,
+      "run_means_ms": [
+        38.214954611340204,
+        38.89872465876289,
+        38.67832482783505,
+        40.014924644329895,
+        38.52678304742268
+      ],
+      "median_run_mean_ms": 38.67832482783505,
+      "range_ms": [
+        38.214954611340204,
+        40.014924644329895
+      ],
+      "run_workload_means": [
+        {
+          "newton_iterations": 6.734020618556701,
+          "line_search_trials": 6.802061855670103,
+          "linear_solver_iterations": 91.72164948453609
+        },
+        {
+          "newton_iterations": 6.723711340206186,
+          "line_search_trials": 6.8164948453608245,
+          "linear_solver_iterations": 90.93298969072166
+        },
+        {
+          "newton_iterations": 6.7443298969072165,
+          "line_search_trials": 6.84020618556701,
+          "linear_solver_iterations": 88.68556701030928
+        },
+        {
+          "newton_iterations": 6.723711340206186,
+          "line_search_trials": 6.802061855670103,
+          "linear_solver_iterations": 90.96907216494846
+        },
+        {
+          "newton_iterations": 6.742268041237113,
+          "line_search_trials": 6.823711340206185,
+          "linear_solver_iterations": 86.96907216494846
+        }
+      ]
+    }
+  },
+  "diagnostic": {
+    "single_ef_bvh": {
+      "collision_timers": {
+        "BVH single EF CCD detect": {
+          "ms_per_frame": 2.616971940206184,
+          "calls": 6537,
+          "ms_per_call": 0.3883222857579927
+        },
+        "BVH single EF DCD detect": {
+          "ms_per_frame": 6.870088641237124,
+          "calls": 6537,
+          "ms_per_call": 1.0194257277038412
+        }
+      },
+      "workload_means": {
+        "newton_iterations": 6.739175257731959,
+        "line_search_trials": 6.828865979381443,
+        "linear_solver_iterations": 90.0618556701031
+      }
+    },
+    "single_ef_optix": {
+      "collision_timers": {
+        "BVH single EF CCD detect": {
+          "ms_per_frame": 5.012827243298978,
+          "calls": 6539,
+          "ms_per_call": 0.7436064269766033
+        },
+        "BVH single EF DCD detect": {
+          "ms_per_frame": 5.408467971134032,
+          "calls": 6539,
+          "ms_per_call": 0.8022960593362916
+        }
+      },
+      "workload_means": {
+        "newton_iterations": 6.741237113402062,
+        "line_search_trials": 6.821649484536082,
+        "linear_solver_iterations": 94.1701030927835
+      }
+    }
+  },
+  "fixed_state": {
+    "ccd_build_query": {
+      "single_ef_bvh": {
+        "median_ms": 0.2648662,
+        "min_ms": 0.26390385,
+        "max_ms": 0.28702700000000003,
+        "samples_ms": [
+          0.28702700000000003,
+          0.2683944,
+          0.26390385,
+          0.2646182,
+          0.2648662
+        ]
+      },
+      "single_ef_optix": {
+        "median_ms": 0.37705485,
+        "min_ms": 0.3689098,
+        "max_ms": 0.40558135,
+        "samples_ms": [
+          0.37499445,
+          0.37705485,
+          0.3799108,
+          0.3689098,
+          0.40558135
+        ]
+      },
+      "optix_to_cuda_ratio": 1.4235672577323948
+    },
+    "ccd_refit_query": {
+      "single_ef_bvh": {
+        "median_ms": 0.1667423,
+        "min_ms": 0.16596685,
+        "max_ms": 0.19886915,
+        "samples_ms": [
+          0.16617575,
+          0.16994694999999999,
+          0.19886915,
+          0.1667423,
+          0.16596685
+        ]
+      },
+      "single_ef_optix": {
+        "median_ms": 0.24708175,
+        "min_ms": 0.209252,
+        "max_ms": 0.28286555,
+        "samples_ms": [
+          0.2484954,
+          0.21008559999999998,
+          0.209252,
+          0.28286555,
+          0.24708175
+        ]
+      },
+      "optix_to_cuda_ratio": 1.4818180509684704
+    },
+    "dcd_build_query": {
+      "single_ef_bvh": {
+        "median_ms": 0.44483875,
+        "min_ms": 0.40535435,
+        "max_ms": 0.47628830000000005,
+        "samples_ms": [
+          0.44840255000000007,
+          0.44483875,
+          0.40535435,
+          0.40597760000000005,
+          0.47628830000000005
+        ]
+      },
+      "single_ef_optix": {
+        "median_ms": 0.43164404999999995,
+        "min_ms": 0.3855942,
+        "max_ms": 0.45445215,
+        "samples_ms": [
+          0.38748225000000003,
+          0.44051704999999997,
+          0.45445215,
+          0.43164404999999995,
+          0.3855942
+        ]
+      },
+      "optix_to_cuda_ratio": 0.9703382405422188
+    },
+    "dcd_refit_query": {
+      "single_ef_bvh": {
+        "median_ms": 0.30538555,
+        "min_ms": 0.30337420000000004,
+        "max_ms": 0.32882825000000004,
+        "samples_ms": [
+          0.3114957,
+          0.32882825000000004,
+          0.30538555,
+          0.30337420000000004,
+          0.30439515
+        ]
+      },
+      "single_ef_optix": {
+        "median_ms": 0.30212184999999997,
+        "min_ms": 0.25588755,
+        "max_ms": 0.3096562,
+        "samples_ms": [
+          0.30212184999999997,
+          0.25588755,
+          0.27640319999999996,
+          0.3096562,
+          0.30737435
+        ]
+      },
+      "optix_to_cuda_ratio": 0.9893128538662028
+    }
+  },
+  "audit": {
+    "single_ef_bvh": {
+      "records": 33306,
+      "detect_records": 13284,
+      "active_records": 13380,
+      "toi_records": 6642,
+      "dcd_used_single_ef": 6642,
+      "ccd_used_single_ef": 6642,
+      "ccd_fallback": 0,
+      "dcd_fallback": 0,
+      "optix_requested_detect_records": 0,
+      "dcd_optix_launch_records": 0,
+      "ccd_optix_launch_records": 0,
+      "optix_builds": 0,
+      "optix_refits": 0,
+      "optix_launches": 0,
+      "optix_execution_errors": 0,
+      "executed_backends": {
+        "cuda": 13284
+      },
+      "nonempty_detect_records": 13229,
+      "nonempty_active_records": 13325,
+      "nonempty_ccd_single_records": 6615,
+      "toi_single_ccd_records": 6642,
+      "nonempty_toi_single_ccd_records": 6615,
+      "mismatches": 0,
+      "unknown_records": 0,
+      "cumulative_calls": {
+        "dcd_single_calls": 6642,
+        "dcd_fallback_calls": 0,
+        "ccd_single_calls": 6642,
+        "ccd_fallback_calls": 0
+      },
+      "toi_compared": true,
+      "toi_pairs_compared": {
+        "PT": 107635018,
+        "EE": 345742141
+      },
+      "toi_value_mismatches": {
+        "PT": 0,
+        "EE": 0
+      },
+      "toi_nonfinite_values": {
+        "PT": 0,
+        "EE": 0
+      },
+      "toi_max_abs_diff": {
+        "PT": 0.0,
+        "EE": 0.0
+      },
+      "toi_max_rel_diff": {
+        "PT": 0.0,
+        "EE": 0.0
+      },
+      "toi_minimum_mismatches": 0,
+      "toi_minimum_max_abs_diff": 0.0,
+      "toi_tolerances": [
+        [
+          1e-12,
+          1e-09
+        ]
+      ],
+      "ccd_single_detect_sequences": 6642,
+      "unverified_ccd_single_detect_sequences": 0
+    },
+    "single_ef_optix": {
+      "records": 33433,
+      "detect_records": 13328,
+      "active_records": 13441,
+      "toi_records": 6664,
+      "dcd_used_single_ef": 6664,
+      "ccd_used_single_ef": 6664,
+      "ccd_fallback": 0,
+      "dcd_fallback": 0,
+      "optix_requested_detect_records": 13328,
+      "dcd_optix_launch_records": 6664,
+      "ccd_optix_launch_records": 6664,
+      "optix_builds": 1001,
+      "optix_refits": 12327,
+      "optix_launches": 13339,
+      "optix_execution_errors": 0,
+      "executed_backends": {
+        "optix": 13328
+      },
+      "nonempty_detect_records": 13273,
+      "nonempty_active_records": 13386,
+      "nonempty_ccd_single_records": 6637,
+      "toi_single_ccd_records": 6664,
+      "nonempty_toi_single_ccd_records": 6637,
+      "mismatches": 0,
+      "unknown_records": 0,
+      "cumulative_calls": {
+        "dcd_single_calls": 6664,
+        "dcd_fallback_calls": 0,
+        "ccd_single_calls": 6664,
+        "ccd_fallback_calls": 0
+      },
+      "toi_compared": true,
+      "toi_pairs_compared": {
+        "PT": 104298260,
+        "EE": 332707817
+      },
+      "toi_value_mismatches": {
+        "PT": 0,
+        "EE": 0
+      },
+      "toi_nonfinite_values": {
+        "PT": 0,
+        "EE": 0
+      },
+      "toi_max_abs_diff": {
+        "PT": 0.0,
+        "EE": 0.0
+      },
+      "toi_max_rel_diff": {
+        "PT": 0.0,
+        "EE": 0.0
+      },
+      "toi_minimum_mismatches": 0,
+      "toi_minimum_max_abs_diff": 0.0,
+      "toi_tolerances": [
+        [
+          1e-12,
+          1e-09
+        ]
+      ],
+      "ccd_single_detect_sequences": 6664,
+      "unverified_ccd_single_detect_sequences": 0
+    }
+  },
+  "independent_final_variability": {
+    "cross_method": {
+      "ball_translation_l2": {
+        "count": 5,
+        "min": 0.2661022971265206,
+        "median": 0.5768034760736847,
+        "max": 0.8917372971492553
+      },
+      "body_transform_frobenius_rms": {
+        "count": 5,
+        "min": 7.973947490109009,
+        "median": 8.307928633410953,
+        "max": 8.48755056647418
+      }
+    },
+    "single_ef_bvh": {
+      "ball_translation_l2": {
+        "count": 10,
+        "min": 0.1827300060990153,
+        "median": 0.37209979366938856,
+        "max": 1.3049849066763028
+      },
+      "body_transform_frobenius_rms": {
+        "count": 10,
+        "min": 7.6077594376047735,
+        "median": 7.985544770416391,
+        "max": 8.169328313316088
+      }
+    },
+    "single_ef_optix": {
+      "ball_translation_l2": {
+        "count": 10,
+        "min": 0.14124646637191687,
+        "median": 0.4480974198422252,
+        "max": 0.7541654482544665
+      },
+      "body_transform_frobenius_rms": {
+        "count": 10,
+        "min": 8.121345306036295,
+        "median": 8.553475719983702,
+        "max": 9.132843633639807
+      }
+    }
+  },
+  "validation": {
+    "tests-focused": {
+      "exit_code": 0,
+      "assertions": 3516,
+      "failures": 0,
+      "skips": 0
+    },
+    "tests-full-core": {
+      "exit_code": 0,
+      "assertions": 1298,
+      "failures": 0,
+      "skips": 0
+    },
+    "tests-full-backend": {
+      "exit_code": 0,
+      "assertions": 29473570,
+      "failures": 0,
+      "skips": 0
+    },
+    "tests-full-sim": {
+      "exit_code": 0,
+      "assertions": 14213,
+      "failures": 0,
+      "skips": 0
+    },
+    "memcheck-final": {
+      "exit_code": 0,
+      "assertions": 3492,
+      "failures": 0,
+      "skips": 0
+    },
+    "synccheck": {
+      "exit_code": 0,
+      "assertions": 3492,
+      "failures": 0,
+      "skips": 0
+    },
+    "python_contracts": {
+      "tests": 19,
+      "exit_code": 0
+    },
+    "fixed_state": {
+      "assertions": 402,
+      "exit_code": 0
+    },
+    "optix_off_schema": {
+      "assertions": 730,
+      "exit_code": 0
+    },
+    "optix_off_cuda_adapter": {
+      "returncode": 0,
+      "seconds": 10.289168485905975,
+      "sdk_environment_unset": true,
+      "sdk_header_dependencies": []
+    }
+  },
+  "profiles": {
+    "single_ef_bvh": {
+      "traversal": [
+        {
+          "kernel_name": "void uipc::backend::cuda::<unnamed>::InfoStacklessBVH_stacklessOther_kernel<uipc::backend::cuda::<unnamed>::EdgeFaceNodePredicate, uipc::backend::cuda::<unnamed>::AcceptEdgeFace>(int, uipc::backend::cuda_tool::CBufferView<Eigen::AlignedBox<float, (int)3>>, uipc::backend::cuda_tool::CBufferView<int>, int, int, uipc::backend::cuda_tool::BufferView<int>, uipc::backend::cuda_tool::BufferView<uipc::backend::cuda::InfoStacklessBVH::Node>, uipc::backend::cuda_tool::CBufferView<int>, uipc::backend::cuda_tool::CBufferView<int>, bool, uipc::backend::cuda_tool::Dense<int>, uipc::backend::cuda_tool::BufferView<Eigen::Matrix<int, (int)2, (int)1, (int)0, (int)2, (int)1>>, T1, T2)",
+          "launches": 1408,
+          "mean_us": 1085.3834069602274,
+          "total_ms": 1528.219837
+        },
+        {
+          "kernel_name": "void uipc::backend::cuda::<unnamed>::InfoStacklessBVH_stacklessOther_kernel<uipc::backend::cuda::bvh_simplex_detail::NodePredicate, uipc::backend::cuda::<unnamed>::AcceptEdgeFace>(int, uipc::backend::cuda_tool::CBufferView<Eigen::AlignedBox<float, (int)3>>, uipc::backend::cuda_tool::CBufferView<int>, int, int, uipc::backend::cuda_tool::BufferView<int>, uipc::backend::cuda_tool::BufferView<uipc::backend::cuda::InfoStacklessBVH::Node>, uipc::backend::cuda_tool::CBufferView<int>, uipc::backend::cuda_tool::CBufferView<int>, bool, uipc::backend::cuda_tool::Dense<int>, uipc::backend::cuda_tool::BufferView<Eigen::Matrix<int, (int)2, (int)1, (int)0, (int)2, (int)1>>, T1, T2)",
+          "launches": 1415,
+          "mean_us": 243.25059434628974,
+          "total_ms": 344.199591
+        }
+      ],
+      "diagnostics": [
+        {
+          "severity": 2,
+          "text": "Not all NVTX events might have been collected."
+        },
+        {
+          "severity": 2,
+          "text": "No NVTX events collected. Does the process use NVTX?"
+        },
+        {
+          "severity": 2,
+          "text": "Not all CUDA events might have been collected."
+        }
+      ],
+      "health_checks": [
+        {
+          "details": {
+            "correlatable_kernel_count": 233376,
+            "match_rate": 1.0,
+            "matched_kernel_count": 233376,
+            "pass_threshold": 0.99,
+            "warn_threshold": 0.9
+          },
+          "name": "runtime_kernel_correlation",
+          "status": "pass",
+          "summary": "233376/233376 correlatable non-graph kernels matched a CUDA runtime call (100.0%)."
+        },
+        {
+          "details": {
+            "missing_required_tables": [
+              "NVTX_EVENTS"
+            ]
+          },
+          "name": "nvtx_coverage",
+          "status": "warn",
+          "summary": "NVTX_EVENTS is not present."
+        },
+        {
+          "details": {
+            "duration_ns": 9992741351,
+            "end_ns": 10000003993,
+            "kernel_count": 302192,
+            "large_gap_threshold_ns": 1000000000,
+            "large_gaps": [],
+            "short_timeline_threshold_ns": 100000000,
+            "start_ns": 7262642
+          },
+          "name": "timeline_health",
+          "status": "pass",
+          "summary": "Kernel timeline duration is 9.99274s across 302192 kernel launch(es)."
+        }
+      ]
+    },
+    "single_ef_optix": {
+      "traversal": [
+        {
+          "kernel_name": "optixLaunch",
+          "launches": 2971,
+          "mean_us": 492.87693503870753,
+          "total_ms": 1464.337374
+        },
+        {
+          "kernel_name": "optixAccelBuild",
+          "launches": 2964,
+          "mean_us": 48.3161798245614,
+          "total_ms": 143.209157
+        },
+        {
+          "kernel_name": "uipc::backend::cuda::<unnamed>::OptixEFBVH_prepare_gas_bounds_kernel(const uipc::backend::cuda::optix_ef::Proxy *, int, const uipc::backend::cuda::<unnamed>::BoundsStats *, uipc::backend::cuda::optix_ef::Transform *, OptixAabb *)",
+          "launches": 2964,
+          "mean_us": 8.960176450742239,
+          "total_ms": 26.557963
+        },
+        {
+          "kernel_name": "uipc::backend::cuda::<unnamed>::OptixEFBVH_prepare_proxies_kernel(uipc::backend::cuda_tool::CBufferView<Eigen::AlignedBox<float, (int)3>>, uipc::backend::cuda_tool::CBufferView<int>, uipc::backend::cuda_tool::CBufferView<int>, uipc::backend::cuda_tool::CBufferView<Eigen::AlignedBox<float, (int)3>>, uipc::backend::cuda_tool::CBufferView<int>, uipc::backend::cuda_tool::CBufferView<int>, uipc::backend::cuda::optix_ef::Proxy *, uipc::backend::cuda::optix_ef::Proxy *, uipc::backend::cuda::<unnamed>::BoundsStats *)",
+          "launches": 2964,
+          "mean_us": 8.16478778677463,
+          "total_ms": 24.200431
+        },
+        {
+          "kernel_name": "uipc::backend::cuda::<unnamed>::OptixEFBVH_prepare_launch_kernel(uipc::backend::cuda::optix_ef::LaunchParams, uipc::backend::cuda::bvh_simplex_detail::NodePredicate, uipc::backend::cuda::optix_ef::LaunchParams *)",
+          "launches": 2971,
+          "mean_us": 0.7159054190508246,
+          "total_ms": 2.126955
+        }
+      ],
+      "diagnostics": [
+        {
+          "severity": 2,
+          "text": "Not all NVTX events might have been collected."
+        },
+        {
+          "severity": 2,
+          "text": "Not all CUDA events might have been collected."
+        }
+      ],
+      "nvtx": [
+        {
+          "calls": 2958,
+          "cpu_scope_mean_us": 22.214405341446923,
+          "cpu_scope_total_ms": 65.710211,
+          "range_name": "optixAccelBuild"
+        },
+        {
+          "calls": 2965,
+          "cpu_scope_mean_us": 13.976098819561551,
+          "cpu_scope_total_ms": 41.439133,
+          "range_name": "optixLaunch"
+        }
+      ],
+      "health_checks": [
+        {
+          "details": {
+            "correlatable_kernel_count": 248735,
+            "match_rate": 0.9998994914266187,
+            "matched_kernel_count": 248710,
+            "pass_threshold": 0.99,
+            "warn_threshold": 0.9
+          },
+          "name": "runtime_kernel_correlation",
+          "status": "pass",
+          "summary": "248710/248735 correlatable non-graph kernels matched a CUDA runtime call (100.0%)."
+        },
+        {
+          "details": {
+            "nvtx_threads": 1,
+            "runtime_threads": 1
+          },
+          "name": "nvtx_coverage",
+          "status": "pass",
+          "summary": "NVTX has 5924 event(s)."
+        },
+        {
+          "details": {
+            "duration_ns": 9992837773,
+            "end_ns": 10000192042,
+            "kernel_count": 325983,
+            "large_gap_threshold_ns": 1000000000,
+            "large_gaps": [],
+            "short_timeline_threshold_ns": 100000000,
+            "start_ns": 7354269
+          },
+          "name": "timeline_health",
+          "status": "pass",
+          "summary": "Kernel timeline duration is 9.99284s across 325983 kernel launch(es)."
+        }
+      ]
+    }
+  },
+  "build_artifacts": {
+    "build/xmake-optix/linux/x86_64/release/uipc_test_backend_cuda": {
+      "bytes": 7583392,
+      "sha256": "85b2541a63c9ce001dc8027c06b354fc327c525f7300da37d8b442818c3a7485"
+    },
+    "build/xmake-optix/linux/x86_64/release/uipc_test_core": {
+      "bytes": 1732024,
+      "sha256": "89db554ccde8c5e5228ddd4f6e164daebe61c4d6c3775935cd5362055f15c15d"
+    },
+    "build/xmake-optix/linux/x86_64/release/uipc_test_sim_case": {
+      "bytes": 3087800,
+      "sha256": "49f7a8146764558100df9218effd55ea17281ba37dda592c3f72e29024311b0c"
+    },
+    "build/xmake-optix/linux/x86_64/release/wrecking_ball": {
+      "bytes": 666984,
+      "sha256": "000ac25f939ce7948b08b2d44edef5f4a7e0a734dd0bff793e0aece4b8098e63"
+    },
+    "build/xmake-optix/linux/x86_64/release/libuipc_backend_cuda.so": {
+      "bytes": 21161320,
+      "sha256": "a7ef4f2cfa9c14cec73810b53bbd4e017f2aff9cf0a821a9b929eb979e994f71"
+    },
+    "build/xmake-optix/.gens/cuda/linux/x86_64/release/optix/ef_device.ptx": {
+      "bytes": 6336,
+      "sha256": "1541b0f6d2099bd39decf69ba2a4ea20e6a82a06925ac935a6ca81c816980b74"
+    },
+    "build/xmake-optix/.xmake/linux/x86_64/xmake.conf": {
+      "bytes": 1049,
+      "sha256": "4f775ccfa6301a1256e57af29e6752cf3c7a132a2ae1133f9d3d0f717266e220"
+    }
+  },
+  "inputs": {
+    "assets/sim_data/tetmesh/cube.msh": {
+      "sha256": "dc5429426f61fcd3d29124f9816dcc8aad1e8c8a2b0ed42894f07ac937a0fb5f",
+      "bytes": 272
+    },
+    "assets/sim_data/tetmesh/ball.msh": {
+      "sha256": "56660588f0e5250a54bf5bc8a938589d8d6638f28ff0a48e3d4a0bbcbbcb27bb",
+      "bytes": 331626
+    },
+    "assets/sim_data/tetmesh/link.msh": {
+      "sha256": "60bfedac862051cf9014d2bb8b02cf2ec5f3ab24d051df30c4de4b323b7c7630",
+      "bytes": 70541
+    },
+    "apps/examples/wrecking_ball/wrecking_ball.json": {
+      "sha256": "c2879227bb72c95109542d8b06ef1a6ba770fa090e4d7b7f0f4812f25c1057a0",
+      "bytes": 87100
+    }
+  },
+  "local_evidence": {
+    "root": "output/optix-single-ef",
+    "throughput": "output/optix-single-ef/benchmark/throughput-20261027T105701.789148Z",
+    "audit": "output/optix-single-ef/benchmark/audit-20261027T105024.424092Z",
+    "diagnostic": "output/optix-single-ef/benchmark/diagnostic-20261027T110443.629774Z"
+  }
+}
