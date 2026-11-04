@@ -143,10 +143,8 @@ Pipeline                                    engine/
     ├── Compute External Force Accel.       external_force/         (conditional)
     ├── Detect DCD Candidates               collision_detection/    (conditional)
     ├── Newton Iteration                    engine/                 (LOOP)
-    │   ├── Detect DCD Candidates           collision_detection/    (iter > 0)
     │   ├── Compute DyTopo Effect           dytopo_effect_system/   (conditional)
     │   │   ├── Assemble Dytopo Effect
-    │   │   ├── Convert Dytopo Matrix
     │   │   └── Distribute Dytopo Effect
     │   ├── Solve Global Linear System      linear_system/
     │   │   ├── Build Linear System

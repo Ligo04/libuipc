@@ -178,7 +178,7 @@ termination logic and tuning guidance.
 
 | Key | Type | Default | Valid domain / choices | Meaning |
 | --- | --- | --- | --- | --- |
-| `line_search/max_iter` | integer | `8` | `>= 1` | Maximum backtracking iterations per Newton step. |
+| `line_search/max_iter` | integer | `8` | `>= 1` | Maximum line-search trials per Newton step, including the refinement after a backtrack (see [Newton and Linear Solvers](scene_configs/newton.md)). |
 | `line_search/report_energy` | flag | `0` | `0`, `1` | Logs the energy contribution of every line-search reporter. Useful for diagnosis, noisy for normal runs. |
 
 ## Contact and friction

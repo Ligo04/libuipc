@@ -16,6 +16,14 @@ Newton iteration assembles the global system, solves it with PCG, limits the
 step for contact, performs backtracking line search, and then asks every active
 tolerance checker whether it converged.
 
+The line search accepts the first trial whose total energy does not exceed the
+energy at the start of the step, halving the step after each rejected trial.
+After a rejection it evaluates one more trial at the minimizer of the cubic
+that interpolates the start energy, the energy slope along the Newton step and
+the rejected and accepted trials, and keeps whichever accepted trial has the
+lower energy. All trials, including this refinement, count toward
+`line_search/max_iter`.
+
 Ordinary termination requires all applicable checks to pass:
 
 1. animation targets have been reached;
