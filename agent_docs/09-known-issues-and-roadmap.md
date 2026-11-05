@@ -1,12 +1,17 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
-The X_square SingleEF method keeps collision detection on the host-controlled
-path. Full-detect/advance Graph capture and workload-specific performance
-evaluation remain separate work; the baseline's PCG Graph path is retained.
-Compute Sanitizer's default extended API mode reports duplicate inline
-buffer/CUB kernel registrations shared by tests and the backend library;
-explicit-API mode reports no errors in the focused SingleEF memory checks.
-See `docs/development/xsquare_single_ef_bvh.md`.
+The X_square SingleEF method now includes contact-cover query pruning,
+concurrent chains, adaptive primitive skins, frame-based topology retention,
+typed stored pairs and the shared warp/FP32/tile judge with mapped readbacks.
+Collision detection remains host-controlled; full-detect/advance Graph
+capture is separate work. The baseline's PCG Graph path is retained.
+
+CUDA 13.5 Release build, GPU candidate/world checks and matching explicit-API
+memcheck passed. Its default extended API mode, racecheck and synccheck are
+unverified. The initial CUDA 13.4 extended run reported duplicate inline
+buffer/CUB registrations shared by tests and the backend. Historical WB/EX88
+measurements do not establish the new integration's performance. See
+`docs/development/xsquare_single_ef_bvh.md` for exact gates and scope.
 
 Issue #498 (2026-10-18): both Python `SoftVertexStitch.create_geometry` overloads
 now retain contiguous `IndexT` arrays at the binding boundary. This fixes freed

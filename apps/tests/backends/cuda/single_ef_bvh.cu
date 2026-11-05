@@ -223,7 +223,7 @@ struct Mesh
 
     bool allowed(IndexT a, IndexT b) const
     {
-        return contact_mask[contacts[a] * 2 + contacts[b]]
+        return contact_mask[contacts[a] * d_contact_mask.extent().w + contacts[b]]
                && subscene_mask[subscenes[a] * 2 + subscenes[b]];
     }
 
@@ -1007,8 +1007,8 @@ TEST_CASE("fat EF cache preserves fresh traversal across changes", "[cuda][singl
         compare(alpha, mesh.radius / 2, Vector3{0, 0, 0.005});
     CHECK(query.refresh_count() == 1);
     CHECK(query.reuse_count() == 4);
-    // Masks participate only in the original PT/EE predicates. Enabling
-    // previously disabled contacts must not require a geometric cache refresh.
+    // Position-free pruning is cached; in-place metadata edits must refresh
+    // before previously disabled pairs can become visible.
     mesh.contact_mask.assign(4, 0);
     compare(0.0, 0.0, Vector3::Zero());
     CHECK(pts.size() == 0);
@@ -1017,22 +1017,22 @@ TEST_CASE("fat EF cache preserves fresh traversal across changes", "[cuda][singl
     mesh.self          = {0, 0};
     mesh.subscene_mask = {1, 0, 0, 1};
     compare(0.5, 0.0, Vector3{0, 0, 0.005});
-    CHECK(query.refresh_count() == 1);
+    CHECK(query.refresh_count() == 3);
     // Same allocation and counts, different ownership.
     std::swap(mesh.edges[0], mesh.edges.back());
     std::reverse(mesh.vertices.begin(), mesh.vertices.end());
     compare(0.0, 0.0, Vector3::Zero());
-    CHECK(query.refresh_count() == 2);
+    CHECK(query.refresh_count() == 4);
     // Escape at either endpoint invalidates the complete fat-proxy cache.
     compare(1.0, 0.0, Vector3{0, 0, 0.5});
-    CHECK(query.refresh_count() == 3);
+    CHECK(query.refresh_count() == 5);
     query.max_chunk_edges = 1;
     compare(0.0, 0.0, Vector3::Zero());
-    CHECK(query.refresh_count() == 4);
+    CHECK(query.refresh_count() == 6);
     // The validation route bypasses containment and reruns the traversal.
     query.force_fresh = true;
     compare(0.0, 0.0, Vector3::Zero());
-    CHECK(query.refresh_count() == 5);
+    CHECK(query.refresh_count() == 7);
 }
 
 TEST_CASE("fat EF cache refreshes after leaf escape and topology growth", "[cuda][single_ef_bvh][ef_cache]")
@@ -1091,4 +1091,217 @@ TEST_CASE("fat EF cache refreshes after leaf escape and topology growth", "[cuda
                              ees));
     CHECK(read_pairs(pts, false) == previous_pt);
     CHECK(read_pairs(ees, true) == previous_ee);
+}
+
+TEST_CASE("SingleEF cover chains retain mixed-CID pairs and canonical EE order",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_cover]")
+{
+    using namespace test_single_ef_bvh;
+    Mesh mesh(12);
+    mesh.add_codimensional_geometry();
+    mesh.d_contact_mask.resize(ct::Extent2D{4, 4});
+    mesh.contact_mask.assign(16, 0);
+    for(IndexT a = 0; a < 2; ++a)
+        for(IndexT b = 2; b < 4; ++b)
+            mesh.contact_mask[a * 4 + b] = mesh.contact_mask[b * 4 + a] = 1;
+    for(SizeT f = 0; f < mesh.triangles.size(); ++f)
+        for(IndexT k = 0; k < 3; ++k)
+            mesh.contacts[mesh.triangles[f][k]] = f < 10 ? 2 + (f + k) % 2 : (f + k) % 2;
+    SingleEFBVHQuery query;
+    query.max_chunk_edges = 1;
+    InfoStacklessBVH              tree, baseline_e, baseline_t;
+    InfoStacklessBVH::QueryBuffer pts, ees, expected_pt, expected_ee;
+    pts.m_pairs.release();
+    pts.reserve(1);
+    ees.m_pairs.release();
+    ees.reserve(1);
+    ct::DeviceBuffer<float4> f32_positions, f32_steps;
+    int                      hooks   = 0;
+    auto                     compare = [&](bool swept = false)
+    {
+        mesh.send();
+        auto pt = mesh.pt();
+        auto ee = mesh.ee();
+        if(swept)
+        {
+            // The production prefix stores d_hat and thickness in the w lanes.
+            std::vector<float4> positions, steps;
+            for(SizeT i = 0; i < mesh.positions.size(); ++i)
+            {
+                const auto p = mesh.positions[i];
+                positions.push_back(make_float4(p.x(), p.y(), p.z(), mesh.dhats[i]));
+                steps.push_back(make_float4(0, 0, 0, mesh.thicknesses[i]));
+            }
+            upload(f32_positions, positions);
+            upload(f32_steps, steps);
+            pt.alpha = ee.alpha = 1.0;
+        }
+        // Fresh traversal deliberately uses the FP64 predicates without the
+        // FP32 inputs, independently checking the certified three-stage queue.
+        baseline_e.build(mesh.edge_bounds.d_boxes,
+                         mesh.edge_bounds.d_bids,
+                         mesh.edge_bounds.d_cids);
+        baseline_t.build(mesh.triangle_bounds.d_boxes,
+                         mesh.triangle_bounds.d_bids,
+                         mesh.triangle_bounds.d_cids);
+        baseline_e.detect(mesh.d_contact_mask.view(), mesh.node(), ee, expected_ee);
+        baseline_t.query(mesh.point_bounds.d_boxes,
+                         mesh.point_bounds.d_bids,
+                         mesh.point_bounds.d_cids,
+                         mesh.d_contact_mask.view(),
+                         mesh.node(),
+                         pt,
+                         expected_pt);
+        if(swept)
+        {
+            pt.f32_positions = ee.f32_positions = f32_positions.cview();
+            pt.f32_steps = ee.f32_steps = f32_steps.cview();
+        }
+        REQUIRE(query.detect(tree,
+                             pt,
+                             ee,
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees,
+                             false,
+                             [&] { ++hooks; }));
+        CHECK(read_pairs(pts, false) == read_pairs(expected_pt, false));
+        CHECK(read_pairs(ees, true) == read_pairs(expected_ee, true));
+        if(!swept)
+        {
+            const auto oracle = mesh.all_pairs();
+            CHECK(read_pairs(pts, false) == oracle.first);
+            CHECK(read_pairs(ees, true) == oracle.second);
+        }
+        CHECK(cudaDeviceSynchronize() == cudaSuccess);
+    };
+    compare();
+    const auto stats = query.statistics();
+    REQUIRE(stats.pt_cover);
+    REQUIRE(stats.ee_cover);
+    CHECK(stats.primary_queries > 0);
+    CHECK(stats.primary_queries < mesh.edges.size());
+    CHECK(stats.reverse_queries > 0);
+    CHECK(stats.stored_pts >= pts.size());
+    CHECK(stats.stored_ees >= ees.size());
+    CHECK_FALSE(read_pairs(ees, true).empty());
+    compare(true);
+    CHECK(query.refresh_count() == 1);
+    CHECK(query.reuse_count() == 1);
+    CHECK(hooks == 2);
+    // Independent in-place edits must invalidate position-free pruning.
+    auto refreshes     = query.refresh_count();
+    mesh.subscene_mask = {1, 0, 0, 1};
+    compare();
+    CHECK(query.refresh_count() == ++refreshes);
+    mesh.subscenes[mesh.triangles[0][0]] ^= 1;
+    compare();
+    CHECK(query.refresh_count() == ++refreshes);
+    mesh.self = {0, 0};
+    compare();
+    CHECK(query.refresh_count() == ++refreshes);
+    mesh.bodies[mesh.triangles[1][0]] ^= 1;
+    compare();
+    CHECK(query.refresh_count() == ++refreshes);
+    mesh.contacts[mesh.triangles[0][0]] = 0;
+    compare();
+    CHECK(query.refresh_count() == ++refreshes);
+    mesh.contact_mask.assign(16, 0);
+    compare();
+    CHECK(query.refresh_count() == ++refreshes);
+    CHECK(pts.size() == 0);
+    CHECK(ees.size() == 0);
+    CHECK(query.statistics().primary_queries == 0);
+    CHECK(query.statistics().reverse_queries == 0);
+}
+
+TEST_CASE("SingleEF skins track primitive escapes and topology retention counts frames",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_skin]")
+{
+    using namespace test_single_ef_bvh;
+    Mesh mesh(10);
+    mesh.contact_mask = {0, 1, 1, 0};
+    for(SizeT f = 0; f < mesh.triangles.size(); ++f)
+        for(IndexT v : mesh.triangles[f])
+            mesh.contacts[v] = f == 9 ? 0 : 1;
+    const auto corner         = mesh.triangles[0];
+    mesh.positions[corner[1]] = Vector3{1, 1, 0};
+    mesh.positions[corner[2]] = Vector3{2, 1, 0};
+    SingleEFBVHQuery              query;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    auto                          run = [&](bool frame = false)
+    {
+        mesh.send();
+        REQUIRE(query.detect(tree,
+                             mesh.pt(),
+                             mesh.ee(),
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees,
+                             frame));
+        const auto expected = mesh.all_pairs();
+        CHECK(read_pairs(pts, false) == expected.first);
+        CHECK(read_pairs(ees, true) == expected.second);
+    };
+    run(true);
+    REQUIRE(query.statistics().pt_cover);
+    REQUIRE(query.statistics().ee_cover);
+    CHECK(query.statistics().cover_skin == 1.0);
+    CHECK(query.statistics().other_skin == 0.01);
+    const auto old_edges = mesh.edge_bounds.boxes,
+               old_faces = mesh.triangle_bounds.boxes;
+    // The owned point leaves its own thin skin while all edge/face boxes
+    // shrink or stay fixed. A containment check on proxy unions misses this.
+    const Float delta = 0.02 * mesh.radius;
+    mesh.positions[corner[0]].x() += delta;
+    mesh.positions[corner[0]].y() += delta;
+    run();
+    auto contained = [](const AABB& current, const AABB& previous)
+    {
+        return (previous.min().array() <= current.min().array()).all()
+               && (current.max().array() <= previous.max().array()).all();
+    };
+    for(SizeT i = 0; i < old_edges.size(); ++i)
+        CHECK(contained(mesh.edge_bounds.boxes[i], old_edges[i]));
+    for(SizeT i = 0; i < old_faces.size(); ++i)
+        CHECK(contained(mesh.triangle_bounds.boxes[i], old_faces[i]));
+    CHECK(query.refresh_count() == 2);
+    CHECK(query.statistics().other_skin == 1.0);
+    for(IndexT v : mesh.triangles[9])
+        mesh.positions[v].x() += 2 * mesh.radius;
+    run();
+    CHECK(query.refresh_count() == 3);
+    CHECK(query.statistics().cover_skin == 2.0);
+    run(true);  // Frame 2 carries the previous frame's escapes.
+    CHECK(query.statistics().cover_skin == 2.0);
+    CHECK(query.statistics().other_skin == 1.0);
+    const auto before_lower_escape = query.refresh_count();
+    for(IndexT v : mesh.triangles[9])
+        mesh.positions[v].x() += 1.5 * mesh.radius;
+    run();  // Inside the full 2x skin but outside the next-lower 1x skin.
+    CHECK(query.refresh_count() == before_lower_escape);
+    run(true);  // Frame 3 must retain the thick skin after that successful reuse.
+    CHECK(query.statistics().cover_skin == 2.0);
+    CHECK(query.statistics().other_skin == 0.01);
+    run(true);  // Frame 4 had no escapes, so the small skins return.
+    CHECK(query.statistics().cover_skin == 1.0);
+    CHECK(query.statistics().other_skin == 0.01);
+    query.force_fresh = true;
+    for(int i = 0; i < 4; ++i)
+        run();
+    query.force_fresh = false;
+    CHECK(query.statistics().topology_builds == 1);
+    for(int frame = 5; frame < 8; ++frame)
+        run(true);
+    CHECK(query.statistics().topology_builds == 1);
+    run(true);
+    CHECK(query.statistics().topology_builds == 2);
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
 }

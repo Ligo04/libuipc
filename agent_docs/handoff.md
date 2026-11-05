@@ -1,13 +1,21 @@
 # Handoff — Current State of the Repo
 
-X_square SingleEF migration (2026-11-05): branch
-`codex/xsquare-single-ef-bvh` starts at exact `6e3386d1` and adds the
-`single_ef_bvh` selector with ownership expansion, conservative fat proxy
-caching and the shared active/TOI pipeline. Source worktrees remain separate.
-See `docs/development/xsquare_single_ef_bvh.md` for scope and validation.
-Release/CUDA 13.4 build and 15 related GPU cases (842,588 assertions) passed.
-The focused explicit-API memcheck passed; default extended mode retains nine
-duplicate header-kernel registration diagnostics. Performance is unmeasured.
+X_square SingleEF query integration (2026-11-05): branch
+`codex/xsquare-single-ef-bvh` starts at exact `6e3386d1`; migration checkpoint
+is `4539bdff`. SingleEF now uses compact contact-cover queries on two streams,
+per-primitive adaptive skins, frame-based topology retention, position-free
+PT/EE caching, and the shared warp/FP32/tile judge with mapped readbacks.
+Mixed contact IDs and in-place topology/metadata edits are covered. The
+active/pending-active and TOI functions retain the migration implementation.
+
+Release / CUDA 13.5.37 / Toolkit CCCL 3.5 build passed with 16 jobs under the
+32 GiB/no-swap scope. Audited GPU tests passed 17 cases / 842,782 assertions;
+normal cache tests passed 11 / 519,790; forced copy readbacks passed 2 / 194.
+Matching explicit-API memcheck passed 6 cases / 518,296 assertions with zero
+errors. CMake/Python rebuilds and CUDA 13.5 extended/race/sync sanitizers remain
+unverified. Details: `docs/development/xsquare_single_ef_bvh.md`; evidence:
+`output/single-ef-query-optimization-20261105/`. Earlier CUDA 13.4 WB/EX88
+results are historical; the query integration needs its own matched cohort.
 
 > **Issue #498 Python stitch indices (2026-10-18)**: both
 > `SoftVertexStitch.create_geometry` bindings now accept contiguous `IndexT`

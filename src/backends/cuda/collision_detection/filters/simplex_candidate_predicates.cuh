@@ -456,4 +456,44 @@ struct PointTrianglePredicate
 *               Contact-cover queries
 ****************************************************/
 
+// A query edge of S_E meets leaf edge j. A leaf outside S_E is reached only
+// from this side; a pair inside S_E is reached from both edges and kept
+// from the smaller index. The pair is then judged exactly as the self-join
+// judges it, as (min, max).
+struct InfoStacklessBVHSimplexTrajectoryFilter_detect_cover_AllE_AllE_pred
+{
+    cuda_tool::CBufferView<IndexT> query_edges;
+    cuda_tool::CBufferView<IndexT> edge_is_query;
+    EdgeEdgePredicate              pred;
+
+    __device__ __forceinline__ bool operator()(InfoStacklessBVH::LeafPredInfo info) const
+    {
+        IndexT i = query_edges(info.i);
+        IndexT j = info.j;
+        if(!pred.skip_position_free && (i == j || (j < i && edge_is_query(j))))
+            return false;
+        if(i < j)
+            return pred(InfoStacklessBVH::LeafPredInfo{
+                i, j, info.bid_i, info.cid_i, info.bid_j, info.cid_j});
+        return pred(InfoStacklessBVH::LeafPredInfo{
+            j, i, info.bid_j, info.cid_j, info.bid_i, info.cid_i});
+    }
+};
+
+// Points map back from their compacted query list and, in the cover tree,
+// triangles from its compacted leaves.
+struct InfoStacklessBVHSimplexTrajectoryFilter_detect_cover_AllP_AllT_pred
+{
+    cuda_tool::CBufferView<IndexT> query_points;
+    cuda_tool::CBufferView<IndexT> leaf_triangles;  // empty: leaves are triangle ids
+    PointTrianglePredicate pred;
+
+    __device__ __forceinline__ bool operator()(InfoStacklessBVH::LeafPredInfo info) const
+    {
+        info.i = query_points(info.i);
+        if(leaf_triangles.size() > 0)
+            info.j = leaf_triangles(info.j);
+        return pred(info);
+    }
+};
 }  // namespace uipc::backend::cuda::bvh_simplex_detail
