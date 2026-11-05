@@ -47,8 +47,8 @@ judges those lists and never repeats ownership expansion.
 
 `bvh_pair_judge` is shared with InfoStackless: whole-warp EE evaluation,
 certified FP32 screen/gap/finish queues for swept queries, a one-pass tile
-scan and kept-tile scatter. Direct mapped count readbacks retain the copy
-fallback. Validation and both judge streams precede one host wait on the
+scan and kept-tile scatter. Validation atomics and geometry gates use device scratch; only final flags
+and counts are published to mapped readbacks, retaining the copy fallback. Validation and both judge streams precede one host wait on the
 normal cache-reuse path, and the detection hook runs before that wait.
 A topology/metadata invalidation gate suppresses geometry reads until the
 cache is rebuilt. Unsupported topology preserves the last published output
@@ -141,7 +141,9 @@ active/pending-active and TOI functions are unchanged by this integration.
 
 The CUDA 13.5 default extended API mode, racecheck, synccheck, a CMake build,
 and a Python runtime rebuild were not run. Do not extend the explicit-mode
-memcheck result to those gates. Current build logs, source/runtime hashes,
+memcheck result to those gates. The follow-up device-control correction passed the same 17 audited, 11 normal,
+2 copy-fallback and 6 memcheck cases after rebuilding under the global build
+lock. Current build logs, source/runtime hashes,
 commands and test results are archived in
 `output/single-ef-query-optimization-20261105/`. Earlier WB/EX88 measurements
 remain in `agent_docs/performance/2026-11-05-xsquare-wb-ex88.md`; they use the

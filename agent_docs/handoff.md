@@ -15,7 +15,9 @@ Matching explicit-API memcheck passed 6 cases / 518,296 assertions with zero
 errors. CMake/Python rebuilds and CUDA 13.5 extended/race/sync sanitizers remain
 unverified. Details: `docs/development/xsquare_single_ef_bvh.md`; evidence:
 `output/single-ef-query-optimization-20261105/`. Earlier CUDA 13.4 WB/EX88
-results are historical; the query integration needs its own matched cohort.
+results are historical; the query integration needs its own matched cohort. A follow-up correction
+keeps validation atomics and judge gates in device scratch and publishes only
+final flags to mapped host memory; the same GPU/copy/memcheck gates pass.
 
 > **Issue #498 Python stitch indices (2026-10-18)**: both
 > `SoftVertexStitch.create_geometry` bindings now accept contiguous `IndexT`

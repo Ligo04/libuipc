@@ -408,6 +408,14 @@ namespace
     {
         *out = *count;
     }
+    // Validation and geometry gates use device memory. Only the final six
+    // flags are published to the mapped readback after the producers finish.
+    __global__ void publish_control(CBufferView<IndexT> control, IndexT* out)
+    {
+        const int i = threadIdx.x;
+        if(i < control.size())
+            out[i] = control(i);
+    }
     __global__ void count_candidates(CBufferView<Vector2i>  ef,
                                      CBufferView<IndexT>    query_ids,
                                      CBufferView<Vector2i>  owned_vertices,
@@ -567,6 +575,7 @@ struct SingleEFBVHQuery::Impl
     DeviceBuffer<IndexT> m_judge_flags, m_tile_counts, m_tile_offsets,
         m_dummy_counts, m_ee_queue_counts;
     DeviceBuffer<int4>     m_ee_queue;
+    DeviceBuffer<IndexT>   m_control_device;
     ReadbackBuffer<IndexT> m_control, m_counts, m_query_sizes, m_ef_counts;
     ReadbackBuffer<U64>    m_raw_counts;
     cudaEvent_t            m_ready    = nullptr;
@@ -585,6 +594,7 @@ struct SingleEFBVHQuery::Impl
         int device = 0;
         CUDA_TOOL_CHECK(cudaGetDevice(&device));
         CUDA_TOOL_CHECK(cudaDeviceGetAttribute(&m_sm_count, cudaDevAttrMultiProcessorCount, device));
+        m_control_device.resize(6);
         m_control.resize(6);
         m_counts.resize(8);
         m_query_sizes.resize(2);
@@ -1123,7 +1133,7 @@ void SingleEFBVHQuery::Impl::judge(InfoStacklessBVH&              tree,
     auto pt_pred               = pt_input;
     ee_pred.skip_position_free = true;
     pt_pred.skip_position_free = true;
-    const IndexT* invalid      = gated ? m_control.device_data() : nullptr;
+    const IndexT* invalid      = gated ? m_control_device.data() : nullptr;
     // Both chains follow prefix + validation, and join before the shared scan.
     const auto ee_stream = m_chains[0].side.fork();
     const auto pt_stream = m_chains[1].side.fork();
@@ -1167,11 +1177,12 @@ void SingleEFBVHQuery::Impl::judge(InfoStacklessBVH&              tree,
     compact(lists,
             m_tile_counts.cview(),
             m_tile_offsets.view(),
-            CBufferView<IndexT>{m_control.device_data(), 3},
+            m_control_device.cview(0, 3),
             BufferView<IndexT>{m_counts.device_data(), 8},
             m_ee_queue_counts.data(),
             tiles,
             m_sm_count);
+    publish_control<<<1, 32>>>(m_control_device.cview(), m_control.device_data());
     m_control.enqueue_copy();
     m_counts.enqueue_copy();
     CUDA_TOOL_CHECK(cudaEventRecord(m_ready, default_stream()));
@@ -1269,8 +1280,7 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
                                0,
                                0,
                                0};
-    for(int i = 0; i < 6; ++i)
-        store_value(s.m_control.device_data() + i, initial[i]);
+    s.m_control_device.view().copy_from(initial);
     Validation validation{
         pt.Vs,
         s.m_previous_vertices.cview(),
@@ -1291,7 +1301,7 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
         std::max({metadata.work, pt.Vs.size(), ee.Es.size(), pt.Fs.size()});
     if(work)
         validate_cache<<<(work + Threads - 1) / Threads, Threads>>>(
-            validation, s.m_control.device_data(), work);
+            validation, s.m_control_device.data(), work);
     if(!known_refresh)
     {
         s.judge(tree, pt, ee, points, edges, faces, pts, ees, true, hook);
@@ -1305,6 +1315,7 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
     }
     else
     {
+        publish_control<<<1, 32>>>(s.m_control_device.cview(), s.m_control.device_data());
         s.m_control.enqueue_copy();
         s.wait();
     }
@@ -1337,8 +1348,8 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
                                          std::max(SizeT{1}, max_chunk_edges),
                                          PairLimit / s.m_owned_edges.size()});
     s.refresh(tree, pt, ee, node, points, edges, faces, actual_chunk, !topology_changed && !metadata_changed);
-    for(int i = 0; i < 3; ++i)
-        store_value(s.m_control.device_data() + i, IndexT{0});
+    CUDA_TOOL_CHECK(cudaMemsetAsync(
+        s.m_control_device.data(), 0, 3 * sizeof(IndexT), default_stream()));
     s.judge(tree, pt, ee, points, edges, faces, pts, ees, false, hook);
     return true;
 }
