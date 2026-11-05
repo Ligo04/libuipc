@@ -219,5 +219,10 @@ its build/GPU/sanitizer logs. `memcheck-old-output-directory.log` accidentally
 checked the unchanged historical output and is excluded; the current ten-case
 memcheck was rerun against the verified actual output directory. CMake/Python
 rebuilds, extended API sanitizer, racecheck and synccheck remain unverified.
-Previous 1000-frame results describe the previous version; follow-up performance
-is recorded separately when available.
+Previous 1000-frame results describe the previous version. The completed
+[follow-up WB/EX88 cohort](../../agent_docs/performance/2026-11-05-singleef-query-followup-wb-ex88.md)
+compares frozen `9ba6aa88` and `d4201933` runtimes, each with one 1000-frame
+formal/profile process per scene. Formal frame time is higher in this group
+while Newton/PCG work increases. Candidate-scope time per call is lower, but
+call counts and trajectories differ. No stable whole-frame or equal-quality
+speedup is established; repeatability is unassessed.

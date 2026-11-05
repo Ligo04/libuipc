@@ -14,8 +14,14 @@ CUDA 13.5 / Toolkit CCCL 3.5 builds passed under the global flock, 16-job,
 Audited GPU tests: 21 cases / 842,883 assertions; normal: 14 / 519,887;
 forced copy: 6 / 295; matching explicit-API memcheck: 10 / 518,397, zero errors.
 Contracts: 13. Evidence: `output/single-ef-query-followup-20261105/`.
-Current follow-up throughput has not yet been measured; older WB/EX88 numbers
-below remain historical. See `docs/development/xsquare_single_ef_bvh.md`.
+Code is committed/pushed as `d4201933`. A separate frozen before/after cohort
+completed eight 1000-frame formal/profile processes with unchanged fingerprints
+and no sampled foreign CUDA client. Formal WB is 8.939 -> 9.188 ms/frame;
+EX88 is 30.256 -> 31.411 ms/frame. Newton/PCG work and trajectories differ;
+EX88 formal negative-J frames are 5 -> 4, profile 5 -> 10. No stable whole-frame
+or equal-quality speedup is established. Repeatability is unassessed. Details:
+`performance/2026-11-05-singleef-query-followup-wb-ex88.md`; older results below remain historical.
+See `docs/development/xsquare_single_ef_bvh.md`.
 
 X_square SingleEF query integration (2026-11-05): branch
 `codex/xsquare-single-ef-bvh` starts at exact `6e3386d1`; migration checkpoint
