@@ -148,3 +148,8 @@ commands and test results are archived in
 `output/single-ef-query-optimization-20261105/`. Earlier WB/EX88 measurements
 remain in `agent_docs/performance/2026-11-05-xsquare-wb-ex88.md`; they use the
 previous CUDA 13.4 implementation and do not establish current performance.
+
+The source-matched CUDA 13.5 WB/EX88 cohort at `9ba6aa88` is recorded in
+[the query-integration performance report](../../agent_docs/performance/2026-11-05-xsquare-query-cuda135-wb-ex88.md).
+Its single-episode timing reductions are observations with changed solver
+work/trajectories and EX88 negative-J differences, not equal-quality speedup.

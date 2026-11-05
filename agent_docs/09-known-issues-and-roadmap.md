@@ -9,8 +9,11 @@ capture is separate work. The baseline's PCG Graph path is retained.
 CUDA 13.5 Release build, GPU candidate/world checks and matching explicit-API
 memcheck passed. Its default extended API mode, racecheck and synccheck are
 unverified. The initial CUDA 13.4 extended run reported duplicate inline
-buffer/CUB registrations shared by tests and the backend. Historical WB/EX88
-measurements do not establish the new integration's performance. See
+buffer/CUB registrations shared by tests and the backend. The CUDA 13.5 WB/EX88 cohort completed one 1000-frame formal/profile pair per
+scene: observed SingleEF times are lower, but solver work/trajectories differ
+and EX88 has four versus five negative-J frames. Repeatability and equal-quality
+speedup remain unconfirmed. See
+`performance/2026-11-05-xsquare-query-cuda135-wb-ex88.md`. See
 `docs/development/xsquare_single_ef_bvh.md` for exact gates and scope.
 
 Issue #498 (2026-10-18): both Python `SoftVertexStitch.create_geometry` overloads

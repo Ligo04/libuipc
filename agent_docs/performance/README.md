@@ -26,6 +26,7 @@ when iteration counts change. Report both and state which is the primary signal.
 | [2026-08-30 case2 assembly roll-up](2026-08-30-case2-assembly-rollup.md) | Accepted with caveats | Buffer growth, collision readback, line-search aggregation, contact/FEM assembly, rejected split |
 | [2026-11-05 X_square SingleEF](2026-11-05-xsquare-single-ef-bvh.md) | Inconclusive | One 1000-frame native wrecking-ball A/B pair and separate synchronous Timer diagnostics |
 | [2026-11-05 X_square WB and EX88](2026-11-05-xsquare-wb-ex88.md) | Inconclusive | Sample-6 WB and sample-88 FEM/cloth, 1000-frame A/B and separate Timer diagnostics, with inversion and trajectory limits |
+| [2026-11-05 SingleEF query integration / CUDA 13.5](2026-11-05-xsquare-query-cuda135-wb-ex88.md) | Single-group observation | WB/EX88 1000-frame A/B and independent profile; iteration/trajectory and negative-J limits |
 | [`handoff.md`](../handoff.md) | Historical source | Earlier MAS, CUDA graph, CUB, DyTopo, lifecycle, and detailed command history |
 
 ## Required content

@@ -15,9 +15,17 @@ Matching explicit-API memcheck passed 6 cases / 518,296 assertions with zero
 errors. CMake/Python rebuilds and CUDA 13.5 extended/race/sync sanitizers remain
 unverified. Details: `docs/development/xsquare_single_ef_bvh.md`; evidence:
 `output/single-ef-query-optimization-20261105/`. Earlier CUDA 13.4 WB/EX88
-results are historical; the query integration needs its own matched cohort. A follow-up correction
-keeps validation atomics and judge gates in device scratch and publishes only
-final flags to mapped host memory; the same GPU/copy/memcheck gates pass.
+results are historical. The completed CUDA 13.5 cohort at `9ba6aa88` has one
+formal A/B pair and one independent profile pair per scene (all 1000 frames).
+Measured frames 31–1000: WB 10.008 -> 9.499 ms, EX88 34.558 -> 33.084 ms,
+with changed solver work/trajectories and EX88 negative-J frames (Info 4,
+SingleEF 5). No foreign CUDA process was sampled in the final eight runs;
+repeatability and equal-quality speedup remain unconfirmed. The preliminary
+`555efbee` cohort retains a contended WB baseline and a blocked last profile.
+The follow-up correction keeps validation atomics and judge gates in device
+scratch, publishing only final flags to mapped host memory; all stated
+GPU/copy/memcheck gates pass. See
+`agent_docs/performance/2026-11-05-xsquare-query-cuda135-wb-ex88.md`.
 
 > **Issue #498 Python stitch indices (2026-10-18)**: both
 > `SoftVertexStitch.create_geometry` bindings now accept contiguous `IndexT`
