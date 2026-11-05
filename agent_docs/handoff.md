@@ -1,5 +1,27 @@
 # Handoff — Current State of the Repo
 
+Same-state simplex-query harness (2026-11-05): an opt-in production trace
+preserves every real detect request, physical frame/Newton labels, raw P/dx and
+exact metadata epochs. Four persistent replay states (Info/SingleEF,
+natural/forced-refresh) match an independent unpruned direct-query oracle by
+PP/PE/EE/PT candidate multiset. Timed replays exclude uploads and comparisons,
+include the production prefix/internal growth, and record effective EF state
+and refresh/reuse counters. The runner freezes native dependencies and inputs,
+checks full 1000-frame driver completion separately, and keeps formal and
+independent CUDA profiles separate. Measurements have not yet been collected
+for this harness. Contract: `docs/development/simplex_query_benchmark.md`.
+
+CUDA 13.5 / Toolkit CCCL 3.5 build passed under the global lock, 16 jobs and
+32 GiB/no-swap scope. Audited GPU gate: 26 cases / 521,767 assertions. New
+explicit-API memcheck gate: 9 / 941, zero errors. Runner CPU gates: 22;
+repository/archive checks: 15. Format/diff checks passed. A real tetrahedron
+plus implicit-ground capture failed before the fix because the trace validator
+checked unused global body IDs against simplex-only tables. Validation now
+checks topology-referenced IDs and preserves unused raw metadata; both real
+methods and focused malformed/unused-ID regressions pass. Evidence:
+`output/single-ef-same-state-20261105/`. CMake/Python rebuilds and extended,
+race/sync sanitizers were not run. Historical results below remain unchanged.
+
 Shared simplex-query performance follow-up (2026-11-05): one formal and one
 independent Timer process per current method/scene, eight 1000-frame processes.
 Measurement HEAD `db34e286` is clean and code is `c70878f5`; the existing

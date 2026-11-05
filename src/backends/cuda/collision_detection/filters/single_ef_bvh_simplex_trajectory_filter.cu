@@ -16,7 +16,7 @@ void SingleEFBVHSimplexTrajectoryFilter::do_build(BuildInfo&)
 
 void SingleEFBVHSimplexTrajectoryFilter::do_detect(DetectInfo& info)
 {
-    m_impl.detect(info);
+    m_impl.detect(info, {engine().frame(), engine().newton_iter()});
     if(m_impl.check_stored_pairs)
         m_impl.check_detect(info);
 }

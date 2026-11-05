@@ -1,5 +1,16 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
+Same-state query comparison (2026-11-05): production capture, streaming replay,
+independent direct-query oracle and frozen WB/EX88 orchestration are implemented.
+The harness separates query work from trajectory/Newton/PCG differences and
+labels effective EF state, refresh/reuse and forced-refresh experiments.
+CUDA 13.5 build, audited GPU 26 / 521,767, explicit-API memcheck 9 / 941
+(zero errors), runner CPU 22 and repository/archive 15 checks pass. Production
+capture also covers unused implicit-geometry metadata and audit exclusion.
+The 1000-frame same-state measurements and independent profiles remain pending;
+no new speedup is established. See `docs/development/simplex_query_benchmark.md`
+and `output/single-ef-same-state-20261105/`. Historical entries follow.
+
 Shared simplex-query performance follow-up (2026-11-05): one formal and one
 independent Timer process per current method/scene, eight 1000-frame processes.
 Measurement HEAD `db34e286` is clean and code is `c70878f5`; the existing

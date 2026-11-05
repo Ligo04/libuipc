@@ -22,6 +22,10 @@ candidate caches and fat-box/frame policy, and schedules the common judge.
 See [the common query contract](simplex_bvh_queries.md) for inputs, IDs,
 PP/PE handling, prefix checks, streams and validation status.
 
+The [same-state benchmark](simplex_query_benchmark.md) captures every production
+query and replays both methods on identical requests with an independent direct
+oracle. It measures query cost separately from trajectory and solver work.
+
 SingleEF retains its ownership-based candidate-generation strategy. One real
 edge/face proxy tree supplies PT and EE pairs. Every surface point has one
 query owner, and every edge has one leaf owner. Isolated points become

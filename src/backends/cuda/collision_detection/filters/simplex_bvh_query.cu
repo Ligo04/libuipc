@@ -1821,7 +1821,10 @@ SizeT SimplexBVHQuery::standalone_edge_count() const noexcept
 }
 SimplexBVHQuery::Statistics SimplexBVHQuery::statistics() const noexcept
 {
-    return m_impl->m_stats;
+    auto stats = m_impl->m_stats;
+    stats.single_ef_active =
+        m_impl->m_cache_valid && m_impl->m_tree_ready && m_impl->m_use_ef;
+    return stats;
 }
 
 bool SimplexBVHQuery::detect(InfoStacklessBVH&              tree,

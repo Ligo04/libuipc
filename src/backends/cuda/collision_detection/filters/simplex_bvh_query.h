@@ -41,6 +41,8 @@ class SimplexBVHQuery
         SizeT ef_pairs = 0, refresh_waits = 0, ef_retries = 0, typed_refills = 0;
         SizeT cross_frame_reuses = 0, fused_prefixes = 0;
         bool  pt_cover = false, ee_cover = false;
+        // Effective path, including production's unsupported-EF direct fallback.
+        bool  single_ef_active = false;
         Float cover_skin = 1.0, other_skin = 0.01;
     };
 

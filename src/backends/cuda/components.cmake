@@ -54,7 +54,7 @@ set(UIPC_CUDA_RUNTIME_SOURCES
 file(GLOB_RECURSE UIPC_CUDA_AFFINE_BODY_SOURCES CONFIGURE_DEPENDS
     "affine_body/*.cu" "affine_body/*.cpp")
 
-# Includes the shared simplex BVH query owner and both refresh strategies.
+# Includes the shared query owner, both refresh strategies and opt-in query traces.
 file(GLOB_RECURSE UIPC_CUDA_COLLISION_SOURCES CONFIGURE_DEPENDS
     "collision_detection/*.cu" "collision_detection/*.cpp")
 set(UIPC_CUDA_COLLISION_LEGACY_SOURCES

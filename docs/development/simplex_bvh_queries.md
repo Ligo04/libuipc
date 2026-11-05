@@ -135,7 +135,23 @@ cooperative query output with the per-lane reference, preserves the output used
 by the simulation and records JSON audit evidence. None of these audit modes
 belongs in formal throughput measurements.
 
+## Same-state capture and replay
+
+`UIPC_SIMPLEX_QUERY_TRACE_OUTPUT` optionally captures production requests before
+normal detection, with physical frame/Newton labels independent of the topology
+reuse flag. Recursive audits are excluded. The binary codec and native replay
+test preserve exact geometry, metadata, request ordering and cache history.
+See [the benchmark contract](simplex_query_benchmark.md) for independent direct
+oracle checks and separate natural-cache/forced-refresh measurements.
+
+`Statistics::single_ef_active` is a read-only diagnostic of EF-backed state versus
+direct fallback. Pair it with a refresh delta to identify actual EF traversal;
+cache hits run the common judge without tree queries.
+
 ## Validation
+
+These are the shared-query algorithm gates. The later capture/replay harness
+has separate [validation evidence](simplex_query_benchmark.md#harness-validation-2026-11-05).
 
 Verified on RTX 5090 with CUDA 13.5 / Toolkit CCCL 3.5 and XMake Release,
 using the global build lock, 16 jobs and a 32 GiB/no-swap scope. The native backend

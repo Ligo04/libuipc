@@ -1210,11 +1210,13 @@ void BVHSimplexPipeline::init()
     // require the same candidate multisets.
     auto check_stored  = std::getenv("UIPC_CHECK_STORED_PAIRS");
     check_stored_pairs = check_stored && std::string_view{check_stored} == "1";
+    if(const auto* path = std::getenv("UIPC_SIMPLEX_QUERY_TRACE_OUTPUT"); path && *path)
+        query_trace = std::make_unique<simplex_query_trace::Writer>(path);
 }
 
 void InfoStacklessBVHSimplexTrajectoryFilter::do_detect(DetectInfo& info)
 {
-    m_impl.detect(info);
+    m_impl.detect(info, {engine().frame(), engine().newton_iter()});
     if(m_impl.check_stored_pairs)
         m_impl.check_detect(info);
 }
@@ -1318,8 +1320,10 @@ void BVHSimplexPipeline::check_detect(DetectInfo& info)
     }
 }
 
-void BVHSimplexPipeline::detect(DetectInfo& info)
+void BVHSimplexPipeline::detect(DetectInfo& info, simplex_query_trace::Site site)
 {
+    if(query_trace && !direct_queries)
+        query_trace->capture(info, site);
     auto alpha                = info.alpha();
     auto Ps                   = info.positions();
     auto dxs                  = info.displacements();

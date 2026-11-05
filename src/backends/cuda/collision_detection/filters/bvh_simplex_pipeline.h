@@ -36,6 +36,7 @@
 #include <collision_detection/simplex_trajectory_filter.h>
 #include <array>
 #include <collision_detection/filters/simplex_bvh_query.h>
+#include <collision_detection/filters/simplex_query_trace.h>
 
 namespace uipc::backend::cuda
 {
@@ -46,10 +47,11 @@ class BVHSimplexPipeline
     using FilterActiveInfo = SimplexTrajectoryFilter::FilterActiveInfo;
     using FilterTOIInfo    = SimplexTrajectoryFilter::FilterTOIInfo;
     using PendingActiveSet = SimplexTrajectoryFilter::PendingActiveSet;
-    void            init();
-    bool            single_ef = false;
-    SimplexBVHQuery simplex_query;
-    void            detect(DetectInfo& info);
+    void                                         init();
+    bool                                         single_ef = false;
+    SimplexBVHQuery                              simplex_query;
+    std::unique_ptr<simplex_query_trace::Writer> query_trace;
+    void detect(DetectInfo& info, simplex_query_trace::Site site = {});
     // Repeat the last detect with a fresh common query (UIPC_CHECK_STORED_PAIRS=1);
     // throws unless the candidate multisets match.
     void check_detect(DetectInfo& info);
