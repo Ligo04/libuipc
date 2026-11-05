@@ -143,6 +143,8 @@ reuse flag. Recursive audits are excluded. The binary codec and native replay
 test preserve exact geometry, metadata, request ordering and cache history.
 See [the benchmark contract](simplex_query_benchmark.md) for independent direct
 oracle checks and separate natural-cache/forced-refresh measurements.
+The [WB/EX88 same-state evidence](../../agent_docs/performance/2026-11-05-singleef-same-state-wb-ex88.md)
+records one completed 1000-frame input cohort with identical candidate multisets.
 
 `Statistics::single_ef_active` is a read-only diagnostic of EF-backed state versus
 direct fallback. Pair it with a refresh delta to identify actual EF traversal;

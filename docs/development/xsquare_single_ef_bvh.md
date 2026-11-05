@@ -25,6 +25,11 @@ PP/PE handling, prefix checks, streams and validation status.
 The [same-state benchmark](simplex_query_benchmark.md) captures every production
 query and replays both methods on identical requests with an independent direct
 oracle. It measures query cost separately from trajectory and solver work.
+The completed `ba46a497` cohort observes natural-query time reductions of
+23.97% WB / 14.18% EX88 with matching refresh/reuse decisions and candidate
+multisets. Cache-hit and cold behavior do not show a general improvement;
+whole-scene acceleration and repeatability remain unestablished. See
+[the complete comparison](../../agent_docs/performance/2026-11-05-singleef-same-state-wb-ex88.md).
 
 SingleEF retains its ownership-based candidate-generation strategy. One real
 edge/face proxy tree supplies PT and EE pairs. Every surface point has one
@@ -77,7 +82,8 @@ build, 24-case candidate/active/BVH audit, 17-case normal suite, 8-case copy
 fallback and 13-case explicit-API memcheck with zero errors. See
 [the common query contract](simplex_bvh_queries.md#validation) for assertion
 counts, source/runtime fingerprints and reproducible commands.
-No new performance result is established for this unification.
+The later same-state query cohort above measures this common-owner revision;
+the original algorithm validation does not itself establish a speedup.
 
 The dated sections below describe the earlier migration/integration/follow-up
 revisions and retain their original evidence. They do not validate the new

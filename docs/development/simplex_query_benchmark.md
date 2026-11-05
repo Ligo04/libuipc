@@ -15,6 +15,17 @@ more than one frame-start request within a frame. Source frames 1-30 warm state;
 
 ## Run a frozen cohort
 
+The recorded cohort at `ba46a497` completed WB/EX88 1000-frame input captures,
+four-state oracle verification of all 7,284 requests, eight formal and eight
+independent profile processes. Natural query means are WB 0.484023 -> 0.368010
+ms and EX88 1.198258 -> 1.028402 ms (Info -> SingleEF). Forced-refresh
+reductions are 21.75% / 16.16%. Refresh/reuse decisions and stored/output counts
+match; effective EF fallback is zero. Natural reuse bins are slightly slower,
+cold observations are mixed, and repeatability remains unassessed. The contended
+EX88 forced-refresh Info profile is retained separately from clean formal data.
+See [the complete evidence](../../agent_docs/performance/2026-11-05-singleef-same-state-wb-ex88.md)
+for the query-only scope, all results, profile activity certificates and limits.
+
 Build and validate the native CUDA test executable first, following the global
 build lock, CUDA 13.5, 16-job and 32 GiB/no-swap rules. The runner never builds,
 installs a package, edits a scene, or calls `xmake run`. Commit source changes

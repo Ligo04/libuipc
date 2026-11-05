@@ -8,8 +8,16 @@ PP/PE/EE/PT candidate multiset. Timed replays exclude uploads and comparisons,
 include the production prefix/internal growth, and record effective EF state
 and refresh/reuse counters. The runner freezes native dependencies and inputs,
 checks full 1000-frame driver completion separately, and keeps formal and
-independent CUDA profiles separate. Measurements have not yet been collected
-for this harness. Contract: `docs/development/simplex_query_benchmark.md`.
+independent CUDA profiles separate. The frozen cohort at `ba46a497` completed
+all 20 processes. All 7,284 input requests pass four-state independent-oracle
+checks. Natural query means (Info -> SingleEF): WB 0.484023 -> 0.368010 ms
+(-23.97%), EX88 1.198258 -> 1.028402 ms (-14.18%). Forced-refresh reductions
+are 21.75% / 16.16%. Per-request refresh/reuse decisions and stored/output
+counts match; EF fallback is zero. Tree builds halve, while natural reuse bins
+are 0.29% / 3.71% slower. Cold results are mixed. This is one query-layer group,
+not stable or whole-scene acceleration. Contract:
+`docs/development/simplex_query_benchmark.md`; full evidence:
+`performance/2026-11-05-singleef-same-state-wb-ex88.md`.
 
 CUDA 13.5 / Toolkit CCCL 3.5 build passed under the global lock, 16 jobs and
 32 GiB/no-swap scope. Audited GPU gate: 26 cases / 521,767 assertions. New
@@ -20,7 +28,15 @@ checked unused global body IDs against simplex-only tables. Validation now
 checks topology-referenced IDs and preserves unused raw metadata; both real
 methods and focused malformed/unused-ID regressions pass. Evidence:
 `output/single-ef-same-state-20261105/`. CMake/Python rebuilds and extended,
-race/sync sanitizers were not run. Historical results below remain unchanged.
+race/sync sanitizers were not run. The input drivers complete 1000 frames each;
+EX88 retains six negative-J frames. All formal runs sampled no foreign compute
+client. One independent EX88 forced-refresh Info profile has two foreign Python
+samples and is excluded from clean duration comparisons. All eight reports
+contain CUDA activity and all loaded files match the frozen inventories. Final
+guards pass. Artifacts:
+`output/benchmark-runs/simplex-query-same-state-cuda135-20261105/` and
+`output/single-ef-same-state-20261105/profile-analysis.json`.
+Historical results below remain unchanged.
 
 Shared simplex-query performance follow-up (2026-11-05): one formal and one
 independent Timer process per current method/scene, eight 1000-frame processes.

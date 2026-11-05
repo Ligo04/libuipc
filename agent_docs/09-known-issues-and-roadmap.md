@@ -7,9 +7,17 @@ labels effective EF state, refresh/reuse and forced-refresh experiments.
 CUDA 13.5 build, audited GPU 26 / 521,767, explicit-API memcheck 9 / 941
 (zero errors), runner CPU 22 and repository/archive 15 checks pass. Production
 capture also covers unused implicit-geometry metadata and audit exclusion.
-The 1000-frame same-state measurements and independent profiles remain pending;
-no new speedup is established. See `docs/development/simplex_query_benchmark.md`
-and `output/single-ef-same-state-20261105/`. Historical entries follow.
+The frozen `ba46a497` cohort completes 20 processes and verifies all 7,284
+requests against four states and a direct oracle. Natural query cost decreases
+23.97% WB / 14.18% EX88; forced-refresh cost decreases 21.75% / 16.16%.
+Refresh/reuse decisions and stored/output counts match, EF fallback is zero,
+and tree builds halve. Reuse bins are slightly slower and cold results are
+mixed; repeatability and whole-scene acceleration remain unestablished.
+EX88 input has six negative-J frames. All formal runs have zero sampled foreign
+compute; the EX88 forced-refresh Info profile is contended and retained.
+All eight CUDA reports and final fingerprints are verified. See
+`performance/2026-11-05-singleef-same-state-wb-ex88.md` and
+`output/single-ef-same-state-20261105/`. Historical entries follow.
 
 Shared simplex-query performance follow-up (2026-11-05): one formal and one
 independent Timer process per current method/scene, eight 1000-frame processes.
