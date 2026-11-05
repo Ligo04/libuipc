@@ -175,3 +175,13 @@ CMake/Python runtime rebuilds, extended API-mode sanitizer, racecheck and syncch
 were not run. No new performance measurement or speedup claim is attached to
 this structural unification. Earlier WB/EX88 reports remain dated evidence for
 their own frozen runtimes.
+
+## Performance follow-up
+
+A separate [WB/EX88 performance cohort](../../agent_docs/performance/2026-11-05-shared-simplex-query-wb-ex88.md)
+uses this exact frozen runtime. Each method/scene completed 1000 formal frames
+and an independent 1000-frame Timer profile, with frames 31-1000 measured.
+Observed advance+sync means (Info -> SingleEF) are WB 9.578 -> 9.409 ms and
+EX88 33.857 -> 36.725 ms. Solver work and trajectories differ; EX88 has negative
+tet J, and repeatability is unassessed. These observations do not establish a
+stable or equal-quality speedup or the isolated before/after cost of unification.

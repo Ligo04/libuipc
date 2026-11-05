@@ -1,5 +1,23 @@
 # Handoff — Current State of the Repo
 
+Shared simplex-query performance follow-up (2026-11-05): one formal and one
+independent Timer process per current method/scene, eight 1000-frame processes.
+Measurement HEAD `db34e286` is clean and code is `c70878f5`; the existing
+validated CUDA 13.5 runtime was frozen rather than rebuilt. Frames 31-1000
+advance+sync means (Info -> SingleEF): WB 9.578 -> 9.409 ms, EX88
+33.857 -> 36.725 ms. All formal windows completed/converged 970/970 with no
+Newton/line-search limit; EX88 negative-J frames are 5 -> 4. Work and
+trajectories differ; no stable or equal-quality performance win is established.
+Independent EX88 candidate profiles are 1.138 -> 0.991 ms/call, but calls
+increase 3239 -> 3898. Linear-system work is the largest direct Newton scope.
+Inputs/configs and all loaded native files were verified. No foreign compute
+PID was sampled during executions; one own exiting `[No data]` context was
+classified by its previously named PID. Another CUDA task delayed preflight.
+Repeatability remains unassessed. Full evidence and commands:
+`performance/2026-11-05-shared-simplex-query-wb-ex88.md` and
+`output/benchmark-runs/xsquare-shared-query-cuda135-20261105/`.
+Historical results below remain unchanged.
+
 Shared simplex-query unification (2026-11-05): both optimized InfoStackless
 and SingleEF now enter `SimplexBVHQuery` in `simplex_bvh_query.{h,cu}`. One owner
 manages cover selection, content snapshots, four candidate caches (PP/PE/EE/PT),

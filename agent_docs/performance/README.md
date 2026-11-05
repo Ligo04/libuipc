@@ -28,6 +28,7 @@ when iteration counts change. Report both and state which is the primary signal.
 | [2026-11-05 X_square WB and EX88](2026-11-05-xsquare-wb-ex88.md) | Inconclusive | Sample-6 WB and sample-88 FEM/cloth, 1000-frame A/B and separate Timer diagnostics, with inversion and trajectory limits |
 | [2026-11-05 SingleEF query integration / CUDA 13.5](2026-11-05-xsquare-query-cuda135-wb-ex88.md) | Single-group observation | WB/EX88 1000-frame A/B and independent profile; iteration/trajectory and negative-J limits |
 | [2026-11-05 SingleEF bounded refresh and cross-frame reuse](2026-11-05-singleef-query-followup-wb-ex88.md) | No whole-frame speedup established | Four implemented mechanisms; frozen SingleEF before/after, 1000-frame WB/EX88 formal/profile with work/trajectory and inversion limits |
+| [2026-11-05 shared simplex query policies](2026-11-05-shared-simplex-query-wb-ex88.md) | Mixed single-group observations | Unified Info/SingleEF, WB/EX88 1000-frame formal/profile; solver-work, trajectory and negative-J limits |
 | [`handoff.md`](../handoff.md) | Historical source | Earlier MAS, CUDA graph, CUB, DyTopo, lifecycle, and detailed command history |
 
 ## Required content
