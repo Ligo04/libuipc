@@ -140,7 +140,8 @@ belongs in formal throughput measurements.
 Verified on RTX 5090 with CUDA 13.5 / Toolkit CCCL 3.5 and XMake Release,
 using the global build lock, 16 jobs and a 32 GiB/no-swap scope. The native backend
 and test executable are in `build/linux/x86_64/release`. Compiled source is
-the source-file SHA-256 inventory in `verification.json`. The runtime fingerprints and reproducible commands are recorded in
+`c70878f5198fa52666d0010749dcde186149c858`. Source-file SHA-256 values, runtime
+fingerprints and reproducible commands are recorded in
 `output/single-ef-unification-20261105/verification.json` and `final-checks.json`.
 
 | Gate | Result |

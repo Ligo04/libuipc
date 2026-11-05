@@ -21,6 +21,7 @@ Source/native fingerprints and commands are in
 `output/single-ef-unification-20261105/verification.json` and `final-checks.json`.
 No new performance result is established. CMake/Python runtime rebuilds and
 extended/race/sync sanitizer checks were not run.
+Compiled implementation: `c70878f5198fa52666d0010749dcde186149c858`.
 Contract: `docs/development/simplex_bvh_queries.md`. Dated entries below retain
 their original historical evidence.
 
