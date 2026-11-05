@@ -1,5 +1,13 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
+The X_square SingleEF method keeps collision detection on the host-controlled
+path. Full-detect/advance Graph capture and workload-specific performance
+evaluation remain separate work; the baseline's PCG Graph path is retained.
+Compute Sanitizer's default extended API mode reports duplicate inline
+buffer/CUB kernel registrations shared by tests and the backend library;
+explicit-API mode reports no errors in the focused SingleEF memory checks.
+See `docs/development/xsquare_single_ef_bvh.md`.
+
 Issue #498 (2026-10-18): both Python `SoftVertexStitch.create_geometry` overloads
 now retain contiguous `IndexT` arrays at the binding boundary. This fixes freed
 temporary reads that corrupted topology or raised spurious vertex-range errors,

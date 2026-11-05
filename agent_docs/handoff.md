@@ -1,5 +1,14 @@
 # Handoff — Current State of the Repo
 
+X_square SingleEF migration (2026-11-05): branch
+`codex/xsquare-single-ef-bvh` starts at exact `6e3386d1` and adds the
+`single_ef_bvh` selector with ownership expansion, conservative fat proxy
+caching and the shared active/TOI pipeline. Source worktrees remain separate.
+See `docs/development/xsquare_single_ef_bvh.md` for scope and validation.
+Release/CUDA 13.4 build and 15 related GPU cases (842,588 assertions) passed.
+The focused explicit-API memcheck passed; default extended mode retains nine
+duplicate header-kernel registration diagnostics. Performance is unmeasured.
+
 > **Issue #498 Python stitch indices (2026-10-18)**: both
 > `SoftVertexStitch.create_geometry` bindings now accept contiguous `IndexT`
 > arrays with conversion owned at the binding boundary. This removes the

@@ -5,6 +5,8 @@ namespace
 {
 std::string_view expected_filter_type(std::string_view method)
 {
+    if(method == "single_ef_bvh")
+        return "SingleEFBVHSimplexTrajectoryFilter";
     if(method == "info_stackless_bvh")
         return "InfoStacklessBVHSimplexTrajectoryFilter";
     if(method == "info_stackless_bvh_v0")

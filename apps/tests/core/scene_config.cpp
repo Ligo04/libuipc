@@ -32,6 +32,7 @@ TEST_CASE("scene_config_schema_and_validation", "[scene][config]")
     const auto& conditional_values = collision.at("conditionalValues");
     const bool legacy_collision_built = conditional_values.at("enabled").get<bool>();
     REQUIRE(methods.front() == "info_stackless_bvh");
+    REQUIRE(std::ranges::find(methods, "single_ef_bvh") != methods.end());
     REQUIRE(conditional_values.at("backend") == "cuda");
     REQUIRE(conditional_values.at("buildOption") == "UIPC_WITH_CUDA_LEGACY_COLLISION");
     for(const auto& legacy_method : conditional_values.at("values"))

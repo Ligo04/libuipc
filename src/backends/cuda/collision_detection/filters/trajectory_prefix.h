@@ -68,6 +68,8 @@ struct TrajectoryPrefix
     const IndexT*  contact_ids   = nullptr;
     int            vertices      = 0;
     Float          alpha         = 0;
+    // SingleEF bounds must include exactly the accepted line-search endpoint.
+    bool accepted_step_endpoints = false;
     // per vertex outputs: position and d_hat, step displacement and
     // thickness (the leaf tests' FP32 inputs), and the swept boxes' end points
     float4* f32_positions = nullptr;

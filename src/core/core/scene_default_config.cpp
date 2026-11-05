@@ -301,7 +301,7 @@ static SceneConfigContract make_scene_config_contract()
         {"src/backends/cuda/contact_system/global_contact_manager.cu"},
         Json{{"exclusiveMinimum", 0.0}});
 
-    Json collision_methods = Json::array({"info_stackless_bvh"});
+    Json collision_methods = Json::array({"info_stackless_bvh", "single_ef_bvh"});
 #if !defined(UIPC_WITH_CUDA_LEGACY_COLLISION) || UIPC_WITH_CUDA_LEGACY_COLLISION
     constexpr bool legacy_collision_built = true;
     collision_methods.push_back("info_stackless_bvh_v0");

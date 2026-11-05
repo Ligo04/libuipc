@@ -2,6 +2,14 @@
 
 Directory: `src/backends/cuda/` (compiled as the runtime-loadable shared library `uipc_backend_cuda`). Entry point `entrance.cpp` → `cuda::SimEngine` (`sim_engine.h` + `engine/*.cu`). The GPU id comes from the engine config `gpu/device`.
 
+The X_square-based `single_ef_bvh` selector shares `BVHSimplexPipeline` with
+`info_stackless_bvh`. `SingleEFBVHQuery` retains every chunk of fat EF proxy
+overlaps, validates full proxy containment and topology, then applies the
+original PT/EE predicates and count/scan/fill. Active filtering, TOI and
+trajectory skin reuse keep their existing contracts. CMake's collision glob
+and XMake's explicit collision manifest both include the two new translation
+units. See [the migration contract](../docs/development/xsquare_single_ef_bvh.md).
+
 ## Internal Build Components
 
 The backend remains one DLL and performs one final CUDA device-link. Its 198

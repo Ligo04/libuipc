@@ -33,6 +33,7 @@ def test_scene_config_schema_matches_public_defaults() -> None:
     assert conditional["backend"] == "cuda"
     assert conditional["buildOption"] == "UIPC_WITH_CUDA_LEGACY_COLLISION"
     assert collision["enum"][0] == "info_stackless_bvh"
+    assert "single_ef_bvh" in collision["enum"]
     for legacy_method in conditional["values"]:
         assert (legacy_method in collision["enum"]) is conditional["enabled"]
 
