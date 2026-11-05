@@ -610,3 +610,40 @@ TEST_CASE("trajectory prefix writes the separate kernels' boxes, gathers, FP32 i
     check_trajectory_prefix(40000, 300, 39000, 117000, 78000, 0.731, true, 7);
     check_trajectory_prefix(1024, 1, 1023, 1025, 769, 1e-7, true, 8);
 }
+
+
+TEST_CASE("trajectory prefix checks metadata without primitive or vertex work",
+          "[cuda][trajectory prefix][ef_prefix]")
+{
+    cuda_tool::DeviceBuffer<IndexT> values, previous, control;
+    std::vector<IndexT>             table(1025, 3), poison_flags(6, 97);
+    values.copy_from(table.data(), table.size());
+    previous.copy_from(table.data(), table.size());
+    control.copy_from(poison_flags.data(), poison_flags.size());
+    TrajectoryPrefix prefix;
+    auto&            check = prefix.validation;
+    check.invalid          = control.data();
+    check.topology_changed = control.data() + 1;
+    check.metadata_changed = control.data() + 2;
+    for(int i = 0; i < 3; ++i)
+        check.group_escaped[i] = control.data() + 3 + i;
+    check.count              = 1;
+    check.work               = table.size();
+    check.ranges[0].values   = values.cview();
+    check.ranges[0].previous = previous.data();
+    check.ranges[0].n        = table.size();
+    launch_trajectory_prefix(prefix, nullptr);
+    std::vector<IndexT> flags(6);
+    control.copy_to(flags.data());
+    CHECK(flags == std::vector<IndexT>(6, 0));
+    table.back() = 4;
+    values.copy_from(table.data(), table.size());
+    launch_trajectory_prefix(prefix, nullptr);
+    control.copy_to(flags.data());
+    CHECK(flags == std::vector<IndexT>{1, 0, 1, 0, 0, 0});
+    check.initial_invalid = check.initial_topology = 1;
+    launch_trajectory_prefix(prefix, nullptr);
+    control.copy_to(flags.data());
+    CHECK(flags == std::vector<IndexT>{1, 1, 1, 0, 0, 0});
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+}

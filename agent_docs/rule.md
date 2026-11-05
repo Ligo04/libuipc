@@ -82,6 +82,16 @@ record it here in the same commit.**
   `external/METIS` or `external/GKlib` source trees or targets. Keep the CMake
   and XMake source boundary equivalent. (Set 2026-09-03.)
 
+- **Queue local C++/CUDA builds globally.** Wrap every compiler-starting
+  configuration/build command in blocking
+  `flock /home/ligo/.cache/ligo-build.lock systemd-run --user --scope --collect
+  -p MemoryHigh=32G -p MemoryMax=32G -p MemorySwapMax=0 ...`. Keep the lock file;
+  wait until it is acquired, then use 16 build jobs. This applies across
+  repositories, worktrees, chats and agents. Default CUDA is
+  `/home/ligo/.local/cuda-13.5.0`, selected explicitly by XMake `--cuda` or
+  CMake `CMAKE_CUDA_COMPILER` and `CUDAToolkit_ROOT`. Prefer its bundled CCCL
+  3.5 consistently for CUB, Thrust and libcu++. (Set 2026-11-05.)
+
 ## Geometry
 
 - **Native tetrahedralization belongs in `src/geometry/tetrahedralization/`.**

@@ -283,6 +283,15 @@ namespace
     __global__ void InfoStacklessBVHSimplexTrajectoryFilter_vertex_prep_kernel(TrajectoryPrefix p)
     {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if(i == 0 && p.validation.invalid)
+        {
+            const auto& v       = p.validation;
+            *v.invalid          = v.initial_invalid;
+            *v.topology_changed = v.initial_topology;
+            *v.metadata_changed = v.initial_metadata;
+            for(auto flag : v.group_escaped)
+                *flag = 0;
+        }
         if(i == 0 && p.escaped)
             for(int f = 0; f < 3; ++f)
                 p.escaped[f] = 0;
@@ -313,6 +322,12 @@ namespace
         return Eigen::Vector3f{x.x, x.y, x.z};
     }
 
+    __device__ void prefix_invalidate(const PrefixValidation& validation, IndexT* reason)
+    {
+        atomicExch(validation.invalid, 1);
+        atomicExch(reason, 1);
+    }
+
     // Then per primitive, one block range per family: each thread builds its
     // box as detect_k1-k4 build it (the same FP64 expansion, the same order of
     // extends), writes it with its bid and cid, copies them to the box's slot
@@ -322,12 +337,30 @@ namespace
     {
         int f     = 0;
         int block = static_cast<int>(blockIdx.x);
-        for(; f < TrajectoryPrefixFamilies - 1; ++f)
+        for(; f < TrajectoryPrefixFamilies; ++f)
         {
             int blocks = (p.family[f].n + blockDim.x - 1) / blockDim.x;
             if(block < blocks)
                 break;
             block -= blocks;
+        }
+        if(f == TrajectoryPrefixFamilies)
+        {
+            const SizeT i = SizeT(block) * blockDim.x + threadIdx.x;
+            const auto& v = p.validation;
+            for(int r = 0; r < v.count; ++r)
+            {
+                const auto& range = v.ranges[r];
+                if(i < range.n)
+                {
+                    const IndexT value =
+                        range.is_matrix ? range.matrix.flatten(static_cast<int>(i)) :
+                                          range.values(i);
+                    if(value != range.previous[i])
+                        prefix_invalidate(v, v.metadata_changed);
+                }
+            }
+            return;
         }
         const auto& F = p.family[f];
         int         i = block * blockDim.x + threadIdx.x;
@@ -383,6 +416,42 @@ namespace
         F.aabbs[i]       = aabb;
         F.bids[i]        = bid;
         F.cids[i]        = cid;
+
+        const auto& validation = p.validation;
+        if(validation.invalid)
+        {
+            if((F.previous_vertices && F.vertices[i] != F.previous_vertices[i])
+               || (F.previous_edges && F.edges[i] != F.previous_edges[i])
+               || (F.previous_triangles && F.triangles[i] != F.previous_triangles[i]))
+                prefix_invalidate(validation, validation.topology_changed);
+            if((F.previous_bids && bid != F.previous_bids[i])
+               || (F.previous_cids && cid != F.previous_cids[i]))
+                prefix_invalidate(validation, validation.metadata_changed);
+            if(F.cached_grown)
+            {
+                const auto& fat   = F.cached_grown[i];
+                const int   group = F.cached_groups[i];
+                const bool inside = (fat.min().array() <= aabb.min().array()).all()
+                                    && (aabb.max().array() <= fat.max().array()).all();
+                if(!inside)
+                {
+                    atomicExch(validation.invalid, 1);
+                    if(group == 0)
+                        atomicExch(validation.group_escaped[0], 1);
+                }
+                if(group != 0)
+                {
+                    bool lower = true;
+                    for(int axis = 0; axis < 3; ++axis)
+                        lower &= Float(fat.min()[axis]) + F.cached_shrink[i]
+                                     <= Float(aabb.min()[axis])
+                                 && Float(aabb.max()[axis])
+                                        <= Float(fat.max()[axis]) - F.cached_shrink[i];
+                    if(!lower)
+                        atomicExch(validation.group_escaped[group], 1);
+                }
+            }
+        }
 
         if(F.slots)
         {
@@ -1560,7 +1629,7 @@ void launch_trajectory_prefix(const TrajectoryPrefix& prefix, cudaStream_t strea
         auto k  = InfoStacklessBVHSimplexTrajectoryFilter_vertex_prep_kernel;
         int  bd = cuda_tool::best_block_dim(k);
         int  n  = prefix.vertices;
-        if(n > 0 || prefix.escaped)
+        if(n > 0 || prefix.escaped || prefix.validation.invalid)
             k<<<std::max(1, (n + bd - 1) / bd), bd, 0, stream>>>(prefix);
     }
     auto k      = InfoStacklessBVHSimplexTrajectoryFilter_prefix_kernel;
@@ -1568,6 +1637,7 @@ void launch_trajectory_prefix(const TrajectoryPrefix& prefix, cudaStream_t strea
     int  blocks = 0;
     for(const auto& F : prefix.family)
         blocks += (F.n + bd - 1) / bd;
+    blocks += (prefix.validation.work + bd - 1) / bd;
     if(blocks > 0)
         k<<<blocks, bd, 0, stream>>>(prefix);
 }
@@ -2053,6 +2123,7 @@ void BVHSimplexPipeline::detect(DetectInfo& info, bool concurrent)
             static_cast<float>((StoredSkinOverDHat - StoredThinSkinOverDHat) * d_hat) :
             0.0f;
 
+    TrajectoryPrefix prefix;
     if(fused_prefix)
     {
         int nv = static_cast<int>(Ps.size());
@@ -2074,7 +2145,6 @@ void BVHSimplexPipeline::detect(DetectInfo& info, bool concurrent)
             gathered(cover_triangles, cover_triangles.count);
         }
 
-        TrajectoryPrefix prefix;
         prefix.accepted_step_endpoints = single_ef;
         prefix.positions               = Ps.data();
         prefix.displacements           = dxs.data();
@@ -2147,7 +2217,8 @@ void BVHSimplexPipeline::detect(DetectInfo& info, bool concurrent)
                triangle_cids,
                cover_PT ? &cover_triangles : nullptr,
                grown_triangle_aabbs);
-        launch_trajectory_prefix(prefix, nullptr);
+        if(!single_ef)
+            launch_trajectory_prefix(prefix, nullptr);
     }
 
     auto node_pred        = NodePredicate{body_self_collisions, cmts.viewer()};
@@ -2233,17 +2304,19 @@ void BVHSimplexPipeline::detect(DetectInfo& info, bool concurrent)
     if(single_ef)
     {
         single_ef_query.force_fresh = direct_queries;
-        if(single_ef_query.detect(lbvh_T,
-                                  allp_allt_pred,
-                                  alle_alle_pred,
-                                  node_pred,
-                                  {point_aabbs, point_bids, point_cids},
-                                  {edge_aabbs, edge_bids, edge_cids},
-                                  {triangle_aabbs, triangle_bids, triangle_cids},
-                                  candidate_AllP_AllT_pairs,
-                                  candidate_AllE_AllE_pairs,
-                                  !info.reuse_bvh_topology(),
-                                  [&info] { info.before_read_back(); }))
+        if(single_ef_query.detect(
+               lbvh_T,
+               allp_allt_pred,
+               alle_alle_pred,
+               node_pred,
+               {point_aabbs, point_bids, point_cids},
+               {edge_aabbs, edge_bids, edge_cids},
+               {triangle_aabbs, triangle_bids, triangle_cids},
+               candidate_AllP_AllT_pairs,
+               candidate_AllE_AllE_pairs,
+               !info.reuse_bvh_topology(),
+               [&info] { info.before_read_back(); },
+               &prefix))
         {
             // PP/PE retain the codimensional path. PT/EE share one EF tree.
             candidate_AllP_CodimP_pairs.m_size = 0;

@@ -1,6 +1,7 @@
 #include <type_define.h>
 #include <app/app.h>
 #include <collision_detection/filters/single_ef_bvh_query.h>
+#include <collision_detection/filters/trajectory_prefix.h>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
@@ -1287,21 +1288,230 @@ TEST_CASE("SingleEF skins track primitive escapes and topology retention counts 
         mesh.positions[v].x() += 1.5 * mesh.radius;
     run();  // Inside the full 2x skin but outside the next-lower 1x skin.
     CHECK(query.refresh_count() == before_lower_escape);
-    run(true);  // Frame 3 must retain the thick skin after that successful reuse.
+    run(true);  // Frame 3 retains the actual cache, including its saved shrink.
     CHECK(query.statistics().cover_skin == 2.0);
-    CHECK(query.statistics().other_skin == 0.01);
-    run(true);  // Frame 4 had no escapes, so the small skins return.
+    CHECK(query.statistics().other_skin == 1.0);
+    for(IndexT v : mesh.triangles[9])
+        mesh.positions[v].x() -= 1.5 * mesh.radius;
+    run();
+    run(true);  // Frame 4 observes no lower-skin escape.
+    CHECK(query.refresh_count() == before_lower_escape);
+    query.force_fresh = true;
+    run(true);  // Frame 5 applies the now-thin desired policy on a real refresh.
     CHECK(query.statistics().cover_skin == 1.0);
     CHECK(query.statistics().other_skin == 0.01);
-    query.force_fresh = true;
     for(int i = 0; i < 4; ++i)
         run();
     query.force_fresh = false;
     CHECK(query.statistics().topology_builds == 1);
-    for(int frame = 5; frame < 8; ++frame)
+    const auto before_frames = query.refresh_count();
+    for(int frame = 6; frame <= 8; ++frame)
         run(true);
+    CHECK(query.refresh_count() == before_frames);
     CHECK(query.statistics().topology_builds == 1);
-    run(true);
+    CHECK(query.statistics().cross_frame_reuses >= 3);
+    query.force_fresh = true;
+    run();  // The pending eighth-frame topology rebuild is consumed here.
     CHECK(query.statistics().topology_builds == 2);
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+TEST_CASE("SingleEF query bounds exclude unused long owner edges",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_query_bounds]")
+{
+    using namespace test_single_ef_bvh;
+    const bool reverse = GENERATE(false, true);
+    Mesh       mesh(10);
+    mesh.contact_mask = {0, 1, 1, 0};
+    for(SizeT f = 0; f < mesh.triangles.size(); ++f)
+        for(IndexT v : mesh.triangles[f])
+        {
+            mesh.contacts[v] = f == 9 ? 0 : 1;
+            mesh.positions[v].x() += f == 9 ? 0 : 50;
+        }
+    if(reverse)
+    {
+        const IndexT v = mesh.positions.size();
+        mesh.positions.emplace_back(0, 0, 0.03);
+        mesh.positions.emplace_back(100, 0, 0.03);
+        mesh.vertices.push_back(v);
+        mesh.vertices.push_back(v + 1);
+        mesh.edges.emplace_back(v, v + 1);
+        mesh.bodies.insert(mesh.bodies.end(), {0, 1});
+        mesh.contacts.insert(mesh.contacts.end(), {0, 1});
+        mesh.subscenes.insert(mesh.subscenes.end(), {0, 0});
+        mesh.dhats.insert(mesh.dhats.end(), {mesh.radius, mesh.radius});
+        mesh.thicknesses.insert(mesh.thicknesses.end(), {0, 0});
+    }
+    else
+    {
+        const auto face        = mesh.triangles[9];
+        mesh.contacts[face[1]] = mesh.contacts[face[2]] = 1;
+        mesh.positions[face[1]].x()                     = 100;
+    }
+    mesh.send();
+    SingleEFBVHQuery              query;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    REQUIRE(query.detect(tree,
+                         mesh.pt(),
+                         mesh.ee(),
+                         mesh.node(),
+                         mesh.point_bounds.view(),
+                         mesh.edge_bounds.view(),
+                         mesh.triangle_bounds.view(),
+                         pts,
+                         ees));
+    const auto expected = mesh.all_pairs();
+    CHECK(read_pairs(pts, false) == expected.first);
+    CHECK(read_pairs(ees, true) == expected.second);
+    REQUIRE(query.statistics().pt_cover);
+    REQUIRE(query.statistics().ee_cover);
+    if(reverse)
+    {
+        CHECK(query.statistics().reverse_queries > 0);
+        CHECK(query.statistics().ef_pairs == 0);
+    }
+    else
+    {
+        CHECK(query.statistics().primary_queries == 1);
+        CHECK(query.statistics().reverse_queries == 0);
+        CHECK(query.statistics().ef_pairs == 1);
+    }
+}
+
+TEST_CASE("SingleEF batches chunks and refills bounded typed outputs",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_refresh_batch]")
+{
+    using namespace test_single_ef_bvh;
+    const bool split = GENERATE(false, true);
+    Mesh       mesh(160);
+    mesh.send();
+    SingleEFBVHQuery query;
+    if(split)
+        query.max_chunk_edges = 17;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    const auto                    expected = mesh.all_pairs();
+    auto                          run      = [&]
+    {
+        REQUIRE(query.detect(tree,
+                             mesh.pt(),
+                             mesh.ee(),
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees));
+        CHECK(read_pairs(pts, false) == expected.first);
+        CHECK(read_pairs(ees, true) == expected.second);
+    };
+    run();
+    const auto first = query.statistics();
+    CHECK(first.typed_refills > 0);
+    if(split)
+    {
+        CHECK(first.refresh_waits == 1);
+        CHECK(first.ef_retries == 0);
+    }
+    else
+        CHECK(first.ef_retries > 0);
+    query.force_fresh = true;
+    run();
+    CHECK(query.statistics().refresh_waits == first.refresh_waits + 1);
+    CHECK(query.statistics().ef_retries == first.ef_retries);
+    CHECK(query.statistics().typed_refills == first.typed_refills);
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+TEST_CASE("SingleEF fused prefix validates new primitive metadata and large tables across frames",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_prefix]")
+{
+    using namespace test_single_ef_bvh;
+    Mesh mesh(3);
+    mesh.d_contact_mask.resize(ct::Extent2D{16, 16});
+    mesh.contact_mask.assign(256, 1);
+    SingleEFBVHQuery              query;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    ct::DeviceBuffer<IndexT>      bodies;
+    ct::DeviceBuffer<float4>      positions, steps, ends;
+    TrajectoryPrefix              prefix;
+    auto                          run = [&]
+    {
+        mesh.send();
+        upload(bodies, mesh.bodies);
+        positions.resize_discard(mesh.positions.size());
+        steps.resize_discard(mesh.positions.size());
+        ends.resize_discard(mesh.positions.size());
+        prefix.accepted_step_endpoints = true;
+        prefix.positions               = mesh.d_positions.data();
+        prefix.displacements           = mesh.d_displacements.data();
+        prefix.d_hats                  = mesh.d_hats.data();
+        prefix.thicknesses             = mesh.d_thicknesses.data();
+        prefix.v2bs                    = bodies.data();
+        prefix.contact_ids             = mesh.d_contacts.data();
+        prefix.vertices                = mesh.positions.size();
+        prefix.f32_positions           = positions.data();
+        prefix.f32_steps               = steps.data();
+        prefix.f32_ends                = ends.data();
+        auto bind                      = [&](int f, Bounds& bounds)
+        {
+            auto& family = prefix.family[f];
+            family.n     = bounds.boxes.size();
+            family.aabbs = bounds.d_boxes.data();
+            family.bids  = bounds.d_bids.data();
+            family.cids  = bounds.d_cids.data();
+            // Stale derived outputs must not participate in the snapshot check.
+            bounds.d_bids.fill(97);
+            bounds.d_cids.fill(97);
+        };
+        bind(1, mesh.point_bounds);
+        bind(2, mesh.edge_bounds);
+        bind(3, mesh.triangle_bounds);
+        prefix.family[1].vertices  = mesh.d_vertices.data();
+        prefix.family[2].edges     = mesh.d_edges.data();
+        prefix.family[3].triangles = mesh.d_triangles.data();
+        REQUIRE(query.detect(tree,
+                             mesh.pt(),
+                             mesh.ee(),
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees,
+                             true,
+                             {},
+                             &prefix));
+        const auto expected = mesh.all_pairs();
+        CHECK(read_pairs(pts, false) == expected.first);
+        CHECK(read_pairs(ees, true) == expected.second);
+    };
+    run();
+    run();
+    CHECK(query.refresh_count() == 1);
+    CHECK(query.statistics().cross_frame_reuses == 1);
+    mesh.bodies[mesh.triangles[0][0]] ^= 1;
+    run();
+    CHECK(query.refresh_count() == 2);
+    mesh.contact_mask.back() = 0;  // The snapshot range is larger than the vertex grid.
+    run();
+    CHECK(query.refresh_count() == 3);
+    mesh.subscene_mask = {1, 0, 0, 1};
+    run();
+    CHECK(query.refresh_count() == 4);
+    std::swap(mesh.edges[0], mesh.edges[1]);
+    run();
+    CHECK(query.refresh_count() == 5);
+    for(IndexT v : mesh.triangles[1])
+        mesh.positions[v].x() += 4 * mesh.radius;
+    run();
+    CHECK(query.refresh_count() == 6);
+    mesh.add_codimensional_geometry();
+    run();  // Reuse the same prefix POD after its snapshots and fat buffers grow.
+    CHECK(query.refresh_count() == 7);
+    CHECK(query.statistics().fused_prefixes == 8);
     CHECK(cudaDeviceSynchronize() == cudaSuccess);
 }

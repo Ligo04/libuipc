@@ -18,8 +18,10 @@ available in CUDA builds, including builds with legacy collision disabled.
 One edge/face proxy tree supplies PT and EE candidates. Every surface vertex
 has exactly one query owner, and every edge has exactly one leaf owner.
 Isolated points become PT-only query proxies; standalone edges become EE-only
-leaves. A proxy box contains its geometric primitive and every primitive it
-owns. Mixed scenes keep the existing auxiliary PP/PE queries. Pure
+leaves. A leaf box contains its face and every owned edge. Each query chain
+uses only the constituents it actually queries: selected EE edges and selected
+PT points in the primary chain, outside-cover PT points in the reverse chain.
+Their CIDs are recomputed from those contributors. Mixed scenes keep the existing auxiliary PP/PE queries. Pure
 codimensional or unsupported topology uses the existing simplex queries.
 
 Contact-cover queries use one EF tree with two compact query lists. The
@@ -40,7 +42,21 @@ proxy-union containment alone cannot justify clipping typed primitive pairs.
 
 The two query chains have independent streams, query buffers and per-stream
 CUB workspace. They read the same immutable tree and join before it changes.
-Overflow grows and retries only the affected chunk. Refresh expands fat EF
+Compact IDs/counts are position-free and uploaded only when the cover changes.
+A single refresh-preparation launch grows all primitive boxes and writes both
+compact query lists and EF leaves. Proxy threads recompute the same outward
+growth from immutable current boxes, avoiding inter-block producer races.
+
+Refresh enqueues traversal, a bounded typed count, one combined PT/EE scan and
+fill for every chunk on its chain stream. Scratch is reused per chain, sized
+for that chain's largest EF buffer. One aggregate status/count readback replaces
+routine per-chunk waits. A truncated EF chunk emits no typed candidates; only
+that traversal is retried after growth. Per-chain device totals and saved
+chunk bases prevent double reservation. Typed-buffer discard growth refills
+all of that chain's chunks from retained EF output without traversing again.
+The final typed lists are concatenated for the existing shared judge, so
+persistent typed storage includes both chain buffers and the combined cache.
+Refresh expands fat EF
 overlaps into position-free PT/EE lists, checking current contact/subscene
 masks, shared vertices and body self-collision once. Cache reuse directly
 judges those lists and never repeats ownership expansion.
@@ -56,17 +72,28 @@ and returns to the existing simplex fallback.
 
 GPU snapshots compare topology and every position-free metadata array/table
 by content, including edits in the same allocation. Changes invalidate the
-cover and typed cache. Each new-frame request refreshes the cache; tree
-refits retain topology until every eighth new-frame request
-(`!reuse_bvh_topology`, including initialization), independent of the number
-of cache refreshes within a frame. Output capacity is reserved from the
+cover and typed cache. Frame boundaries alone do not invalidate the cache;
+every retained use checks complete current swept primitive bounds. Actual
+saved fat/shrink levels remain unchanged until a refresh, independently from
+the next refresh's desired skin policy. Every eighth new-frame request
+(`!reuse_bvh_topology`, including initialization) schedules a topology rebuild.
+That request stays pending until the next actual refresh, independently of
+cache refreshes within a frame. Output capacity is reserved from the
 stored pair counts before scan/scatter.
 
 `BVHSimplexPipeline` shares active filtering, two-phase pending active sets,
 TOI filtering and the existing detect-skin contract between both methods.
 SingleEF prefix endpoints use `step_position`, matching accepted line-search
 positions even when an FMA would retain a cancelled product residual. The
-legacy prefix keeps its original default. The all-filter capability check
+legacy prefix keeps its original default. The integrated caller passes its
+unlaunched generic trajectory prefix to SingleEF. Its vertex launch initializes
+device controls; primitive producers compare new BID/CID and topology with
+snapshots and check fat containment. An extra block range in the same second
+launch compares independent metadata/table contents, even for empty geometry
+or tables larger than the vertex range. This removes the separate SingleEF
+validation launch. Reused prefix descriptors have every attached snapshot and
+fat pointer cleared before rebinding. Standalone query callers keep the full
+validation-kernel fallback. The all-filter capability check
 remains in effect. The typed pair cache and the public trajectory candidate skin are separate layers.
 
 The baseline's CUDA Graph support covers the linear solver. Collision detect
@@ -153,3 +180,44 @@ The source-matched CUDA 13.5 WB/EX88 cohort at `9ba6aa88` is recorded in
 [the query-integration performance report](../../agent_docs/performance/2026-11-05-xsquare-query-cuda135-wb-ex88.md).
 Its single-episode timing reductions are observations with changed solver
 work/trajectories and EX88 negative-J differences, not equal-quality speedup.
+
+
+## Follow-up validation: bounded refresh and cross-frame reuse
+
+The four follow-up optimizations were checked on 2026-11-05 with the same
+RTX 5090 / CUDA 13.5.37 / Toolkit CCCL 3.5 environment. Configuration explicitly
+selected CUDA and disabled compiler caching. Every configuration/build command
+held the blocking global build lock and ran in the 16-job, 32 GiB, no-swap
+systemd scope. The actual output directory is `build/linux/x86_64/release`;
+XMake configuration reset the former output-directory setting.
+
+- CUDA backend build and native test build passed. An initial test compile
+  failed on a missing new test-local prefix declaration; the corrected build
+  passed. The invalid initial backend target name is retained in the logs.
+- Audited GPU suite: 21 cases / 842,883 assertions.
+- Normal persistent-cache mode: 14 cases / 519,887 assertions.
+- Forced copy readbacks: 6 cases / 295 assertions.
+- Matching explicit-API memcheck: 10 cases / 518,397 assertions, zero errors.
+- Repository contracts: 13 cases. Clang-format 18 and diff checks passed.
+
+New cases cover selective bounds on long owner edges, batched unequal chunks,
+EF overflow followed by selective traversal retry, typed-buffer discard growth
+and complete refill, static cross-frame reuse, lower-skin history with retained
+actual boxes, pending topology rebuilding, generated primitive metadata changes,
+raw tables larger than the vertex grid, metadata-only empty prefixes and reuse
+of the same prefix POD after topology growth. Existing candidate/active/TOI and
+real-world checks continue to pass. Standalone and fused-prefix entries are
+both exercised.
+
+`Statistics::ef_pairs` reports the last refresh's EF overlap count. Refresh
+waits, failed EF chunks, typed chain refills, cross-frame reuses and fused-prefix
+calls are cumulative diagnostics. Skin statistics describe the actual saved
+fat boxes, not a next-frame request to shrink them.
+
+Evidence is in `output/single-ef-query-followup-20261105/verification.json` and
+its build/GPU/sanitizer logs. `memcheck-old-output-directory.log` accidentally
+checked the unchanged historical output and is excluded; the current ten-case
+memcheck was rerun against the verified actual output directory. CMake/Python
+rebuilds, extended API sanitizer, racecheck and synccheck remain unverified.
+Previous 1000-frame results describe the previous version; follow-up performance
+is recorded separately when available.

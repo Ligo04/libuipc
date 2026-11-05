@@ -1,5 +1,22 @@
 # 09 — Known Issues, Tech Debt, and Roadmap
 
+SingleEF query follow-up (2026-11-05): selective primary/reverse query boxes
+and static compact IDs remove unused constituents and refresh-time gathers.
+Refresh batches chunks on independent streams with reusable per-chain scratch,
+one aggregate status wait, bounded EF retry and typed discard/refill. Fat
+caches survive frame boundaries while full primitive swept containment and
+exact metadata/topology snapshots remain checked. The generic two-launch prefix
+now performs SingleEF validation; standalone callers keep their fallback.
+Topology rebuild requests remain pending until an actual refresh.
+
+CUDA 13.5 / Toolkit CCCL 3.5 builds passed under the global flock, 16-job,
+32 GiB/no-swap scope. Actual binaries are in `build/linux/x86_64/release`.
+Audited GPU tests: 21 cases / 842,883 assertions; normal: 14 / 519,887;
+forced copy: 6 / 295; matching explicit-API memcheck: 10 / 518,397, zero errors.
+Contracts: 13. Evidence: `output/single-ef-query-followup-20261105/`.
+Current follow-up throughput has not yet been measured; older WB/EX88 numbers
+below remain historical. See `docs/development/xsquare_single_ef_bvh.md`.
+
 The X_square SingleEF method now includes contact-cover query pruning,
 concurrent chains, adaptive primitive skins, frame-based topology retention,
 typed stored pairs and the shared warp/FP32/tile judge with mapped readbacks.

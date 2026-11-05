@@ -19,10 +19,35 @@
 #include <uipc/backend/macro.h>
 #include <type_define.h>
 #include <collision_detection/aabb.h>
+#include <cuda_tool/view_nd.h>
 #include <cuda_runtime.h>
 
 namespace uipc::backend::cuda
 {
+// Optional cache checks. Input tables are checked in a separate block range;
+// primitive outputs are compared by the thread producing their current value.
+struct PrefixSnapshotRange
+{
+    cuda_tool::CBufferView<IndexT> values;
+    cuda_tool::CDense2D<IndexT>    matrix;
+    const IndexT*                  previous  = nullptr;
+    SizeT                          n         = 0;
+    bool                           is_matrix = false;
+};
+struct PrefixValidation
+{
+    static constexpr int MaxRanges = 18;
+    PrefixSnapshotRange  ranges[MaxRanges];
+    int                  count            = 0;
+    SizeT                work             = 0;
+    IndexT*              invalid          = nullptr;
+    IndexT*              topology_changed = nullptr;
+    IndexT*              metadata_changed = nullptr;
+    // Uniform fat-box escape, cover lower-skin escape, other lower-skin escape.
+    IndexT* group_escaped[3] = {};
+    IndexT  initial_invalid = 0, initial_topology = 0, initial_metadata = 0;
+};
+
 // The prefix of a trajectory detect in two launches: per vertex the FP32
 // inputs of the leaf tests and the swept boxes' FP32 end points, then per
 // primitive (one block range per family) the swept box with its bid and cid,
@@ -50,8 +75,16 @@ struct TrajectoryPrefixFamily
     IndexT*       gathered_cids  = nullptr;
     // Containment check against the grown copies (null: none), with the cover
     // split of the shrunk checks (null: none).
-    const AABB*   grown    = nullptr;
-    const IndexT* is_query = nullptr;
+    const AABB*     grown              = nullptr;
+    const IndexT*   is_query           = nullptr;
+    const IndexT*   previous_vertices  = nullptr;
+    const Vector2i* previous_edges     = nullptr;
+    const Vector3i* previous_triangles = nullptr;
+    const IndexT*   previous_bids      = nullptr;
+    const IndexT*   previous_cids      = nullptr;
+    const AABB*     cached_grown       = nullptr;
+    const IndexT*   cached_groups      = nullptr;
+    const Float*    cached_shrink      = nullptr;
 };
 
 constexpr int TrajectoryPrefixFamilies = 4;  // codim points, points, edges, triangles
@@ -59,6 +92,7 @@ constexpr int TrajectoryPrefixFamilies = 4;  // codim points, points, edges, tri
 struct TrajectoryPrefix
 {
     TrajectoryPrefixFamily family[TrajectoryPrefixFamilies];
+    PrefixValidation       validation;
     // per vertex
     const Vector3* positions     = nullptr;
     const Vector3* displacements = nullptr;

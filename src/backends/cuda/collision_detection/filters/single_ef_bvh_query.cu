@@ -1,6 +1,7 @@
 #include <collision_detection/filters/single_ef_bvh_query.h>
 #include <collision_detection/filters/bvh_contact_cover.h>
 #include <collision_detection/filters/bvh_pair_judge.h>
+#include <collision_detection/filters/trajectory_prefix.h>
 #include <cuda_tool/cub.h>
 #include <algorithm>
 #include <array>
@@ -214,168 +215,138 @@ namespace
                     metadata.matrices[a].flatten(static_cast<int>(i));
     }
 
-    __global__ void grow_primitives(CBufferView<AABB>     current,
-                                    CBufferView<IndexT>   groups,
-                                    CBufferView<IndexT>   vertices,
-                                    CBufferView<Vector2i> edges,
-                                    CBufferView<Vector3i> faces,
-                                    CBufferView<Float>    d_hats,
-                                    int                   family,
-                                    Float                 uniform,
-                                    Float                 cover,
-                                    Float                 other,
-                                    BufferView<AABB>      grown,
-                                    BufferView<Float>     shrink)
+    struct FatBounds
     {
-        const SizeT i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i >= current.size())
-            return;
-        const IndexT vertex = family == 0 ? vertices(i) :
-                              family == 1 ? edges(i)[0] :
-                                            faces(i)[0];
-        const int    group  = groups(i);
-        const Float  skin   = std::max(Float{0},
-                                    d_hats(vertex)
-                                        * (group == 1 ? cover :
-                                              group == 2 ? other :
-                                                           uniform));
-        auto         box    = current(i);
-        for(int axis = 0; axis < 3; ++axis)
+        Bounds                current[3];
+        CBufferView<IndexT>   groups[3];
+        CBufferView<IndexT>   vertices;
+        CBufferView<Vector2i> edges;
+        CBufferView<Vector3i> faces;
+        CBufferView<Float>    d_hats;
+        Float                 uniform, cover, other;
+
+        __device__ IndexT vertex(int family, SizeT i) const
         {
-            box.min()[axis] =
-                nextafterf(static_cast<float>(Float(box.min()[axis]) - skin), -INFINITY);
-            box.max()[axis] =
-                nextafterf(static_cast<float>(Float(box.max()[axis]) + skin), INFINITY);
+            return family == 0 ? vertices(i) :
+                   family == 1 ? edges(i)[0] :
+                                 faces(i)[0];
         }
-        grown(i)  = box;
-        shrink(i) = std::max(Float{0},
-                             d_hats(vertex)
-                                 * (group == 1 ? cover - uniform :
-                                    group == 2 ? other - 0.01 * uniform :
-                                                 0.0));
-    }
-    __global__ void make_query_proxies(Bounds                points,
-                                       Bounds                edges,
-                                       CBufferView<AABB>     grown_points,
-                                       CBufferView<AABB>     grown_edges,
-                                       CBufferView<Vector2i> owned_vertices,
-                                       CBufferView<IndexT>   point_queries,
-                                       CBufferView<IndexT>   edge_queries,
-                                       BufferView<AABB>      boxes,
-                                       BufferView<IndexT>    cids,
-                                       BufferView<IndexT>    primary,
-                                       BufferView<IndexT>    reverse,
-                                       bool                  pt_cover)
-    {
-        const SizeT i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i == 0)
+        __device__ AABB box(int family, SizeT i) const
         {
-            primary(boxes.size()) = 0;
-            reverse(boxes.size()) = 0;
-        }
-        if(i >= boxes.size())
-            return;
-        const auto owned = owned_vertices(i);
-        AABB       box;
-        IndexT     cid   = -1;
-        bool       first = true, a = false, b = false;
-        if(i < grown_edges.size())
-        {
-            box   = grown_edges(i);
-            cid   = edges.cids(i);
-            first = false;
-            a     = edge_queries(i) != 0;
-        }
-        for(int slot = 0; slot < 2; ++slot)
-            if(owned[slot] >= 0)
+            const int   group = groups[family](i);
+            const Float skin  = std::max(Float{0},
+                                        d_hats(vertex(family, i))
+                                            * (group == 1 ? cover :
+                                                group == 2 ? other :
+                                                             uniform));
+            AABB        box   = current[family].aabbs(i);
+            for(int axis = 0; axis < 3; ++axis)
             {
-                const IndexT v = owned[slot];
-                if(first)
-                {
-                    box   = grown_points(v);
-                    cid   = points.cids(v);
-                    first = false;
-                }
-                else
-                {
-                    box.extend(grown_points(v));
-                    if(cid != points.cids(v))
-                        cid = -1;
-                }
-                a |= point_queries(v) != 0;
-                b |= pt_cover && !point_queries(v);
+                box.min()[axis] =
+                    nextafterf(static_cast<float>(Float(box.min()[axis]) - skin), -INFINITY);
+                box.max()[axis] =
+                    nextafterf(static_cast<float>(Float(box.max()[axis]) + skin), INFINITY);
             }
-        boxes(i)   = box;
-        cids(i)    = cid;
-        primary(i) = a;
-        reverse(i) = b;
-    }
-    __global__ void make_leaf_proxies(Bounds                edges,
-                                      Bounds                faces,
-                                      CBufferView<AABB>     grown_edges,
-                                      CBufferView<AABB>     grown_faces,
-                                      CBufferView<Vector3i> owned_edges,
-                                      CBufferView<IndexT>   face_queries,
-                                      BufferView<AABB>      boxes,
-                                      BufferView<IndexT>    cids,
-                                      BufferView<IndexT>    cover_tags)
-    {
-        const SizeT i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i >= boxes.size())
-            return;
-        const auto owned = owned_edges(i);
-        AABB       box;
-        IndexT     cid   = -1;
-        bool       first = true;
-        if(i < grown_faces.size())
+            return box;
+        }
+        __device__ Float shrink(int family, SizeT i) const
         {
-            box   = grown_faces(i);
-            cid   = faces.cids(i);
+            const int group = groups[family](i);
+            return std::max(Float{0},
+                            d_hats(vertex(family, i))
+                                * (group == 1 ? cover - uniform :
+                                   group == 2 ? other - 0.01 * uniform :
+                                                0.0));
+        }
+    };
+    struct ProxyBounds
+    {
+        FatBounds             fat;
+        CBufferView<Vector2i> owned_vertices;
+        CBufferView<Vector3i> owned_edges;
+        CBufferView<IndexT>   point_queries, edge_queries, face_queries;
+        CBufferView<IndexT>   ids[2];
+        BufferView<AABB>      grown[3], query_boxes[2], leaf_boxes;
+        BufferView<Float>     shrink[3];
+        BufferView<IndexT>    query_cids[2], leaf_cids, leaf_tags;
+    };
+    __device__ void extend_proxy(AABB& box, IndexT& cid, bool& first, const AABB& next, IndexT next_cid)
+    {
+        if(first)
+        {
+            box   = next;
+            cid   = next_cid;
             first = false;
         }
-        for(int slot = 0; slot < 3; ++slot)
-            if(owned[slot] >= 0)
-            {
-                const IndexT e = owned[slot];
-                if(first)
-                {
-                    box   = grown_edges(e);
-                    cid   = edges.cids(e);
-                    first = false;
-                }
-                else
-                {
-                    box.extend(grown_edges(e));
-                    if(cid != edges.cids(e))
-                        cid = -1;
-                }
-            }
-        boxes(i) = box;
-        cids(i)  = cid;
-        // BID is an aggregate cover tag in this tree. It is never used as a body id.
-        cover_tags(i) = i < grown_faces.size() && face_queries(i) ? 0 : 1;
-    }
-    __global__ void gather_queries(CBufferView<AABB>   boxes,
-                                   CBufferView<IndexT> cids,
-                                   CBufferView<IndexT> flags,
-                                   CBufferView<IndexT> offsets,
-                                   BufferView<IndexT>  ids,
-                                   BufferView<AABB>    out_boxes,
-                                   BufferView<IndexT>  out_cids)
-    {
-        const SizeT i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i < boxes.size() && flags(i))
+        else
         {
-            const IndexT dst = offsets(i);
-            ids(dst)         = i;
-            out_boxes(dst)   = boxes(i);
-            out_cids(dst)    = cids(i);
+            box.extend(next);
+            if(cid != next_cid)
+                cid = -1;
         }
     }
-    __global__ void publish_sizes(CBufferView<IndexT> a, CBufferView<IndexT> b, IndexT* counts)
+    // Every range reads immutable current bounds. Proxy ranges recompute cheap
+    // growth instead of reading grown output written by another block here.
+    __global__ void prepare_cache_bounds(ProxyBounds p)
     {
-        counts[0] = a(a.size() - 1);
-        counts[1] = b(b.size() - 1);
+        int         range = 0, block = blockIdx.x;
+        const SizeT sizes[6] = {p.grown[0].size(),
+                                p.grown[1].size(),
+                                p.grown[2].size(),
+                                p.ids[0].size(),
+                                p.ids[1].size(),
+                                p.leaf_boxes.size()};
+        for(; range < 5; ++range)
+        {
+            const int blocks = (sizes[range] + blockDim.x - 1) / blockDim.x;
+            if(block < blocks)
+                break;
+            block -= blocks;
+        }
+        const SizeT i = SizeT(block) * blockDim.x + threadIdx.x;
+        if(i >= sizes[range])
+            return;
+        if(range < 3)
+        {
+            p.grown[range](i)  = p.fat.box(range, i);
+            p.shrink[range](i) = p.fat.shrink(range, i);
+            return;
+        }
+        AABB   box;
+        IndexT cid   = -1;
+        bool   first = true;
+        if(range < 5)
+        {
+            const int    chain = range - 3;
+            const IndexT e     = p.ids[chain](i);
+            if(chain == 0 && e < p.fat.current[1].aabbs.size() && p.edge_queries(e))
+                extend_proxy(box, cid, first, p.fat.box(1, e), p.fat.current[1].cids(e));
+            for(int slot = 0; slot < 2; ++slot)
+            {
+                const IndexT v = p.owned_vertices(e)[slot];
+                if(v >= 0 && (chain == 0 ? p.point_queries(v) != 0 : p.point_queries(v) == 0))
+                    extend_proxy(
+                        box, cid, first, p.fat.box(0, v), p.fat.current[0].cids(v));
+            }
+            p.query_boxes[chain](i) = box;
+            p.query_cids[chain](i)  = cid;
+        }
+        else
+        {
+            if(i < p.fat.current[2].aabbs.size())
+                extend_proxy(box, cid, first, p.fat.box(2, i), p.fat.current[2].cids(i));
+            for(int slot = 0; slot < 3; ++slot)
+            {
+                const IndexT e = p.owned_edges(i)[slot];
+                if(e >= 0)
+                    extend_proxy(
+                        box, cid, first, p.fat.box(1, e), p.fat.current[1].cids(e));
+            }
+            p.leaf_boxes(i) = box;
+            p.leaf_cids(i)  = cid;
+            // These are cover tags, never body IDs.
+            p.leaf_tags(i) = i < p.face_queries.size() && p.face_queries(i) ? 0 : 1;
+        }
     }
     struct ProxyNode
     {
@@ -416,34 +387,52 @@ namespace
         if(i < control.size())
             out[i] = control(i);
     }
-    __global__ void count_candidates(CBufferView<Vector2i>  ef,
-                                     CBufferView<IndexT>    query_ids,
-                                     CBufferView<Vector2i>  owned_vertices,
-                                     CBufferView<Vector3i>  owned_edges,
-                                     Bounds                 points,
-                                     Bounds                 edges,
-                                     Bounds                 faces,
-                                     CBufferView<AABB>      fat_points,
-                                     CBufferView<AABB>      fat_edges,
-                                     CBufferView<AABB>      fat_faces,
-                                     CBufferView<IndexT>    point_queries,
-                                     CBufferView<IndexT>    edge_queries,
-                                     PointTrianglePredicate pt,
-                                     EdgeEdgePredicate      ee,
-                                     NodePredicate          node,
-                                     bool                   reverse,
-                                     BufferView<uint8_t>    masks,
-                                     BufferView<U64>        pt_counts,
-                                     BufferView<U64>        ee_counts)
+    struct CandidateCounts
+    {
+        U64 pt = 0, ee = 0;
+    };
+    struct AddCandidateCounts
+    {
+        __host__ __device__ CandidateCounts operator()(CandidateCounts a, CandidateCounts b) const
+        {
+            return {a.pt + b.pt, a.ee + b.ee};
+        }
+    };
+    __global__ void count_candidates(CBufferView<Vector2i>       ef,
+                                     CVarView<int>               live,
+                                     CBufferView<IndexT>         query_ids,
+                                     CBufferView<Vector2i>       owned_vertices,
+                                     CBufferView<Vector3i>       owned_edges,
+                                     Bounds                      points,
+                                     Bounds                      edges,
+                                     Bounds                      faces,
+                                     CBufferView<AABB>           fat_points,
+                                     CBufferView<AABB>           fat_edges,
+                                     CBufferView<AABB>           fat_faces,
+                                     CBufferView<IndexT>         point_queries,
+                                     CBufferView<IndexT>         edge_queries,
+                                     PointTrianglePredicate      pt,
+                                     EdgeEdgePredicate           ee,
+                                     NodePredicate               node,
+                                     bool                        reverse,
+                                     BufferView<uint8_t>         masks,
+                                     BufferView<CandidateCounts> counts)
     {
         const SizeT i = blockIdx.x * blockDim.x + threadIdx.x;
         if(i == 0)
         {
-            pt_counts(ef.size()) = 0;
-            ee_counts(ef.size()) = 0;
+            counts(ef.size()) = {};
         }
         if(i >= ef.size())
             return;
+        // Never expand a truncated traversal, even if its partial output fits.
+        const int n = *live;
+        if(n < 0 || SizeT(n) > ef.size() || i >= SizeT(n))
+        {
+            masks(i)  = 0;
+            counts(i) = {};
+            return;
+        }
         const auto   pair = ef(i);
         const IndexT e = query_ids(pair[0]), f = pair[1];
         uint8_t      mask = 0;
@@ -485,42 +474,54 @@ namespace
                     ++ne;
                 }
             }
-        masks(i)     = mask;
-        pt_counts(i) = np;
-        ee_counts(i) = ne;
+        masks(i)  = mask;
+        counts(i) = {np, ne};
     }
-    __global__ void accumulate_counts(CBufferView<U64> pts,
-                                      CBufferView<U64> ees,
-                                      U64*             totals,
-                                      BufferView<U64>  base)
+    // Chunks of a chain execute on one stream, so reservation needs no atomics.
+    __global__ void reserve_chunk(CBufferView<CandidateCounts> offsets,
+                                  VarView<CandidateCounts>     totals,
+                                  BufferView<CandidateCounts>  bases,
+                                  SizeT                        chunk)
     {
-        base(0) = totals[0];
-        base(1) = totals[1];
-        totals[0] += pts(pts.size() - 1);
-        totals[1] += ees(ees.size() - 1);
+        bases(chunk) = *totals;
+        *totals = AddCandidateCounts{}(*totals, offsets(offsets.size() - 1));
     }
-    __global__ void fill_candidates(CBufferView<Vector2i> ef,
-                                    CBufferView<IndexT>   query_ids,
-                                    CBufferView<Vector2i> owned_vertices,
-                                    CBufferView<Vector3i> owned_edges,
-                                    CBufferView<uint8_t>  masks,
-                                    CBufferView<U64>      po,
-                                    CBufferView<U64>      eo,
-                                    CBufferView<U64>      base,
-                                    BufferView<Vector2i>  pts,
-                                    BufferView<Vector2i>  ees)
+    __global__ void publish_refresh_counts(CVarView<CandidateCounts> a,
+                                           CVarView<CandidateCounts> b,
+                                           U64*                      out)
+    {
+        out[0] = a->pt;
+        out[1] = a->ee;
+        out[2] = b->pt;
+        out[3] = b->ee;
+    }
+    __global__ void fill_candidates(CBufferView<Vector2i>        ef,
+                                    CVarView<int>                live,
+                                    CBufferView<IndexT>          query_ids,
+                                    CBufferView<Vector2i>        owned_vertices,
+                                    CBufferView<Vector3i>        owned_edges,
+                                    CBufferView<uint8_t>         masks,
+                                    CBufferView<CandidateCounts> offsets,
+                                    CBufferView<CandidateCounts> bases,
+                                    SizeT                        chunk,
+                                    BufferView<Vector2i>         pts,
+                                    BufferView<Vector2i>         ees)
     {
         const SizeT i = blockIdx.x * blockDim.x + threadIdx.x;
-        if(i >= ef.size())
+        const int   n = *live;
+        if(n < 0 || SizeT(n) > ef.size() || i >= SizeT(n))
             return;
         const auto   pair = ef(i);
         const IndexT e = query_ids(pair[0]), f = pair[1];
-        auto         p = base(0) + po(i), q = base(1) + eo(i);
+        const auto   base = bases(chunk), total = offsets(offsets.size() - 1);
+        auto         p = base.pt + offsets(i).pt, q = base.ee + offsets(i).ee;
+        const bool   pt_fits = base.pt + total.pt <= pts.size();
+        const bool   ee_fits = base.ee + total.ee <= ees.size();
         for(int slot = 0; slot < 2; ++slot)
-            if(masks(i) & (uint8_t{1} << slot))
+            if(pt_fits && (masks(i) & (uint8_t{1} << slot)))
                 pts(p++) = Vector2i{owned_vertices(e)[slot], f};
         for(int slot = 0; slot < 3; ++slot)
-            if(masks(i) & (uint8_t{1} << (slot + 2)))
+            if(ee_fits && (masks(i) & (uint8_t{1} << (slot + 2))))
             {
                 const IndexT b = owned_edges(f)[slot];
                 ees(q++)       = Vector2i{min(b, e), max(b, e)};
@@ -546,13 +547,14 @@ struct SingleEFBVHQuery::Impl
     std::vector<IndexT>       m_h_vertices;
     std::vector<Vector2i>     m_h_edges;
     std::vector<Vector3i>     m_h_faces;
+    std::vector<Vector2i>     m_h_owned_vertices;
     DeviceBuffer<IndexT>      m_metadata;
     std::unique_ptr<Metadata> m_previous_metadata;
     DeviceBuffer<IndexT>      m_point_queries, m_edge_queries, m_face_queries;
     DeviceBuffer<IndexT>      m_groups[3];
-    DeviceBuffer<AABB>        m_grown[3], m_query_boxes, m_leaf_boxes;
+    DeviceBuffer<AABB>        m_grown[3], m_leaf_boxes;
     DeviceBuffer<Float>       m_shrink[3];
-    DeviceBuffer<IndexT>      m_query_cids, m_leaf_cids, m_leaf_tags;
+    DeviceBuffer<IndexT>      m_leaf_cids, m_leaf_tags;
     bool m_node_symmetric = false, m_reverse_needed = false;
     bool m_cache_valid = false, m_tree_ready = false, m_rebuild_topology = true;
     bool m_skip_pt = false, m_skip_ee = false;
@@ -564,19 +566,21 @@ struct SingleEFBVHQuery::Impl
     struct Chain
     {
         SideStream           side;
-        DeviceBuffer<IndexT> ids, bids, cids, flags, offsets;
+        DeviceBuffer<IndexT> ids, bids, cids;
         DeviceBuffer<AABB>   boxes;
         std::vector<std::unique_ptr<InfoStacklessBVH::QueryBuffer>> chunks;
         SizeT                                                       count = 0;
+        DeviceBuffer<uint8_t>                                       masks;
+        DeviceBuffer<CandidateCounts> counts, offsets, bases;
+        DeviceVar<CandidateCounts>    totals;
+        DeviceBuffer<Vector2i>        pts, ees;
     } m_chains[2];
     DeviceBuffer<Vector2i> m_raw_pts, m_raw_ees;
-    DeviceBuffer<uint8_t>  m_masks;
-    DeviceBuffer<U64> m_pt_counts, m_ee_counts, m_pt_offsets, m_ee_offsets, m_chunk_base;
-    DeviceBuffer<IndexT> m_judge_flags, m_tile_counts, m_tile_offsets,
+    DeviceBuffer<IndexT>   m_judge_flags, m_tile_counts, m_tile_offsets,
         m_dummy_counts, m_ee_queue_counts;
     DeviceBuffer<int4>     m_ee_queue;
     DeviceBuffer<IndexT>   m_control_device;
-    ReadbackBuffer<IndexT> m_control, m_counts, m_query_sizes, m_ef_counts;
+    ReadbackBuffer<IndexT> m_control, m_counts, m_ef_counts;
     ReadbackBuffer<U64>    m_raw_counts;
     cudaEvent_t            m_ready    = nullptr;
     int                    m_sm_count = 0;
@@ -597,12 +601,10 @@ struct SingleEFBVHQuery::Impl
         m_control_device.resize(6);
         m_control.resize(6);
         m_counts.resize(8);
-        m_query_sizes.resize(2);
         m_ef_counts.resize(2);
-        m_raw_counts.resize(2);
+        m_raw_counts.resize(4);
         m_dummy_counts.resize(5);
         m_ee_queue_counts.resize(3);
-        m_chunk_base.resize(2);
     }
     void wait()
     {
@@ -714,6 +716,7 @@ bool SingleEFBVHQuery::Impl::prepare_topology(const bvh_simplex_detail::PointTri
     if(owned_vertices.size() > limit || owned_edges.size() > limit)
         return false;
 
+    m_h_owned_vertices = owned_vertices;
     upload(m_owned_vertices, owned_vertices);
     upload(m_owned_edges, owned_edges);
     m_previous_vertices.resize_discard(pt.Vs.size());
@@ -840,6 +843,32 @@ void SingleEFBVHQuery::Impl::update_cover(const Metadata& metadata)
     groups(edges, m_stats.ee_cover, 1);
     groups(faces, m_stats.pt_cover, 2);
     m_node_symmetric = readable(Metadata::NodeMask);
+    std::vector<IndexT> ids[2];
+    for(SizeT i = 0; i < m_h_owned_vertices.size(); ++i)
+    {
+        bool primary = i < edges.size() && edges[i] != 0, reverse = false;
+        for(const IndexT v : m_h_owned_vertices[i])
+            if(v >= 0)
+            {
+                primary |= points[v] != 0;
+                reverse |= m_reverse_needed && points[v] == 0;
+            }
+        if(primary)
+            ids[0].push_back(static_cast<IndexT>(i));
+        if(reverse)
+            ids[1].push_back(static_cast<IndexT>(i));
+    }
+    for(int family = 0; family < 2; ++family)
+    {
+        auto& chain = m_chains[family];
+        upload(chain.ids, ids[family]);
+        chain.count = ids[family].size();
+        chain.bids.resize(chain.count, IndexT{-1});
+        chain.boxes.resize_discard(chain.count);
+        chain.cids.resize_discard(chain.count);
+    }
+    m_stats.primary_queries = m_chains[0].count;
+    m_stats.reverse_queries = m_chains[1].count;
 }
 
 void SingleEFBVHQuery::Impl::prepare_proxies(const PointTrianglePredicate& pt,
@@ -849,84 +878,51 @@ void SingleEFBVHQuery::Impl::prepare_proxies(const PointTrianglePredicate& pt,
                                              Bounds faces,
                                              Float  skin_scale)
 {
-    m_stats.cover_skin     = m_cover_thick ? 2.0 : 1.0;
-    m_stats.other_skin     = m_other_uniform ? 1.0 : 0.01;
+    m_stats.cover_skin = m_cover_thick ? 2.0 : 1.0;
+    m_stats.other_skin = m_other_uniform ? 1.0 : 0.01;
+    ProxyBounds p{};
+    p.fat                  = {{points, edges, faces},
+                              {m_groups[0].cview(), m_groups[1].cview(), m_groups[2].cview()},
+                              pt.Vs,
+                              ee.Es,
+                              pt.Fs,
+                              pt.d_hats,
+                              skin_scale,
+                              skin_scale * m_stats.cover_skin,
+                              skin_scale * m_stats.other_skin};
+    p.owned_vertices       = m_owned_vertices.cview();
+    p.owned_edges          = m_owned_edges.cview();
+    p.point_queries        = m_point_queries.cview();
+    p.edge_queries         = m_edge_queries.cview();
+    p.face_queries         = m_face_queries.cview();
+    int          blocks    = 0;
     const Bounds inputs[3] = {points, edges, faces};
     for(int family = 0; family < 3; ++family)
     {
         const SizeT n = inputs[family].aabbs.size();
         m_grown[family].resize_discard(n);
         m_shrink[family].resize_discard(n);
-        if(n)
-            grow_primitives<<<(n + Threads - 1) / Threads, Threads>>>(
-                inputs[family].aabbs,
-                m_groups[family].cview(),
-                pt.Vs,
-                ee.Es,
-                pt.Fs,
-                pt.d_hats,
-                family,
-                skin_scale,
-                skin_scale * m_stats.cover_skin,
-                skin_scale * m_stats.other_skin,
-                m_grown[family].view(),
-                m_shrink[family].view());
+        p.grown[family]  = m_grown[family].view();
+        p.shrink[family] = m_shrink[family].view();
+        blocks += (n + Threads - 1) / Threads;
     }
-    const SizeT queries = m_owned_vertices.size(), leaves = m_owned_edges.size();
-    m_query_boxes.resize_discard(queries);
-    m_query_cids.resize_discard(queries);
+    for(int family = 0; family < 2; ++family)
+    {
+        auto& chain           = m_chains[family];
+        p.ids[family]         = chain.ids.cview();
+        p.query_boxes[family] = chain.boxes.view();
+        p.query_cids[family]  = chain.cids.view();
+        blocks += (chain.count + Threads - 1) / Threads;
+    }
+    const SizeT leaves = m_owned_edges.size();
     m_leaf_boxes.resize_discard(leaves);
     m_leaf_cids.resize_discard(leaves);
     m_leaf_tags.resize_discard(leaves);
-    for(auto& chain : m_chains)
-    {
-        chain.ids.resize_discard(queries);
-        chain.boxes.resize_discard(queries);
-        chain.bids.resize(queries, IndexT{-1});
-        chain.cids.resize_discard(queries);
-        chain.flags.resize_discard(queries + 1);
-        chain.offsets.resize_discard(queries + 1);
-    }
-    make_query_proxies<<<(queries + Threads - 1) / Threads, Threads>>>(
-        points,
-        edges,
-        m_grown[0].cview(),
-        m_grown[1].cview(),
-        m_owned_vertices.cview(),
-        m_point_queries.cview(),
-        m_edge_queries.cview(),
-        m_query_boxes.view(),
-        m_query_cids.view(),
-        m_chains[0].flags.view(),
-        m_chains[1].flags.view(),
-        m_reverse_needed);
-    make_leaf_proxies<<<(leaves + Threads - 1) / Threads, Threads>>>(
-        edges,
-        faces,
-        m_grown[1].cview(),
-        m_grown[2].cview(),
-        m_owned_edges.cview(),
-        m_face_queries.cview(),
-        m_leaf_boxes.view(),
-        m_leaf_cids.view(),
-        m_leaf_tags.view());
-    for(auto& chain : m_chains)
-    {
-        DeviceScan().ExclusiveSum(chain.flags.data(),
-                                  chain.offsets.data(),
-                                  static_cast<int>(queries + 1));
-        gather_queries<<<(queries + Threads - 1) / Threads, Threads>>>(
-            m_query_boxes.cview(),
-            m_query_cids.cview(),
-            chain.flags.cview(),
-            chain.offsets.cview(),
-            chain.ids.view(),
-            chain.boxes.view(),
-            chain.cids.view());
-    }
-    publish_sizes<<<1, 1>>>(m_chains[0].offsets.cview(),
-                            m_chains[1].offsets.cview(),
-                            m_query_sizes.device_data());
+    p.leaf_boxes = m_leaf_boxes.view();
+    p.leaf_cids  = m_leaf_cids.view();
+    p.leaf_tags  = m_leaf_tags.view();
+    blocks += (leaves + Threads - 1) / Threads;
+    prepare_cache_bounds<<<blocks, Threads>>>(p);
 }
 
 void SingleEFBVHQuery::Impl::refresh(InfoStacklessBVH&             tree,
@@ -945,158 +941,240 @@ void SingleEFBVHQuery::Impl::refresh(InfoStacklessBVH&             tree,
         tree.build(m_leaf_boxes.cview(), m_leaf_tags.cview(), m_leaf_cids.cview());
         ++m_stats.topology_builds;
     }
-    m_tree             = &tree;
-    m_tree_ready       = true;
-    m_rebuild_topology = false;
-    m_query_sizes.enqueue_copy();
-    wait();
-    SizeT rounds = 0;
+    m_tree                     = &tree;
+    m_tree_ready               = true;
+    m_rebuild_topology         = false;
+    SizeT             first[2] = {}, all_chunks = 0;
+    std::vector<bool> pending[2];
     for(int family = 0; family < 2; ++family)
     {
-        auto& chain       = m_chains[family];
-        chain.count       = m_query_sizes[family];
+        auto&       chain = m_chains[family];
         const SizeT count = (chain.count + chunk_size - 1) / chunk_size;
         while(chain.chunks.size() < count)
-            chain.chunks.push_back(std::make_unique<InfoStacklessBVH::QueryBuffer>());
-        chain.chunks.resize(count);
-        rounds = std::max(rounds, count);
-    }
-    m_stats.primary_queries = m_chains[0].count;
-    m_stats.reverse_queries = m_chains[1].count;
-    store_value(m_raw_counts.device_data(), U64{0});
-    store_value(m_raw_counts.device_data() + 1, U64{0});
-    std::array<U64, 2> totals{};
-    auto               pt = pt_input;
-    auto               ee = ee_input;
-    pt.geometry           = false;
-    ee.geometry           = false;
-    for(SizeT round = 0; round < rounds; ++round)
-    {
-        bool pending[2] = {round < m_chains[0].chunks.size(),
-                           round < m_chains[1].chunks.size()};
-        bool first[2]   = {true, true};
-        do
         {
-            bool forked[2] = {false, false};
-            try
+            auto chunk = std::make_unique<InfoStacklessBVH::QueryBuffer>();
+            const SizeT queries =
+                std::min(chunk_size, chain.count - chain.chunks.size() * chunk_size);
+            chunk->m_pairs.resize_discard(
+                std::min(chunk->m_pairs.size(), queries * m_owned_edges.size()));
+            chain.chunks.push_back(std::move(chunk));
+        }
+        chain.chunks.resize(count);
+        chain.bases.resize_discard(count);
+        first[family] = all_chunks;
+        all_chunks += count;
+        pending[family].assign(count, true);
+        store_value(chain.totals.data(), CandidateCounts{});
+        reserve_pairs(chain.pts, 1024, tree.config().reserve_ratio, false);
+        reserve_pairs(chain.ees, 1024, tree.config().reserve_ratio, false);
+    }
+    m_ef_counts.resize(all_chunks);
+    auto pt      = pt_input;
+    auto ee      = ee_input;
+    pt.geometry  = false;
+    ee.geometry  = false;
+    auto scratch = [&](Chain& chain)
+    {
+        SizeT capacity = 0;
+        for(const auto& chunk : chain.chunks)
+            capacity = std::max(capacity, chunk->m_pairs.size());
+        chain.masks.resize_discard(capacity);
+        chain.counts.resize_discard(capacity + 1);
+        chain.offsets.resize_discard(capacity + 1);
+    };
+    auto expand = [&](int family, SizeT chunk, cudaStream_t stream, bool reserve)
+    {
+        auto&       chain = m_chains[family];
+        auto&       ef    = *chain.chunks[chunk];
+        const SizeT n     = ef.m_pairs.size();
+        const auto  ids =
+            chain.ids.cview(chunk * chunk_size,
+                            std::min(chunk_size, chain.count - chunk * chunk_size));
+        count_candidates<<<(n + Threads - 1) / Threads, Threads, 0, stream>>>(
+            ef.m_pairs.cview(),
+            ef.m_cpNum.cview(),
+            ids,
+            m_owned_vertices.cview(),
+            m_owned_edges.cview(),
+            points,
+            edges,
+            faces,
+            m_grown[0].cview(),
+            m_grown[1].cview(),
+            m_grown[2].cview(),
+            m_point_queries.cview(),
+            m_edge_queries.cview(),
+            pt,
+            ee,
+            node,
+            family == 1,
+            chain.masks.view(0, n),
+            chain.counts.view(0, n + 1));
+        DeviceScan(stream).ExclusiveScan(chain.counts.data(),
+                                         chain.offsets.data(),
+                                         AddCandidateCounts{},
+                                         CandidateCounts{},
+                                         static_cast<int>(n + 1));
+        if(reserve)
+            reserve_chunk<<<1, 1, 0, stream>>>(chain.offsets.cview(0, n + 1),
+                                               chain.totals.view(),
+                                               chain.bases.view(),
+                                               chunk);
+        fill_candidates<<<(n + Threads - 1) / Threads, Threads, 0, stream>>>(
+            ef.m_pairs.cview(),
+            ef.m_cpNum.cview(),
+            ids,
+            m_owned_vertices.cview(),
+            m_owned_edges.cview(),
+            chain.masks.cview(0, n),
+            chain.offsets.cview(0, n + 1),
+            chain.bases.cview(),
+            chunk,
+            chain.pts.view(),
+            chain.ees.view());
+    };
+    bool initial = true, retry;
+    do
+    {
+        for(auto& chain : m_chains)
+            scratch(chain);
+        bool forked[2] = {};
+        try
+        {
+            // Mark both forks before either join so their full pipelines overlap.
+            for(int family = 0; family < 2; ++family)
+                if(std::any_of(pending[family].begin(),
+                               pending[family].end(),
+                               [](bool p) { return p; }))
+                    m_chains[family].side.mark();
+            for(int family = 0; family < 2; ++family)
             {
-                for(int family = 0; family < 2; ++family)
-                    if(pending[family])
-                    {
-                        auto&       chain  = m_chains[family];
-                        auto&       ef     = *chain.chunks[round];
-                        const SizeT offset = round * chunk_size,
-                                    count = std::min(chunk_size, chain.count - offset);
-                        const auto stream = chain.side.fork();
-                        forked[family]    = true;
-                        tree.launch_query(chain.boxes.cview(offset, count),
-                                          chain.bids.cview(offset, count),
-                                          chain.cids.cview(offset, count),
-                                          {},
-                                          ProxyNode{node, family == 1, m_node_symmetric},
-                                          ProxyLeaf{m_face_queries.cview(), family == 1},
-                                          ef,
-                                          first[family],
-                                          reuse_order,
-                                          stream);
-                        publish_ef_count<<<1, 1, 0, stream>>>(
-                            ef.m_cpNum.cview(), m_ef_counts.device_data() + family);
-                    }
+                auto& chain = m_chains[family];
+                for(SizeT chunk = 0; chunk < chain.chunks.size(); ++chunk)
+                {
+                    if(!pending[family][chunk])
+                        continue;
+                    const auto stream  = chain.side.fork_marked();
+                    forked[family]     = true;
+                    auto&       ef     = *chain.chunks[chunk];
+                    const SizeT offset = chunk * chunk_size,
+                                count = std::min(chunk_size, chain.count - offset);
+                    tree.launch_query(chain.boxes.cview(offset, count),
+                                      chain.bids.cview(offset, count),
+                                      chain.cids.cview(offset, count),
+                                      {},
+                                      ProxyNode{node, family == 1, m_node_symmetric},
+                                      ProxyLeaf{m_face_queries.cview(), family == 1},
+                                      ef,
+                                      initial,
+                                      reuse_order,
+                                      stream);
+                    publish_ef_count<<<1, 1, 0, stream>>>(ef.m_cpNum.cview(),
+                                                          m_ef_counts.device_data()
+                                                              + first[family] + chunk);
+                    expand(family, chunk, stream, true);
+                }
             }
-            catch(...)
-            {
-                for(int family = 0; family < 2; ++family)
-                    if(forked[family])
-                        m_chains[family].side.join();
-                CUDA_TOOL_CHECK(cudaStreamSynchronize(default_stream()));
-                throw;
-            }
+        }
+        catch(...)
+        {
             for(int family = 0; family < 2; ++family)
                 if(forked[family])
                     m_chains[family].side.join();
-            m_ef_counts.enqueue_copy();
-            wait();
-            for(int family = 0; family < 2; ++family)
-                if(pending[family])
-                {
-                    const int count = m_ef_counts[family];
-                    if(count < 0)
-                        throw std::overflow_error("Single EF proxy counter exceeds 32-bit indexing");
-                    pending[family] =
-                        tree.prepare_query_result(*m_chains[family].chunks[round], count);
-                    first[family] = false;
-                }
-        } while(pending[0] || pending[1]);
+            CUDA_TOOL_CHECK(cudaStreamSynchronize(default_stream()));
+            throw;
+        }
+        for(int family = 0; family < 2; ++family)
+            if(forked[family])
+                m_chains[family].side.join();
+        publish_refresh_counts<<<1, 1>>>(m_chains[0].totals.cview(),
+                                         m_chains[1].totals.cview(),
+                                         m_raw_counts.device_data());
+        m_ef_counts.enqueue_copy();
+        m_raw_counts.enqueue_copy();
+        wait();
+        ++m_stats.refresh_waits;
+        retry = false;
         for(int family = 0; family < 2; ++family)
         {
             auto& chain = m_chains[family];
-            if(round >= chain.chunks.size())
-                continue;
-            const auto& cached = *chain.chunks[round];
-            const SizeT n      = cached.size();
-            if(!n)
-                continue;
-            const auto ids =
-                chain.ids.cview(round * chunk_size,
-                                std::min(chunk_size, chain.count - round * chunk_size));
-            m_masks.resize_discard(n);
-            m_pt_counts.resize_discard(n + 1);
-            m_ee_counts.resize_discard(n + 1);
-            m_pt_offsets.resize_discard(n + 1);
-            m_ee_offsets.resize_discard(n + 1);
-            count_candidates<<<(n + Threads - 1) / Threads, Threads>>>(
-                cached.view(),
-                ids,
-                m_owned_vertices.cview(),
-                m_owned_edges.cview(),
-                points,
-                edges,
-                faces,
-                m_grown[0].cview(),
-                m_grown[1].cview(),
-                m_grown[2].cview(),
-                m_point_queries.cview(),
-                m_edge_queries.cview(),
-                pt,
-                ee,
-                node,
-                family == 1,
-                m_masks.view(),
-                m_pt_counts.view(),
-                m_ee_counts.view());
-            DeviceScan().ExclusiveSum(m_pt_counts.data(),
-                                      m_pt_offsets.data(),
-                                      static_cast<int>(n + 1));
-            DeviceScan().ExclusiveSum(m_ee_counts.data(),
-                                      m_ee_offsets.data(),
-                                      static_cast<int>(n + 1));
-            accumulate_counts<<<1, 1>>>(m_pt_offsets.cview(),
-                                        m_ee_offsets.cview(),
-                                        m_raw_counts.device_data(),
-                                        m_chunk_base.view());
-            m_raw_counts.enqueue_copy();
-            wait();
-            totals = {m_raw_counts[0], m_raw_counts[1]};
-            if(totals[0] > PairLimit || totals[1] > PairLimit
-               || totals[0] + totals[1] > PairLimit)
-                throw std::overflow_error("Single EF cached candidates exceed 32-bit downstream indexing");
-            reserve_pairs(m_raw_pts, totals[0], tree.config().reserve_ratio, true);
-            reserve_pairs(m_raw_ees, totals[1], tree.config().reserve_ratio, true);
-            fill_candidates<<<(n + Threads - 1) / Threads, Threads>>>(
-                cached.view(),
-                ids,
-                m_owned_vertices.cview(),
-                m_owned_edges.cview(),
-                m_masks.cview(),
-                m_pt_offsets.cview(),
-                m_ee_offsets.cview(),
-                m_chunk_base.cview(),
-                m_raw_pts.view(),
-                m_raw_ees.view());
+            for(SizeT chunk = 0; chunk < chain.chunks.size(); ++chunk)
+            {
+                auto&     ef    = *chain.chunks[chunk];
+                const int count = m_ef_counts[first[family] + chunk];
+                if(count < 0)
+                    throw std::overflow_error("Single EF proxy counter exceeds 32-bit indexing");
+                pending[family][chunk] = SizeT(count) > ef.m_pairs.size();
+                ef.m_size              = count;
+                if(pending[family][chunk])
+                {
+                    const SizeT queries =
+                        std::min(chunk_size, chain.count - chunk * chunk_size);
+                    const SizeT capacity = std::min(
+                        queries * m_owned_edges.size(),
+                        static_cast<SizeT>(std::min(
+                            Float(PairLimit),
+                            std::max(Float(count), Float(count) * tree.config().reserve_ratio))));
+                    ef.m_pairs.resize_discard(capacity);
+                    retry = true;
+                    ++m_stats.ef_retries;
+                }
+            }
         }
+        initial = false;
+    } while(retry);
+
+    CandidateCounts totals[2] = {{m_raw_counts[0], m_raw_counts[1]},
+                                 {m_raw_counts[2], m_raw_counts[3]}};
+    const U64 np = totals[0].pt + totals[1].pt, ne = totals[0].ee + totals[1].ee;
+    if(np > PairLimit || ne > PairLimit || np + ne > PairLimit)
+        throw std::overflow_error("Single EF cached candidates exceed 32-bit downstream indexing");
+    for(int family = 0; family < 2; ++family)
+    {
+        auto&      chain  = m_chains[family];
+        const bool refill = totals[family].pt > chain.pts.size()
+                            || totals[family].ee > chain.ees.size();
+        if(!refill)
+            continue;
+        // Discard growth requires refilling every chunk in this chain, including
+        // chunks that fitted before growth. Saved bases must not be reserved twice.
+        reserve_pairs(chain.pts, totals[family].pt, tree.config().reserve_ratio, false);
+        reserve_pairs(chain.ees, totals[family].ee, tree.config().reserve_ratio, false);
+        const auto stream = chain.side.fork();
+        try
+        {
+            for(SizeT chunk = 0; chunk < chain.chunks.size(); ++chunk)
+                expand(family, chunk, stream, false);
+        }
+        catch(...)
+        {
+            chain.side.join();
+            CUDA_TOOL_CHECK(cudaStreamSynchronize(default_stream()));
+            throw;
+        }
+        chain.side.join();
+        ++m_stats.typed_refills;
     }
-    m_stats.stored_pts  = totals[0];
-    m_stats.stored_ees  = totals[1];
+    reserve_pairs(m_raw_pts, np, tree.config().reserve_ratio, false);
+    reserve_pairs(m_raw_ees, ne, tree.config().reserve_ratio, false);
+    SizeT po = 0, eo = 0;
+    m_stats.ef_pairs = 0;
+    for(int family = 0; family < 2; ++family)
+    {
+        const auto& chain = m_chains[family];
+        if(totals[family].pt)
+            m_raw_pts.view(po, totals[family].pt)
+                .copy_from(chain.pts.cview(0, totals[family].pt));
+        if(totals[family].ee)
+            m_raw_ees.view(eo, totals[family].ee)
+                .copy_from(chain.ees.cview(0, totals[family].ee));
+        po += totals[family].pt;
+        eo += totals[family].ee;
+        for(const auto& chunk : chain.chunks)
+            m_stats.ef_pairs += chunk->size();
+    }
+    m_stats.stored_pts  = np;
+    m_stats.stored_ees  = ne;
     m_cached_chunk_size = chunk_size;
     m_cache_valid       = true;
     ++m_stats.refreshes;
@@ -1236,7 +1314,8 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
                               InfoStacklessBVH::QueryBuffer& pts,
                               InfoStacklessBVH::QueryBuffer& ees,
                               bool                           new_frame,
-                              const std::function<void()>&   hook)
+                              const std::function<void()>&   hook,
+                              TrajectoryPrefix*              prefix)
 {
     UIPC_ASSERT(pt.alpha == ee.alpha && pt.alpha >= 0.0,
                 "Single EF PT and EE queries must share a nonnegative alpha");
@@ -1265,22 +1344,20 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
     const bool policy_change = s.m_skip_pt != pt.skip_position_free
                                || s.m_skip_ee != ee.skip_position_free;
     const SizeT prospective_leaves = topology_shape ? s.m_owned_edges.size() : 0;
-    const SizeT chunk_size    = prospective_leaves ?
-                                    std::min({s.m_owned_vertices.size(),
-                                              std::max(SizeT{1}, max_chunk_edges),
-                                              PairLimit / prospective_leaves}) :
-                                    0;
-    const bool  known_refresh = force_fresh || new_frame || !s.m_cache_valid
-                               || !topology_shape || !metadata_shape || policy_change
-                               || s.m_cached_chunk_size != chunk_size
-                               || s.m_tree != &tree;
+    const SizeT chunk_size = prospective_leaves ?
+                                 std::min({s.m_owned_vertices.size(),
+                                           std::max(SizeT{1}, max_chunk_edges),
+                                           PairLimit / prospective_leaves}) :
+                                 0;
+    const bool  known_refresh =
+        force_fresh || !s.m_cache_valid || !topology_shape || !metadata_shape
+        || policy_change || s.m_cached_chunk_size != chunk_size || s.m_tree != &tree;
     const IndexT initial[6] = {known_refresh ? 1 : 0,
                                topology_shape ? 0 : 1,
                                metadata_shape && !policy_change ? 0 : 1,
                                0,
                                0,
                                0};
-    s.m_control_device.view().copy_from(initial);
     Validation validation{
         pt.Vs,
         s.m_previous_vertices.cview(),
@@ -1297,11 +1374,88 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
         topology_shape,
         metadata_shape,
         !known_refresh};
-    const SizeT work =
-        std::max({metadata.work, pt.Vs.size(), ee.Es.size(), pt.Fs.size()});
-    if(work)
-        validate_cache<<<(work + Threads - 1) / Threads, Threads>>>(
-            validation, s.m_control_device.data(), work);
+    if(prefix)
+    {
+        // A caller may reuse the POD after a shape change or cache refresh.
+        for(auto& family : prefix->family)
+        {
+            family.previous_vertices  = nullptr;
+            family.previous_edges     = nullptr;
+            family.previous_triangles = nullptr;
+            family.previous_bids      = nullptr;
+            family.previous_cids      = nullptr;
+            family.cached_grown       = nullptr;
+            family.cached_groups      = nullptr;
+            family.cached_shrink      = nullptr;
+        }
+        auto& check            = prefix->validation;
+        check                  = {};
+        check.invalid          = s.m_control_device.data();
+        check.topology_changed = s.m_control_device.data() + 1;
+        check.metadata_changed = s.m_control_device.data() + 2;
+        check.group_escaped[0] = s.m_control_device.data() + 5;
+        check.group_escaped[1] = s.m_control_device.data() + 3;
+        check.group_escaped[2] = s.m_control_device.data() + 4;
+        check.initial_invalid  = initial[0];
+        check.initial_topology = initial[1];
+        check.initial_metadata = initial[2];
+        if(metadata_shape)
+        {
+            // The six primitive BID/CID ranges are checked at their producer.
+            for(int a = 0; a < Metadata::PointBodies; ++a)
+            {
+                auto& range    = check.ranges[check.count++];
+                range.values   = metadata.arrays[a];
+                range.previous = s.m_metadata.data() + metadata.offsets[a];
+                range.n        = metadata.arrays[a].size();
+                check.work     = std::max(check.work, range.n);
+            }
+            for(int a = 0; a < Metadata::Matrices; ++a)
+            {
+                auto& range  = check.ranges[check.count++];
+                range.matrix = metadata.matrices[a];
+                range.previous =
+                    s.m_metadata.data() + metadata.offsets[Metadata::Arrays + a];
+                range.n         = metadata.matrices[a].total_size();
+                range.is_matrix = true;
+                check.work      = std::max(check.work, range.n);
+            }
+        }
+        for(int family = 0; family < 3; ++family)
+        {
+            auto& f = prefix->family[family + 1];
+            if(metadata_shape)
+            {
+                f.previous_bids = s.m_metadata.data()
+                                  + metadata.offsets[Metadata::PointBodies + 2 * family];
+                f.previous_cids = s.m_metadata.data()
+                                  + metadata.offsets[Metadata::PointContacts + 2 * family];
+            }
+            if(!known_refresh)
+            {
+                f.cached_grown  = s.m_grown[family].data();
+                f.cached_groups = s.m_groups[family].data();
+                f.cached_shrink = s.m_shrink[family].data();
+            }
+        }
+        if(topology_shape)
+        {
+            prefix->family[1].previous_vertices = s.m_previous_vertices.data();
+            prefix->family[2].previous_edges    = s.m_previous_edges.data();
+            prefix->family[3].previous_triangles = s.m_previous_triangles.data();
+        }
+        launch_trajectory_prefix(*prefix, default_stream());
+        ++s.m_stats.fused_prefixes;
+    }
+    else
+    {
+        s.m_control_device.view().copy_from(initial);
+        const SizeT work =
+            std::max({metadata.work, pt.Vs.size(), ee.Es.size(), pt.Fs.size()});
+        if(work)
+            validate_cache<<<(work + Threads - 1) / Threads, Threads>>>(
+                validation, s.m_control_device.data(), work);
+    }
     if(!known_refresh)
     {
         s.judge(tree, pt, ee, points, edges, faces, pts, ees, true, hook);
@@ -1310,6 +1464,8 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
             s.m_frame_cover_left |= s.m_control[3] != 0;
             s.m_frame_other_left |= s.m_control[4] != 0;
             ++s.m_stats.reuses;
+            if(new_frame)
+                ++s.m_stats.cross_frame_reuses;
             return true;
         }
     }

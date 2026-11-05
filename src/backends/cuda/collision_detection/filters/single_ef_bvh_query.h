@@ -7,6 +7,7 @@
 
 namespace uipc::backend::cuda
 {
+struct TrajectoryPrefix;
 class SingleEFBVHQuery
 {
   public:
@@ -24,6 +25,8 @@ class SingleEFBVHQuery
         SizeT refreshes = 0, reuses = 0, topology_builds = 0;
         SizeT primary_queries = 0, reverse_queries = 0;
         SizeT stored_pts = 0, stored_ees = 0;
+        SizeT ef_pairs = 0, refresh_waits = 0, ef_retries = 0, typed_refills = 0;
+        SizeT cross_frame_reuses = 0, fused_prefixes = 0;
         bool  pt_cover = false, ee_cover = false;
         Float cover_skin = 1.0, other_skin = 0.01;
     };
@@ -41,7 +44,8 @@ class SingleEFBVHQuery
                 InfoStacklessBVH::QueryBuffer&                    pts,
                 InfoStacklessBVH::QueryBuffer&                    ees,
                 bool                         new_frame       = false,
-                const std::function<void()>& before_readback = {});
+                const std::function<void()>& before_readback = {},
+                TrajectoryPrefix*            prefix          = nullptr);
 
     bool  force_fresh      = false;
     Float cache_skin_scale = 1.0;
