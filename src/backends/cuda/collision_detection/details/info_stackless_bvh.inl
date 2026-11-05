@@ -1588,10 +1588,11 @@ template <typename NodePred, typename LeafPred>
 inline void InfoStacklessBVH::launch_detect(cuda_tool::CBuffer2DView<IndexT> cmts,
                                             NodePred     np,
                                             LeafPred     lp,
-                                            QueryBuffer& qbuffer)
+                                            QueryBuffer& qbuffer,
+                                            cudaStream_t stream)
 {
     using namespace cuda_tool;
-    BufferLaunch().fill(qbuffer.m_cpNum.view(), 0);
+    BufferLaunch(stream).fill(qbuffer.m_cpNum.view(), 0);
 
     if(m_aabbs.size() == 0)
         return;
@@ -1605,7 +1606,7 @@ inline void InfoStacklessBVH::launch_detect(cuda_tool::CBuffer2DView<IndexT> cmt
                 m_aabbs.size(),
                 m_CIDs.size());
 
-    m_impl.stacklessSelf(np, lp, qbuffer.m_cpNum.view(), qbuffer.m_pairs.view());
+    m_impl.stacklessSelf(np, lp, qbuffer.m_cpNum.view(), qbuffer.m_pairs.view(), stream);
 }
 
 // detect() with NodePred / LeafPred: wrapper passes pre-loaded bid/cid to NodePredInfo

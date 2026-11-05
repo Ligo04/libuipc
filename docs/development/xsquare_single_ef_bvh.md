@@ -13,93 +13,71 @@ config["collision_detection"]["method"] = "single_ef_bvh"
 selector. Its default is `info_stackless_bvh`; `single_ef_bvh` is always
 available in CUDA builds, including builds with legacy collision disabled.
 
-## Query and cache contract
+## Query strategy and common cache contract
 
-One edge/face proxy tree supplies PT and EE candidates. Every surface vertex
-has exactly one query owner, and every edge has exactly one leaf owner.
-Isolated points become PT-only query proxies; standalone edges become EE-only
-leaves. A leaf box contains its face and every owned edge. Each query chain
-uses only the constituents it actually queries: selected EE edges and selected
-PT points in the primary chain, outside-cover PT points in the reverse chain.
-Their CIDs are recomputed from those contributors. Mixed scenes keep the existing auxiliary PP/PE queries. Pure
-codimensional or unsupported topology uses the existing simplex queries.
+Both `info_stackless_bvh` and `single_ef_bvh` now use `SimplexBVHQuery` in
+`src/backends/cuda/collision_detection/filters/simplex_bvh_query.{h,cu}`.
+The shared owner selects the cover, validates input contents, manages all four
+candidate caches and fat-box/frame policy, and schedules the common judge.
+See [the common query contract](simplex_bvh_queries.md) for inputs, IDs,
+PP/PE handling, prefix checks, streams and validation status.
 
-Contact-cover queries use one EF tree with two compact query lists. The
-primary list contains an edge in S_E or a proxy owning a point in S_P. The
-reverse PT list contains proxies owning points outside S_P and visits only
-faces entirely inside S_P. An edge belongs to S_E only when both endpoint
-contact IDs belong to the cover; a face belongs to S_P only when all three
-IDs do. This also covers mixed-CID primitives under the existing all-cross
-mask predicates. EE pairs are emitted once and stored in canonical order.
+SingleEF retains its ownership-based candidate-generation strategy. One real
+edge/face proxy tree supplies PT and EE pairs. Every surface point has one
+query owner, and every edge has one leaf owner. Isolated points become
+PT-only query proxies; standalone edges become EE-only leaves. Each leaf
+contains its face and every owned edge. The primary query box includes only
+selected EE edges and selected owned PT points; the reverse PT box includes
+only outside-cover owned points. CIDs are recomputed from those contributors.
 
-Each refresh grows point, edge and triangle boxes individually before taking
-proxy unions. Uniform skin is 1*d_hat. Cover primitives use 1*d_hat or
-2*d_hat; other primitives use 0.01*d_hat or 1*d_hat. Leaving a smaller skin
-raises that group's level, and leaving the next-lower skin while still
-inside a thick cache keeps that level for the next frame. Bounds round
-outwards. Every constituent primitive is checked against its own fat box;
-proxy-union containment alone cannot justify clipping typed primitive pairs.
+The primary list contains edges in S_E or proxies owning points in S_P. The
+reverse list contains proxies owning outside-cover points and visits only
+faces entirely inside S_P. An edge is selected only when both endpoint
+contact IDs belong to S_E; a face is selected only when all three contact IDs
+belong to S_P. This preserves coverage for mixed-CID primitives under the
+original all-cross contact-mask predicates. EE pairs are emitted once in
+canonical order.
 
-The two query chains have independent streams, query buffers and per-stream
-CUB workspace. They read the same immutable tree and join before it changes.
-Compact IDs/counts are position-free and uploaded only when the cover changes.
-A single refresh-preparation launch grows all primitive boxes and writes both
-compact query lists and EF leaves. Proxy threads recompute the same outward
-growth from immutable current boxes, avoiding inter-block producer races.
+Compact query IDs/counts change only with position-free inputs. A single
+refresh-preparation launch grows individual primitive boxes and writes both
+compact query-box lists and EF leaves. Proxy threads recompute the same
+outward growth from immutable current bounds, avoiding cross-block producer
+races. The two EF query chains use independent streams, query buffers and
+per-stream CUB workspace. They read one immutable tree and join before it
+changes.
 
-Refresh enqueues traversal, a bounded typed count, one combined PT/EE scan and
-fill for every chunk on its chain stream. Scratch is reused per chain, sized
-for that chain's largest EF buffer. One aggregate status/count readback replaces
-routine per-chunk waits. A truncated EF chunk emits no typed candidates; only
-that traversal is retried after growth. Per-chain device totals and saved
-chunk bases prevent double reservation. Typed-buffer discard growth refills
-all of that chain's chunks from retained EF output without traversing again.
-The final typed lists are concatenated for the existing shared judge, so
-persistent typed storage includes both chain buffers and the combined cache.
-Refresh expands fat EF
-overlaps into position-free PT/EE lists, checking current contact/subscene
-masks, shared vertices and body self-collision once. Cache reuse directly
-judges those lists and never repeats ownership expansion.
+EF refresh batches traversal, bounded typed count, combined PT/EE scan and
+fill for all chunks on each chain. One aggregate status/count wait replaces
+routine per-chunk waits. Truncated EF output emits no typed candidates; only
+the failed traversal retries. Saved chunk bases prevent double reservation.
+Typed discard growth refills every chunk of that chain from retained EF
+output. The final typed lists concatenate the chain buffers, so persistent
+storage includes the chain lists and combined cache.
 
-`bvh_pair_judge` is shared with InfoStackless: whole-warp EE evaluation,
-certified FP32 screen/gap/finish queues for swept queries, a one-pass tile
-scan and kept-tile scatter. Validation atomics and geometry gates use device scratch; only final flags
-and counts are published to mapped readbacks, retaining the copy fallback. Validation and both judge streams precede one host wait on the
-normal cache-reuse path, and the detection hook runs before that wait.
-A topology/metadata invalidation gate suppresses geometry reads until the
-cache is rebuilt. Unsupported topology preserves the last published output
-and returns to the existing simplex fallback.
+PP/PE now share the common fat cache and judge in both methods. SingleEF
+retains the auxiliary CP/E-tree queries for these pairs; their refresh
+currently follows the EF refresh in the same cache transaction. Pure codim or
+unsupported EF ownership uses the common direct-Info strategy when the
+production caller supplies its codim binding. SingleEF-only standalone callers
+retain their unsupported-topology return contract.
 
-GPU snapshots compare topology and every position-free metadata array/table
-by content, including edits in the same allocation. Changes invalidate the
-cover and typed cache. Frame boundaries alone do not invalidate the cache;
-every retained use checks complete current swept primitive bounds. Actual
-saved fat/shrink levels remain unchanged until a refresh, independently from
-the next refresh's desired skin policy. Every eighth new-frame request
-(`!reuse_bvh_topology`, including initialization) schedules a topology rebuild.
-That request stays pending until the next actual refresh, independently of
-cache refreshes within a frame. Output capacity is reserved from the
-stored pair counts before scan/scatter.
+Both integrated methods use `step_position` endpoints and the same four-family
+prefix/content validation, cross-frame reuse and three-stream judging. Their
+active, pending-active and TOI consumers remain in `BVHSimplexPipeline`.
+Whole-detect/full-advance CUDA Graph capture remains separate work.
 
-`BVHSimplexPipeline` shares active filtering, two-phase pending active sets,
-TOI filtering and the existing detect-skin contract between both methods.
-SingleEF prefix endpoints use `step_position`, matching accepted line-search
-positions even when an FMA would retain a cancelled product residual. The
-legacy prefix keeps its original default. The integrated caller passes its
-unlaunched generic trajectory prefix to SingleEF. Its vertex launch initializes
-device controls; primitive producers compare new BID/CID and topology with
-snapshots and check fat containment. An extra block range in the same second
-launch compares independent metadata/table contents, even for empty geometry
-or tables larger than the vertex range. This removes the separate SingleEF
-validation launch. Reused prefix descriptors have every attached snapshot and
-fat pointer cleared before rebinding. Standalone query callers keep the full
-validation-kernel fallback. The all-filter capability check
-remains in effect. The typed pair cache and the public trajectory candidate skin are separate layers.
+## Shared query unification status (2026-11-05)
 
-The baseline's CUDA Graph support covers the linear solver. Collision detect
-still has host readbacks and exceptional host capacity growth, as in the
-baseline. Whole-detect/full-advance capture requires a separately prepared,
-fixed-capacity path and is not provided by this method.
+The common-owner implementation and caller migration passed the CUDA 13.5
+build, 24-case candidate/active/BVH audit, 17-case normal suite, 8-case copy
+fallback and 13-case explicit-API memcheck with zero errors. See
+[the common query contract](simplex_bvh_queries.md#validation) for assertion
+counts, source/runtime fingerprints and reproducible commands.
+No new performance result is established for this unification.
+
+The dated sections below describe the earlier migration/integration/follow-up
+revisions and retain their original evidence. They do not validate the new
+common-owner revision.
 
 ## Validation
 

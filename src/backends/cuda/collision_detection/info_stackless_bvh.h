@@ -172,7 +172,8 @@ class InfoStacklessBVH
     void launch_detect(cuda_tool::CBuffer2DView<IndexT> cmts,
                        NodePred                         np,
                        LeafPred                         lp,
-                       QueryBuffer&                     qbuffer);
+                       QueryBuffer&                     qbuffer,
+                       cudaStream_t stream = cuda_tool::default_stream());
 
     template <typename NodePred, typename LeafPred>
     void query(cuda_tool::CBufferView<AABB>     query_aabbs,

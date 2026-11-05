@@ -36,7 +36,7 @@ struct PrefixSnapshotRange
 };
 struct PrefixValidation
 {
-    static constexpr int MaxRanges = 18;
+    static constexpr int MaxRanges = 32;
     PrefixSnapshotRange  ranges[MaxRanges];
     int                  count            = 0;
     SizeT                work             = 0;
@@ -102,7 +102,7 @@ struct TrajectoryPrefix
     const IndexT*  contact_ids   = nullptr;
     int            vertices      = 0;
     Float          alpha         = 0;
-    // SingleEF bounds must include exactly the accepted line-search endpoint.
+    // Shared query bounds include exactly the accepted line-search endpoint.
     bool accepted_step_endpoints = false;
     // per vertex outputs: position and d_hat, step displacement and
     // thickness (the leaf tests' FP32 inputs), and the swept boxes' end points

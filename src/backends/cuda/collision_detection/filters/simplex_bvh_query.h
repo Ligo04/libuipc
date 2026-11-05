@@ -8,11 +8,16 @@
 namespace uipc::backend::cuda
 {
 struct TrajectoryPrefix;
-class SingleEFBVHQuery
+class SimplexBVHQuery
 {
   public:
-    SingleEFBVHQuery();
-    ~SingleEFBVHQuery();
+    enum class Method
+    {
+        InfoStackless,
+        SingleEF
+    };
+    SimplexBVHQuery();
+    ~SimplexBVHQuery();
 
     struct PrimitiveBounds
     {
@@ -20,18 +25,28 @@ class SingleEFBVHQuery
         cuda_tool::CBufferView<IndexT> bids;
         cuda_tool::CBufferView<IndexT> cids;
     };
+    struct CodimQueries
+    {
+        PrimitiveBounds                         points;
+        bvh_simplex_detail::PointPointPredicate pp;
+        bvh_simplex_detail::PointEdgePredicate  pe;
+        InfoStacklessBVH::QueryBuffer*          pps = nullptr;
+        InfoStacklessBVH::QueryBuffer*          pes = nullptr;
+    };
     struct Statistics
     {
         SizeT refreshes = 0, reuses = 0, topology_builds = 0;
         SizeT primary_queries = 0, reverse_queries = 0;
-        SizeT stored_pts = 0, stored_ees = 0;
+        SizeT stored_pts = 0, stored_ees = 0, stored_pps = 0, stored_pes = 0;
         SizeT ef_pairs = 0, refresh_waits = 0, ef_retries = 0, typed_refills = 0;
         SizeT cross_frame_reuses = 0, fused_prefixes = 0;
         bool  pt_cover = false, ee_cover = false;
         Float cover_skin = 1.0, other_skin = 0.01;
     };
 
-    // Unsupported topology returns false without publishing candidate results.
+    // Standalone EF queries return false on unsupported ownership topology.
+    // A bound codimensional context enables the complete primitive-tree fallback.
+    // Both methods cache PP/PE when this context is supplied.
     // new_frame follows the pipeline's topology-reuse boundary. Standalone
     // callers can leave it false to treat consecutive detects as one frame.
     bool detect(InfoStacklessBVH&                                 triangle_bvh,
@@ -45,11 +60,13 @@ class SingleEFBVHQuery
                 InfoStacklessBVH::QueryBuffer&                    ees,
                 bool                         new_frame       = false,
                 const std::function<void()>& before_readback = {},
-                TrajectoryPrefix*            prefix          = nullptr);
+                TrajectoryPrefix*            prefix          = nullptr,
+                const CodimQueries*          codim           = nullptr);
 
-    bool  force_fresh      = false;
-    Float cache_skin_scale = 1.0;
-    SizeT max_chunk_edges  = std::numeric_limits<IndexT>::max();
+    Method method           = Method::SingleEF;
+    bool   force_fresh      = false;
+    Float  cache_skin_scale = 1.0;
+    SizeT  max_chunk_edges  = std::numeric_limits<IndexT>::max();
 
     SizeT      refresh_count() const noexcept;
     SizeT      reuse_count() const noexcept;

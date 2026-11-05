@@ -22,7 +22,7 @@ local components = {
         "collision_detection/filters/easy_vertex_half_plane_trajectory_filter.cu",
         "collision_detection/filters/info_stackless_bvh_simplex_trajectory_filter.cu",
         "collision_detection/filters/bvh_pair_judge.cu",
-        "collision_detection/filters/single_ef_bvh_query.cu",
+        "collision_detection/filters/simplex_bvh_query.cu",
         "collision_detection/filters/single_ef_bvh_simplex_trajectory_filter.cu"
     },
     collision_legacy = {

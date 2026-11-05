@@ -1,5 +1,29 @@
 # Handoff — Current State of the Repo
 
+Shared simplex-query unification (2026-11-05): both optimized InfoStackless
+and SingleEF now enter `SimplexBVHQuery` in `simplex_bvh_query.{h,cu}`. One owner
+manages cover selection, content snapshots, four candidate caches (PP/PE/EE/PT),
+frame/skin policy and three-stream judging. Info cover-local pairs normalize
+once at refresh; SingleEF retains its one-EF-tree ownership expansion and two
+batched refresh chains. Auxiliary PP/PE refresh follows EF refresh in the same
+transaction. Production codim bindings preserve pure-codim/unsupported-EF Info
+fallback. The pipeline retains geometry preparation and active/pending-active/TOI.
+Both common modes use accepted-step endpoint rounding; generic prefix defaults
+are unchanged. `UIPC_BVH_QUERY_CHECK` moved to common refresh.
+
+CUDA 13.5 / Toolkit CCCL 3.5 backend and native tests built under the global
+flock, 16 jobs and 32 GiB/no-swap scope. Final GPU gates passed: shared policy
+7 cases / 1,233 assertions; audited suite 24 / 843,802; normal suite
+17 / 520,806; copy fallback 8 / 1,260; matching explicit-API memcheck
+13 / 519,316 with zero errors. Direct traversal audit has 569 equal multiset
+records. Repository contracts (13), clang-format 18 and diff checks passed.
+Source/native fingerprints and commands are in
+`output/single-ef-unification-20261105/verification.json` and `final-checks.json`.
+No new performance result is established. CMake/Python runtime rebuilds and
+extended/race/sync sanitizer checks were not run.
+Contract: `docs/development/simplex_bvh_queries.md`. Dated entries below retain
+their original historical evidence.
+
 SingleEF query follow-up (2026-11-05): selective primary/reverse query boxes
 and static compact IDs remove unused constituents and refresh-time gathers.
 Refresh batches chunks on independent streams with reusable per-chain scratch,

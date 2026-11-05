@@ -1,9 +1,11 @@
-#include <collision_detection/filters/single_ef_bvh_query.h>
+#include <collision_detection/filters/simplex_bvh_query.h>
 #include <collision_detection/filters/bvh_contact_cover.h>
 #include <collision_detection/filters/bvh_pair_judge.h>
 #include <collision_detection/filters/trajectory_prefix.h>
 #include <cuda_tool/cub.h>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <stdexcept>
 #include <unordered_map>
@@ -16,7 +18,8 @@ namespace
 {
     using namespace cuda_tool;
     using namespace bvh_simplex_detail;
-    using Bounds                   = SingleEFBVHQuery::PrimitiveBounds;
+    using Bounds                   = SimplexBVHQuery::PrimitiveBounds;
+    using Codim                    = SimplexBVHQuery::CodimQueries;
     constexpr SizeT PairLimit      = std::numeric_limits<IndexT>::max() - 1;
     constexpr int   Threads        = 256;
     constexpr int   TopologyPeriod = 8;
@@ -66,6 +69,18 @@ namespace
             EdgeContacts,
             FaceBodies,
             FaceContacts,
+            CodimBodies,
+            CodimContacts,
+            PPContacts,
+            PEContacts,
+            PPSubscenes,
+            PESubscenes,
+            PPSelf,
+            PESelf,
+            PPDimensions,
+            PPVertices,
+            PECodimVertices,
+            PEEdges,
             Arrays
         };
         enum Matrix
@@ -75,6 +90,10 @@ namespace
             NodeMask,
             PTSubmask,
             EESubmask,
+            PPMask,
+            PEMask,
+            PPSubmask,
+            PESubmask,
             Matrices
         };
         CBufferView<IndexT> arrays[Arrays];
@@ -87,7 +106,8 @@ namespace
                  const NodePredicate&          node,
                  Bounds                        p,
                  Bounds                        e,
-                 Bounds                        f)
+                 Bounds                        f,
+                 const Codim*                  codim)
             : arrays{pt.contact_element_ids,
                      ee.contact_element_ids,
                      pt.subscene_element_ids,
@@ -100,12 +120,31 @@ namespace
                      e.bids,
                      e.cids,
                      f.bids,
-                     f.cids}
+                     f.cids,
+                     codim ? codim->points.bids : CBufferView<IndexT>{},
+                     codim ? codim->points.cids : CBufferView<IndexT>{},
+                     codim ? codim->pp.contact_element_ids : CBufferView<IndexT>{},
+                     codim ? codim->pe.contact_element_ids : CBufferView<IndexT>{},
+                     codim ? codim->pp.subscene_element_ids : CBufferView<IndexT>{},
+                     codim ? codim->pe.subscene_element_ids : CBufferView<IndexT>{},
+                     codim ? codim->pp.body_self_collision : CBufferView<IndexT>{},
+                     codim ? codim->pe.body_self_collision : CBufferView<IndexT>{},
+                     codim ? codim->pp.dimensions : CBufferView<IndexT>{},
+                     codim ? codim->pp.Vs : CBufferView<IndexT>{},
+                     codim ? codim->pe.codimVs : CBufferView<IndexT>{},
+                     codim ? CBufferView<IndexT>{reinterpret_cast<const IndexT*>(
+                                                     codim->pe.Es.data()),
+                                                 2 * codim->pe.Es.size()} :
+                             CBufferView<IndexT>{}}
             , matrices{pt.contact_mask_tabular,
                        ee.contact_mask_tabular,
                        node.cmts,
                        pt.subscene_mask_tabular,
-                       ee.subscene_mask_tabular}
+                       ee.subscene_mask_tabular,
+                       codim ? codim->pp.contact_mask_tabular : CDense2D<IndexT>{},
+                       codim ? codim->pe.contact_mask_tabular : CDense2D<IndexT>{},
+                       codim ? codim->pp.subscene_mask_tabular : CDense2D<IndexT>{},
+                       codim ? codim->pe.subscene_mask_tabular : CDense2D<IndexT>{}}
         {
             for(int i = 0; i < int(Arrays) + int(Matrices); ++i)
             {
@@ -133,11 +172,12 @@ namespace
         CBufferView<IndexT>   vertices, previous_vertices;
         CBufferView<Vector2i> edges, previous_edges;
         CBufferView<Vector3i> faces, previous_faces;
+        CBufferView<IndexT>   codim_vertices, previous_codim_vertices;
         Metadata              metadata;
         CBufferView<IndexT>   previous_metadata;
-        CBufferView<AABB>     current[3], grown[3];
-        CBufferView<IndexT>   groups[3];
-        CBufferView<Float>    shrink[3];
+        CBufferView<AABB>     current[4], grown[4];
+        CBufferView<IndexT>   groups[4];
+        CBufferView<Float>    shrink[4];
         bool                  topology, metadata_check, containment;
     };
     __device__ void invalidate(IndexT* control, int reason)
@@ -154,7 +194,9 @@ namespace
         {
             if((i < input.vertices.size() && input.vertices(i) != input.previous_vertices(i))
                || (i < input.edges.size() && input.edges(i) != input.previous_edges(i))
-               || (i < input.faces.size() && input.faces(i) != input.previous_faces(i)))
+               || (i < input.faces.size() && input.faces(i) != input.previous_faces(i))
+               || (i < input.codim_vertices.size()
+                   && input.codim_vertices(i) != input.previous_codim_vertices(i)))
                 invalidate(control, 1);
         }
         if(input.metadata_check)
@@ -172,7 +214,7 @@ namespace
                     invalidate(control, 2);
         }
         if(input.containment)
-            for(int family = 0; family < 3; ++family)
+            for(int family = 0; family < 4; ++family)
                 if(i < input.current[family].size())
                 {
                     const auto now = input.current[family](i),
@@ -217,9 +259,9 @@ namespace
 
     struct FatBounds
     {
-        Bounds                current[3];
-        CBufferView<IndexT>   groups[3];
-        CBufferView<IndexT>   vertices;
+        Bounds                current[4];
+        CBufferView<IndexT>   groups[4];
+        CBufferView<IndexT>   vertices, codim_vertices;
         CBufferView<Vector2i> edges;
         CBufferView<Vector3i> faces;
         CBufferView<Float>    d_hats;
@@ -229,7 +271,8 @@ namespace
         {
             return family == 0 ? vertices(i) :
                    family == 1 ? edges(i)[0] :
-                                 faces(i)[0];
+                   family == 2 ? faces(i)[0] :
+                                 codim_vertices(i);
         }
         __device__ AABB box(int family, SizeT i) const
         {
@@ -266,8 +309,8 @@ namespace
         CBufferView<Vector3i> owned_edges;
         CBufferView<IndexT>   point_queries, edge_queries, face_queries;
         CBufferView<IndexT>   ids[2];
-        BufferView<AABB>      grown[3], query_boxes[2], leaf_boxes;
-        BufferView<Float>     shrink[3];
+        BufferView<AABB>      grown[4], query_boxes[2], leaf_boxes;
+        BufferView<Float>     shrink[4];
         BufferView<IndexT>    query_cids[2], leaf_cids, leaf_tags;
     };
     __device__ void extend_proxy(AABB& box, IndexT& cid, bool& first, const AABB& next, IndexT next_cid)
@@ -290,13 +333,14 @@ namespace
     __global__ void prepare_cache_bounds(ProxyBounds p)
     {
         int         range = 0, block = blockIdx.x;
-        const SizeT sizes[6] = {p.grown[0].size(),
+        const SizeT sizes[7] = {p.grown[0].size(),
                                 p.grown[1].size(),
                                 p.grown[2].size(),
+                                p.grown[3].size(),
                                 p.ids[0].size(),
                                 p.ids[1].size(),
                                 p.leaf_boxes.size()};
-        for(; range < 5; ++range)
+        for(; range < 6; ++range)
         {
             const int blocks = (sizes[range] + blockDim.x - 1) / blockDim.x;
             if(block < blocks)
@@ -306,7 +350,7 @@ namespace
         const SizeT i = SizeT(block) * blockDim.x + threadIdx.x;
         if(i >= sizes[range])
             return;
-        if(range < 3)
+        if(range < 4)
         {
             p.grown[range](i)  = p.fat.box(range, i);
             p.shrink[range](i) = p.fat.shrink(range, i);
@@ -315,9 +359,9 @@ namespace
         AABB   box;
         IndexT cid   = -1;
         bool   first = true;
-        if(range < 5)
+        if(range < 6)
         {
-            const int    chain = range - 3;
+            const int    chain = range - 4;
             const IndexT e     = p.ids[chain](i);
             if(chain == 0 && e < p.fat.current[1].aabbs.size() && p.edge_queries(e))
                 extend_proxy(box, cid, first, p.fat.box(1, e), p.fat.current[1].cids(e));
@@ -378,6 +422,35 @@ namespace
     __global__ void publish_ef_count(CVarView<int> count, IndexT* out)
     {
         *out = *count;
+    }
+    __global__ void gather_direct_bounds(CBufferView<IndexT> ids,
+                                         CBufferView<AABB>   fat,
+                                         Bounds              metadata,
+                                         BufferView<AABB>    boxes,
+                                         BufferView<IndexT>  bids,
+                                         BufferView<IndexT>  cids)
+    {
+        const SizeT i = SizeT(blockIdx.x) * blockDim.x + threadIdx.x;
+        if(i >= ids.size())
+            return;
+        const IndexT j = ids(i);
+        boxes(i)       = fat(j);
+        bids(i)        = metadata.bids(j);
+        cids(i)        = metadata.cids(j);
+    }
+    __global__ void normalize_direct_pairs(CBufferView<Vector2i> in,
+                                           CBufferView<IndexT>   query_ids,
+                                           CBufferView<IndexT>   leaf_ids,
+                                           BufferView<Vector2i>  out,
+                                           bool                  ordered)
+    {
+        const SizeT i = SizeT(blockIdx.x) * blockDim.x + threadIdx.x;
+        if(i >= in.size())
+            return;
+        const auto   p = in(i);
+        const IndexT a = query_ids.size() ? query_ids(p[0]) : p[0];
+        const IndexT b = leaf_ids.size() ? leaf_ids(p[1]) : p[1];
+        out(i) = ordered ? Vector2i{min(a, b), max(a, b)} : Vector2i{a, b};
     }
     // Validation and geometry gates use device memory. Only the final six
     // flags are published to the mapped readback after the producers finish.
@@ -529,7 +602,7 @@ namespace
     }
 }  // namespace
 
-struct SingleEFBVHQuery::Impl
+struct SimplexBVHQuery::Impl
 {
     enum class Eligibility
     {
@@ -544,6 +617,10 @@ struct SingleEFBVHQuery::Impl
     DeviceBuffer<IndexT>      m_previous_vertices;
     DeviceBuffer<Vector2i>    m_previous_edges;
     DeviceBuffer<Vector3i>    m_previous_triangles;
+    DeviceBuffer<IndexT>      m_previous_codim;
+    SizeT                     m_codim_count = 0;
+    Method                    m_method      = Method::SingleEF;
+    bool                      m_use_ef      = true;
     std::vector<IndexT>       m_h_vertices;
     std::vector<Vector2i>     m_h_edges;
     std::vector<Vector3i>     m_h_faces;
@@ -551,9 +628,9 @@ struct SingleEFBVHQuery::Impl
     DeviceBuffer<IndexT>      m_metadata;
     std::unique_ptr<Metadata> m_previous_metadata;
     DeviceBuffer<IndexT>      m_point_queries, m_edge_queries, m_face_queries;
-    DeviceBuffer<IndexT>      m_groups[3];
-    DeviceBuffer<AABB>        m_grown[3], m_leaf_boxes;
-    DeviceBuffer<Float>       m_shrink[3];
+    DeviceBuffer<IndexT>      m_groups[4];
+    DeviceBuffer<AABB>        m_grown[4], m_leaf_boxes;
+    DeviceBuffer<Float>       m_shrink[4];
     DeviceBuffer<IndexT>      m_leaf_cids, m_leaf_tags;
     bool m_node_symmetric = false, m_reverse_needed = false;
     bool m_cache_valid = false, m_tree_ready = false, m_rebuild_topology = true;
@@ -561,7 +638,8 @@ struct SingleEFBVHQuery::Impl
     bool m_frame_cover_left = false, m_frame_other_left = false;
     bool m_cover_thick = false, m_other_uniform = false;
     SizeT             m_frames = 0, m_cached_chunk_size = 0;
-    InfoStacklessBVH* m_tree = nullptr;
+    Float             m_cached_skin_scale = -1;
+    InfoStacklessBVH* m_tree              = nullptr;
     Statistics        m_stats;
     struct Chain
     {
@@ -575,12 +653,20 @@ struct SingleEFBVHQuery::Impl
         DeviceVar<CandidateCounts>    totals;
         DeviceBuffer<Vector2i>        pts, ees;
     } m_chains[2];
-    DeviceBuffer<Vector2i> m_raw_pts, m_raw_ees;
-    DeviceBuffer<IndexT>   m_judge_flags, m_tile_counts, m_tile_offsets,
+    DeviceBuffer<Vector2i>        m_raw_pts, m_raw_ees, m_raw_pps, m_raw_pes;
+    InfoStacklessBVH              m_edge_tree, m_cover_tree, m_codim_tree;
+    InfoStacklessBVH::QueryBuffer m_direct[5];
+    struct Gather
+    {
+        DeviceBuffer<IndexT> ids, bids, cids;
+        DeviceBuffer<AABB>   boxes;
+    } m_info_queries[3], m_info_faces;
+    SideStream           m_aux_side;
+    DeviceBuffer<IndexT> m_judge_flags, m_tile_counts, m_tile_offsets,
         m_dummy_counts, m_ee_queue_counts;
     DeviceBuffer<int4>     m_ee_queue;
     DeviceBuffer<IndexT>   m_control_device;
-    ReadbackBuffer<IndexT> m_control, m_counts, m_ef_counts;
+    ReadbackBuffer<IndexT> m_control, m_counts, m_ef_counts, m_direct_counts;
     ReadbackBuffer<U64>    m_raw_counts;
     cudaEvent_t            m_ready    = nullptr;
     int                    m_sm_count = 0;
@@ -601,6 +687,7 @@ struct SingleEFBVHQuery::Impl
         m_control_device.resize(6);
         m_control.resize(6);
         m_counts.resize(8);
+        m_direct_counts.resize(5);
         m_ef_counts.resize(2);
         m_raw_counts.resize(4);
         m_dummy_counts.resize(5);
@@ -612,8 +699,24 @@ struct SingleEFBVHQuery::Impl
         CUDA_TOOL_CHECK(cudaEventSynchronize(m_ready));
     }
     bool prepare_topology(const PointTrianglePredicate&, const EdgeEdgePredicate&, bool unchanged);
+    bool prepare_direct_topology(const PointTrianglePredicate&, const EdgeEdgePredicate&);
     void update_cover(const Metadata&);
-    void prepare_proxies(const PointTrianglePredicate&, const EdgeEdgePredicate&, Bounds, Bounds, Bounds, Float);
+    void prepare_proxies(const PointTrianglePredicate&,
+                         const EdgeEdgePredicate&,
+                         Bounds,
+                         Bounds,
+                         Bounds,
+                         Float,
+                         const Codim*);
+    void refresh_direct(InfoStacklessBVH&,
+                        const PointTrianglePredicate&,
+                        const EdgeEdgePredicate&,
+                        const NodePredicate&,
+                        Bounds,
+                        Bounds,
+                        Bounds,
+                        const Codim*,
+                        bool auxiliary_only);
     void refresh(InfoStacklessBVH&,
                  const PointTrianglePredicate&,
                  const EdgeEdgePredicate&,
@@ -632,11 +735,12 @@ struct SingleEFBVHQuery::Impl
                InfoStacklessBVH::QueryBuffer&,
                InfoStacklessBVH::QueryBuffer&,
                bool                         gated,
-               const std::function<void()>& hook);
+               const std::function<void()>& hook,
+               const Codim*                 codim);
 };
-bool SingleEFBVHQuery::Impl::prepare_topology(const bvh_simplex_detail::PointTrianglePredicate& pt,
-                                              const bvh_simplex_detail::EdgeEdgePredicate& ee,
-                                              bool unchanged)
+bool SimplexBVHQuery::Impl::prepare_topology(const bvh_simplex_detail::PointTrianglePredicate& pt,
+                                             const bvh_simplex_detail::EdgeEdgePredicate& ee,
+                                             bool unchanged)
 {
     if(unchanged && m_eligibility == Eligibility::Supported)
         return true;
@@ -732,7 +836,48 @@ bool SingleEFBVHQuery::Impl::prepare_topology(const bvh_simplex_detail::PointTri
     return true;
 }
 
-void SingleEFBVHQuery::Impl::update_cover(const Metadata& metadata)
+bool SimplexBVHQuery::Impl::prepare_direct_topology(const PointTrianglePredicate& pt,
+                                                    const EdgeEdgePredicate& ee)
+{
+    m_vertex_count   = pt.Vs.size();
+    m_edge_count     = ee.Es.size();
+    m_triangle_count = pt.Fs.size();
+    m_position_count = pt.Ps.size();
+    if(std::max({m_vertex_count, m_edge_count, m_triangle_count}) > PairLimit)
+        return false;
+    m_h_vertices.resize(m_vertex_count);
+    m_h_edges.resize(m_edge_count);
+    m_h_faces.resize(m_triangle_count);
+    pt.Vs.copy_to(m_h_vertices.data());
+    ee.Es.copy_to(m_h_edges.data());
+    pt.Fs.copy_to(m_h_faces.data());
+    auto valid = [&](IndexT v) { return v >= 0 && SizeT(v) < m_position_count; };
+    for(auto v : m_h_vertices)
+        if(!valid(v))
+            return false;
+    for(const auto& e : m_h_edges)
+        for(auto v : e)
+            if(!valid(v))
+                return false;
+    for(const auto& f : m_h_faces)
+        for(auto v : f)
+            if(!valid(v))
+                return false;
+    m_previous_vertices.resize_discard(pt.Vs.size());
+    m_previous_edges.resize_discard(ee.Es.size());
+    m_previous_triangles.resize_discard(pt.Fs.size());
+    m_previous_vertices.view().copy_from(pt.Vs);
+    m_previous_edges.view().copy_from(ee.Es);
+    m_previous_triangles.view().copy_from(pt.Fs);
+    m_h_owned_vertices.clear();
+    m_owned_vertices.resize_discard(0);
+    m_owned_edges.resize_discard(0);
+    m_use_ef      = false;
+    m_eligibility = Eligibility::Supported;
+    return true;
+}
+
+void SimplexBVHQuery::Impl::update_cover(const Metadata& metadata)
 {
     m_metadata.resize_discard(metadata.total);
     if(metadata.work)
@@ -842,6 +987,20 @@ void SingleEFBVHQuery::Impl::update_cover(const Metadata& metadata)
     groups(points, m_stats.pt_cover, 0);
     groups(edges, m_stats.ee_cover, 1);
     groups(faces, m_stats.pt_cover, 2);
+    m_groups[3].resize_discard(m_codim_count);
+    BufferLaunch().fill(m_groups[3].view(), IndexT{0});
+    std::vector<IndexT> direct_ids[4];
+    for(SizeT i = 0; i < edges.size(); ++i)
+        if(edges[i])
+            direct_ids[0].push_back(static_cast<IndexT>(i));
+    for(SizeT i = 0; i < points.size(); ++i)
+        direct_ids[points[i] ? 1 : 2].push_back(static_cast<IndexT>(i));
+    for(SizeT i = 0; i < faces.size(); ++i)
+        if(faces[i])
+            direct_ids[3].push_back(static_cast<IndexT>(i));
+    for(int family = 0; family < 3; ++family)
+        upload(m_info_queries[family].ids, direct_ids[family]);
+    upload(m_info_faces.ids, direct_ids[3]);
     m_node_symmetric = readable(Metadata::NodeMask);
     std::vector<IndexT> ids[2];
     for(SizeT i = 0; i < m_h_owned_vertices.size(); ++i)
@@ -867,23 +1026,33 @@ void SingleEFBVHQuery::Impl::update_cover(const Metadata& metadata)
         chain.boxes.resize_discard(chain.count);
         chain.cids.resize_discard(chain.count);
     }
-    m_stats.primary_queries = m_chains[0].count;
-    m_stats.reverse_queries = m_chains[1].count;
+    m_stats.primary_queries =
+        m_use_ef ? m_chains[0].count :
+                   m_info_queries[0].ids.size() + m_info_queries[1].ids.size();
+    m_stats.reverse_queries = m_use_ef         ? m_chains[1].count :
+                              m_reverse_needed ? m_info_queries[2].ids.size() :
+                                                 0;
 }
 
-void SingleEFBVHQuery::Impl::prepare_proxies(const PointTrianglePredicate& pt,
-                                             const EdgeEdgePredicate&      ee,
-                                             Bounds points,
-                                             Bounds edges,
-                                             Bounds faces,
-                                             Float  skin_scale)
+void SimplexBVHQuery::Impl::prepare_proxies(const PointTrianglePredicate& pt,
+                                            const EdgeEdgePredicate&      ee,
+                                            Bounds       points,
+                                            Bounds       edges,
+                                            Bounds       faces,
+                                            Float        skin_scale,
+                                            const Codim* codim)
 {
     m_stats.cover_skin = m_cover_thick ? 2.0 : 1.0;
     m_stats.other_skin = m_other_uniform ? 1.0 : 0.01;
-    ProxyBounds p{};
-    p.fat                  = {{points, edges, faces},
-                              {m_groups[0].cview(), m_groups[1].cview(), m_groups[2].cview()},
+    const Bounds cp    = codim ? codim->points : Bounds{};
+    ProxyBounds  p{};
+    p.fat                  = {{points, edges, faces, cp},
+                              {m_groups[0].cview(),
+                               m_groups[1].cview(),
+                               m_groups[2].cview(),
+                               m_groups[3].cview()},
                               pt.Vs,
+             codim ? codim->pp.codimVs : CBufferView<IndexT>{},
                               ee.Es,
                               pt.Fs,
                               pt.d_hats,
@@ -896,8 +1065,8 @@ void SingleEFBVHQuery::Impl::prepare_proxies(const PointTrianglePredicate& pt,
     p.edge_queries         = m_edge_queries.cview();
     p.face_queries         = m_face_queries.cview();
     int          blocks    = 0;
-    const Bounds inputs[3] = {points, edges, faces};
-    for(int family = 0; family < 3; ++family)
+    const Bounds inputs[4] = {points, edges, faces, cp};
+    for(int family = 0; family < 4; ++family)
     {
         const SizeT n = inputs[family].aabbs.size();
         m_grown[family].resize_discard(n);
@@ -906,34 +1075,38 @@ void SingleEFBVHQuery::Impl::prepare_proxies(const PointTrianglePredicate& pt,
         p.shrink[family] = m_shrink[family].view();
         blocks += (n + Threads - 1) / Threads;
     }
-    for(int family = 0; family < 2; ++family)
+    if(m_use_ef)
     {
-        auto& chain           = m_chains[family];
-        p.ids[family]         = chain.ids.cview();
-        p.query_boxes[family] = chain.boxes.view();
-        p.query_cids[family]  = chain.cids.view();
-        blocks += (chain.count + Threads - 1) / Threads;
+        for(int family = 0; family < 2; ++family)
+        {
+            auto& chain           = m_chains[family];
+            p.ids[family]         = chain.ids.cview();
+            p.query_boxes[family] = chain.boxes.view();
+            p.query_cids[family]  = chain.cids.view();
+            blocks += (chain.count + Threads - 1) / Threads;
+        }
+        const SizeT leaves = m_owned_edges.size();
+        m_leaf_boxes.resize_discard(leaves);
+        m_leaf_cids.resize_discard(leaves);
+        m_leaf_tags.resize_discard(leaves);
+        p.leaf_boxes = m_leaf_boxes.view();
+        p.leaf_cids  = m_leaf_cids.view();
+        p.leaf_tags  = m_leaf_tags.view();
+        blocks += (leaves + Threads - 1) / Threads;
     }
-    const SizeT leaves = m_owned_edges.size();
-    m_leaf_boxes.resize_discard(leaves);
-    m_leaf_cids.resize_discard(leaves);
-    m_leaf_tags.resize_discard(leaves);
-    p.leaf_boxes = m_leaf_boxes.view();
-    p.leaf_cids  = m_leaf_cids.view();
-    p.leaf_tags  = m_leaf_tags.view();
-    blocks += (leaves + Threads - 1) / Threads;
-    prepare_cache_bounds<<<blocks, Threads>>>(p);
+    if(blocks)
+        prepare_cache_bounds<<<blocks, Threads>>>(p);
 }
 
-void SingleEFBVHQuery::Impl::refresh(InfoStacklessBVH&             tree,
-                                     const PointTrianglePredicate& pt_input,
-                                     const EdgeEdgePredicate&      ee_input,
-                                     const NodePredicate&          node,
-                                     Bounds                        points,
-                                     Bounds                        edges,
-                                     Bounds                        faces,
-                                     SizeT                         chunk_size,
-                                     bool                          reuse_order)
+void SimplexBVHQuery::Impl::refresh(InfoStacklessBVH&             tree,
+                                    const PointTrianglePredicate& pt_input,
+                                    const EdgeEdgePredicate&      ee_input,
+                                    const NodePredicate&          node,
+                                    Bounds                        points,
+                                    Bounds                        edges,
+                                    Bounds                        faces,
+                                    SizeT                         chunk_size,
+                                    bool                          reuse_order)
 {
     if(m_rebuild_topology || m_tree != &tree || !m_tree_ready
        || !tree.refit(m_leaf_boxes.cview(), m_leaf_tags.cview(), m_leaf_cids.cview()))
@@ -943,7 +1116,6 @@ void SingleEFBVHQuery::Impl::refresh(InfoStacklessBVH&             tree,
     }
     m_tree                     = &tree;
     m_tree_ready               = true;
-    m_rebuild_topology         = false;
     SizeT             first[2] = {}, all_chunks = 0;
     std::vector<bool> pending[2];
     for(int family = 0; family < 2; ++family)
@@ -1176,82 +1348,431 @@ void SingleEFBVHQuery::Impl::refresh(InfoStacklessBVH&             tree,
     m_stats.stored_pts  = np;
     m_stats.stored_ees  = ne;
     m_cached_chunk_size = chunk_size;
-    m_cache_valid       = true;
-    ++m_stats.refreshes;
 }
 
-void SingleEFBVHQuery::Impl::judge(InfoStacklessBVH&              tree,
-                                   const PointTrianglePredicate&  pt_input,
-                                   const EdgeEdgePredicate&       ee_input,
-                                   Bounds                         points,
-                                   Bounds                         edges,
-                                   Bounds                         faces,
-                                   InfoStacklessBVH::QueryBuffer& pts,
-                                   InfoStacklessBVH::QueryBuffer& ees,
-                                   bool                           gated,
-                                   const std::function<void()>&   hook)
+void SimplexBVHQuery::Impl::refresh_direct(InfoStacklessBVH&             tree,
+                                           const PointTrianglePredicate& pt,
+                                           const EdgeEdgePredicate&      ee,
+                                           const NodePredicate&          node,
+                                           Bounds                        points,
+                                           Bounds                        edges,
+                                           Bounds                        faces,
+                                           const Codim*                  codim,
+                                           bool auxiliary_only)
+{
+    const Bounds cp = codim ? codim->points : Bounds{};
+    if(!auxiliary_only)
+    {
+        const int    families[4] = {1, 0, 0, 2};
+        const Bounds metadata[4] = {edges, points, points, faces};
+        for(int i = 0; i < 4; ++i)
+        {
+            auto&       g = i == 3 ? m_info_faces : m_info_queries[i];
+            const SizeT n = g.ids.size();
+            g.boxes.resize_discard(n);
+            g.bids.resize_discard(n);
+            g.cids.resize_discard(n);
+            if(n)
+                gather_direct_bounds<<<(n + Threads - 1) / Threads, Threads>>>(
+                    g.ids.cview(),
+                    m_grown[families[i]].cview(),
+                    metadata[i],
+                    g.boxes.view(),
+                    g.bids.view(),
+                    g.cids.view());
+        }
+    }
+    const bool active[5] = {
+        codim && cp.aabbs.size() && points.aabbs.size(),
+        codim && cp.aabbs.size() && edges.aabbs.size(),
+        !auxiliary_only && edges.aabbs.size(),
+        !auxiliary_only && faces.aabbs.size() && m_info_queries[1].ids.size(),
+        !auxiliary_only && m_stats.pt_cover && m_info_queries[2].ids.size()
+            && m_info_faces.ids.size()};
+    auto pp_pred = codim ? codim->pp : PointPointPredicate{};
+    auto pe_pred = codim ? codim->pe : PointEdgePredicate{};
+    auto pt_pred = pt;
+    auto ee_pred = ee;
+    pp_pred.geometry = pe_pred.geometry = pt_pred.geometry = ee_pred.geometry = false;
+    auto launch = [&](int i, bool initial, cudaStream_t stream)
+    {
+        auto&      q           = m_direct[i];
+        const bool reuse_order = !m_rebuild_topology;
+        if(i == 0)
+            m_codim_tree.launch_query(
+                m_grown[0].cview(), points.bids, points.cids, {}, node, pp_pred, q, initial, reuse_order, stream);
+        else if(i == 1)
+            m_edge_tree.launch_query(
+                m_grown[3].cview(), cp.bids, cp.cids, {}, node, pe_pred, q, initial, reuse_order, stream);
+        else if(i == 2)
+        {
+            if(!m_stats.ee_cover)
+                m_edge_tree.launch_detect({}, node, ee_pred, q, stream);
+            else
+            {
+                auto& g = m_info_queries[0];
+                m_edge_tree.launch_query(g.boxes.cview(),
+                                         g.bids.cview(),
+                                         g.cids.cview(),
+                                         {},
+                                         node,
+                                         bvh_pair_judge::EEPredicate{
+                                             g.ids.cview(), m_edge_queries.cview(), ee_pred},
+                                         q,
+                                         initial,
+                                         reuse_order,
+                                         stream);
+            }
+        }
+        else
+        {
+            auto& g   = m_info_queries[i == 3 ? 1 : 2];
+            auto& bvh = i == 3 ? tree : m_cover_tree;
+            bvh.launch_query(
+                g.boxes.cview(),
+                g.bids.cview(),
+                g.cids.cview(),
+                {},
+                node,
+                InfoStacklessBVHSimplexTrajectoryFilter_detect_cover_AllP_AllT_pred{
+                    g.ids.cview(),
+                    i == 3 ? CBufferView<IndexT>{} : m_info_faces.ids.cview(),
+                    pt_pred},
+                q,
+                initial,
+                reuse_order,
+                stream);
+        }
+    };
+    auto update_tree = [&](InfoStacklessBVH&   bvh,
+                           CBufferView<AABB>   boxes,
+                           CBufferView<IndexT> bids,
+                           CBufferView<IndexT> cids,
+                           cudaStream_t        stream)
+    {
+        if(m_rebuild_topology || !bvh.refit(boxes, bids, cids, stream))
+        {
+            bvh.build(boxes, bids, cids, stream);
+            ++m_stats.topology_builds;
+        }
+    };
+    bool pending[5];
+    for(int i = 0; i < 5; ++i)
+    {
+        pending[i] = active[i];
+        if(!active[i])
+        {
+            m_direct[i].m_cpNum.copy_from(0);
+            m_direct[i].m_size = 0;
+        }
+    }
+    bool initial = true, retry = false;
+    do
+    {
+        m_chains[0].side.mark();
+        m_chains[1].side.mark();
+        m_aux_side.mark();
+        const cudaStream_t streams[3] = {m_chains[0].side.fork_marked(),
+                                         m_chains[1].side.fork_marked(),
+                                         m_aux_side.fork_marked()};
+        try
+        {
+            if(initial)
+            {
+                if(active[0])
+                    update_tree(m_codim_tree, m_grown[3].cview(), cp.bids, cp.cids, streams[0]);
+                if(active[1] || active[2])
+                    update_tree(
+                        m_edge_tree, m_grown[1].cview(), edges.bids, edges.cids, streams[0]);
+                if(active[3])
+                    update_tree(tree, m_grown[2].cview(), faces.bids, faces.cids, streams[1]);
+                if(active[4])
+                    update_tree(m_cover_tree,
+                                m_info_faces.boxes.cview(),
+                                m_info_faces.bids.cview(),
+                                m_info_faces.cids.cview(),
+                                streams[2]);
+            }
+            for(int i = 0; i < 5; ++i)
+                if(pending[i])
+                    launch(i, initial, streams[i < 3 ? 0 : i - 2]);
+        }
+        catch(...)
+        {
+            m_chains[0].side.join();
+            m_chains[1].side.join();
+            m_aux_side.join();
+            CUDA_TOOL_CHECK(cudaStreamSynchronize(default_stream()));
+            throw;
+        }
+        m_chains[0].side.join();
+        m_chains[1].side.join();
+        m_aux_side.join();
+        for(int i = 0; i < 5; ++i)
+            publish_ef_count<<<1, 1>>>(m_direct[i].m_cpNum.cview(),
+                                       m_direct_counts.device_data() + i);
+        m_direct_counts.enqueue_copy();
+        wait();
+        ++m_stats.refresh_waits;
+        retry = false;
+        for(int i = 0; i < 5; ++i)
+        {
+            const int n = m_direct_counts[i];
+            if(n < 0)
+                throw std::overflow_error("Simplex BVH direct pair count exceeds indexing");
+            pending[i] = active[i] && SizeT(n) > m_direct[i].m_pairs.size();
+            if(pending[i])
+            {
+                reserve_pairs(m_direct[i].m_pairs, n, tree.config().reserve_ratio, false);
+                retry = true;
+            }
+            m_direct[i].m_size = n;
+        }
+        initial = false;
+    } while(retry);
+
+    // Retain the existing optional traversal audit at the common refresh owner.
+    if(const char* path = std::getenv("UIPC_BVH_QUERY_CHECK"); path && *path)
+    {
+        FILE*       log      = std::fopen(path, "a");
+        const char* names[5] = {"PP", "PE", "EE", "PT", "PcoverT"};
+        const auto  less     = [](const Vector2i& a, const Vector2i& b)
+        { return a[0] < b[0] || (a[0] == b[0] && a[1] < b[1]); };
+        bool same = true;
+        for(int i = 0; i < 5; ++i)
+        {
+            if(!active[i])
+                continue;
+            auto&                 bvh = i == 0 ? m_codim_tree :
+                                        i < 3  ? m_edge_tree :
+                                        i == 3 ? tree :
+                                                 m_cover_tree;
+            auto&                 q   = m_direct[i];
+            const int             n   = q.m_size;
+            std::vector<Vector2i> original(n);
+            q.view().copy_to(original.data());
+            const bool cooperative = bvh.config().warp_cooperative_query;
+            bvh.config().warp_cooperative_query = false;
+            try
+            {
+                launch(i, false, default_stream());
+            }
+            catch(...)
+            {
+                bvh.config().warp_cooperative_query = cooperative;
+                if(log)
+                    std::fclose(log);
+                throw;
+            }
+            const int nr                        = q.m_cpNum;
+            bvh.config().warp_cooperative_query = cooperative;
+            if(nr < 0 || SizeT(nr) > q.m_pairs.size())
+                throw std::runtime_error("BVH query reference traversal exceeds successful output capacity");
+            std::vector<Vector2i> reference(nr), sorted = original;
+            q.m_pairs.cview(0, nr).copy_to(reference.data());
+            q.m_pairs.view(0, n).copy_from(original.data());
+            q.m_cpNum.copy_from(n);
+            std::sort(sorted.begin(), sorted.end(), less);
+            std::sort(reference.begin(), reference.end(), less);
+            SizeT a = 0, b = 0, only_a = 0, only_b = 0;
+            while(a < sorted.size() && b < reference.size())
+            {
+                if(less(sorted[a], reference[b]))
+                {
+                    ++only_a;
+                    ++a;
+                }
+                else if(less(reference[b], sorted[a]))
+                {
+                    ++only_b;
+                    ++b;
+                }
+                else
+                {
+                    ++a;
+                    ++b;
+                }
+            }
+            only_a += sorted.size() - a;
+            only_b += reference.size() - b;
+            same &= only_a == 0 && only_b == 0;
+            if(log)
+                std::fprintf(log,
+                             "{\"detect\":%zu,\"alpha\":%.9g,\"stored\":1,\"same\":%d,\"%s\":[%d,%d,%zu,%zu]}\n",
+                             size_t(m_stats.refreshes),
+                             double(pt.alpha),
+                             int(!only_a && !only_b),
+                             names[i],
+                             n,
+                             nr,
+                             size_t(only_a),
+                             size_t(only_b));
+        }
+        if(log)
+            std::fclose(log);
+        if(!same)
+            throw std::runtime_error("BVH warp-cooperative query check mismatch");
+    }
+
+    const SizeT np = SizeT(m_direct[3].m_size) + SizeT(m_direct[4].m_size);
+    const SizeT ne = m_direct[2].m_size, npp = m_direct[0].m_size,
+                npe = m_direct[1].m_size;
+    if(np + ne + npp + npe > PairLimit)
+        throw std::overflow_error("Simplex BVH cached candidates exceed downstream indexing");
+    reserve_pairs(m_raw_pps, npp, tree.config().reserve_ratio, false);
+    reserve_pairs(m_raw_pes, npe, tree.config().reserve_ratio, false);
+    if(npp)
+        m_raw_pps.view(0, npp).copy_from(m_direct[0].view());
+    if(npe)
+        m_raw_pes.view(0, npe).copy_from(m_direct[1].view());
+    m_stats.stored_pps = npp;
+    m_stats.stored_pes = npe;
+    if(!auxiliary_only)
+    {
+        reserve_pairs(m_raw_ees, ne, tree.config().reserve_ratio, false);
+        reserve_pairs(m_raw_pts, np, tree.config().reserve_ratio, false);
+        for(int i = 2; i < 5; ++i)
+        {
+            const int n = m_direct[i].m_size;
+            if(!n)
+                continue;
+            const auto query_ids =
+                i == 2 ? (m_stats.ee_cover ? m_info_queries[0].ids.cview() :
+                                             CBufferView<IndexT>{}) :
+                         m_info_queries[i == 3 ? 1 : 2].ids.cview();
+            const auto leaf_ids =
+                i == 4 ? m_info_faces.ids.cview() : CBufferView<IndexT>{};
+            auto out = i == 2 ? m_raw_ees.view(0, n) :
+                                m_raw_pts.view(i == 4 ? m_direct[3].m_size : 0, n);
+            normalize_direct_pairs<<<(n + Threads - 1) / Threads, Threads>>>(
+                m_direct[i].view(), query_ids, leaf_ids, out, i == 2);
+        }
+        m_stats.stored_pts = np;
+        m_stats.stored_ees = ne;
+        m_stats.ef_pairs   = 0;
+    }
+}
+
+void SimplexBVHQuery::Impl::judge(InfoStacklessBVH&              tree,
+                                  const PointTrianglePredicate&  pt_input,
+                                  const EdgeEdgePredicate&       ee_input,
+                                  Bounds                         points,
+                                  Bounds                         edges,
+                                  Bounds                         faces,
+                                  InfoStacklessBVH::QueryBuffer& pts,
+                                  InfoStacklessBVH::QueryBuffer& ees,
+                                  bool                           gated,
+                                  const std::function<void()>&   hook,
+                                  const Codim*                   codim)
 {
     using namespace bvh_pair_judge;
-    const SizeT np = m_stats.stored_pts, ne = m_stats.stored_ees;
-    reserve_pairs(pts.m_pairs, np, tree.config().reserve_ratio, false);
-    reserve_pairs(ees.m_pairs, ne, tree.config().reserve_ratio, false);
-    const int et = (ne + JudgeTile - 1) / JudgeTile, pt = (np + JudgeTile - 1) / JudgeTile;
-    const int tiles = et + pt;
-    m_judge_flags.resize_discard(ne + np);
+    const SizeT sizes[4] = {
+        m_stats.stored_pps, m_stats.stored_pes, m_stats.stored_ees, m_stats.stored_pts};
+    const SizeT total = sizes[0] + sizes[1] + sizes[2] + sizes[3];
+    if(total > PairLimit)
+        throw std::overflow_error("Simplex BVH judge exceeds downstream indexing");
+    InfoStacklessBVH::QueryBuffer* outputs[4] = {
+        codim ? codim->pps : nullptr, codim ? codim->pes : nullptr, &ees, &pts};
+    DeviceBuffer<Vector2i>* raw[4] = {&m_raw_pps, &m_raw_pes, &m_raw_ees, &m_raw_pts};
+    PairLists lists{};
+    SizeT     offsets[4]{};
+    int       tiles = 0;
+    for(int i = 0; i < 4; ++i)
+    {
+        if(outputs[i])
+            reserve_pairs(outputs[i]->m_pairs, sizes[i], tree.config().reserve_ratio, false);
+        offsets[i]    = i ? offsets[i - 1] + sizes[i - 1] : 0;
+        lists.list[i] = {raw[i]->data(),
+                         nullptr,
+                         outputs[i] ? outputs[i]->m_pairs.data() : nullptr,
+                         outputs[i] ? outputs[i]->m_cpNum.data() :
+                                      m_dummy_counts.data() + i,
+                         static_cast<int>(sizes[i]),
+                         tiles};
+        tiles += (sizes[i] + JudgeTile - 1) / JudgeTile;
+    }
+    lists.list[4].count      = m_dummy_counts.data() + 4;
+    lists.list[4].first_tile = tiles;
+    m_judge_flags.resize_discard(total);
     m_tile_counts.resize_discard(tiles);
     m_tile_offsets.resize_discard(tiles);
-    EEQueue queue{nullptr, nullptr, m_ee_queue_counts.data(), static_cast<int>(ne)};
-    if(ne && ee_input.alpha != 0.0 && ee_input.f32_positions.size())
+    for(int i = 0; i < 4; ++i)
+        lists.list[i].flags = m_judge_flags.data() + offsets[i];
+    EEQueue queue{nullptr, nullptr, m_ee_queue_counts.data(), static_cast<int>(sizes[2])};
+    if(sizes[2] && ee_input.alpha != 0.0 && ee_input.f32_positions.size())
     {
-        m_ee_queue.resize_discard(2 * ne);
+        m_ee_queue.resize_discard(2 * sizes[2]);
         queue.second = m_ee_queue.data();
-        queue.pairs  = m_ee_queue.data() + ne;
+        queue.pairs  = m_ee_queue.data() + sizes[2];
     }
     auto ee_pred               = ee_input;
     auto pt_pred               = pt_input;
-    ee_pred.skip_position_free = true;
-    pt_pred.skip_position_free = true;
-    const IndexT* invalid      = gated ? m_control_device.data() : nullptr;
-    // Both chains follow prefix + validation, and join before the shared scan.
-    const auto ee_stream = m_chains[0].side.fork();
-    const auto pt_stream = m_chains[1].side.fork();
-    bvh_pair_judge::judge_ee(m_raw_ees.cview(0, ne),
-                             edges.aabbs,
-                             edges.aabbs,
-                             EEPredicate{{}, {}, ee_pred},
-                             m_judge_flags.view(0, ne),
-                             m_tile_counts.view(0, et),
-                             queue,
-                             m_sm_count,
-                             ee_stream,
-                             invalid);
-    bvh_pair_judge::judge_stored(m_raw_pts.cview(0, np),
-                                 points.aabbs,
-                                 faces.aabbs,
-                                 pt_pred,
-                                 m_judge_flags.view(ne, np),
-                                 m_tile_counts.view(et, pt),
-                                 static_cast<int>(np),
-                                 pt_stream,
-                                 invalid);
+    ee_pred.skip_position_free = pt_pred.skip_position_free = true;
+    const IndexT* invalid = gated ? m_control_device.data() : nullptr;
+    m_chains[0].side.mark();
+    m_chains[1].side.mark();
+    m_aux_side.mark();
+    const cudaStream_t streams[3] = {m_chains[0].side.fork_marked(),
+                                     m_chains[1].side.fork_marked(),
+                                     m_aux_side.fork_marked()};
+    try
+    {
+        judge_ee(m_raw_ees.cview(0, sizes[2]),
+                 edges.aabbs,
+                 edges.aabbs,
+                 EEPredicate{{}, {}, ee_pred},
+                 m_judge_flags.view(offsets[2], sizes[2]),
+                 m_tile_counts.view(lists.list[2].first_tile,
+                                    (sizes[2] + JudgeTile - 1) / JudgeTile),
+                 queue,
+                 m_sm_count,
+                 streams[0],
+                 invalid);
+        judge_stored(m_raw_pts.cview(0, sizes[3]),
+                     points.aabbs,
+                     faces.aabbs,
+                     pt_pred,
+                     m_judge_flags.view(offsets[3], sizes[3]),
+                     m_tile_counts.view(lists.list[3].first_tile,
+                                        (sizes[3] + JudgeTile - 1) / JudgeTile),
+                     static_cast<int>(sizes[3]),
+                     streams[1],
+                     invalid);
+        if(codim)
+        {
+            judge_stored(m_raw_pps.cview(0, sizes[0]),
+                         points.aabbs,
+                         codim->points.aabbs,
+                         codim->pp,
+                         m_judge_flags.view(offsets[0], sizes[0]),
+                         m_tile_counts.view(lists.list[0].first_tile,
+                                            (sizes[0] + JudgeTile - 1) / JudgeTile),
+                         static_cast<int>(sizes[0]),
+                         streams[2],
+                         invalid);
+            judge_stored(m_raw_pes.cview(0, sizes[1]),
+                         codim->points.aabbs,
+                         edges.aabbs,
+                         codim->pe,
+                         m_judge_flags.view(offsets[1], sizes[1]),
+                         m_tile_counts.view(lists.list[1].first_tile,
+                                            (sizes[1] + JudgeTile - 1) / JudgeTile),
+                         static_cast<int>(sizes[1]),
+                         streams[2],
+                         invalid);
+        }
+    }
+    catch(...)
+    {
+        m_chains[0].side.join();
+        m_chains[1].side.join();
+        m_aux_side.join();
+        CUDA_TOOL_CHECK(cudaStreamSynchronize(default_stream()));
+        throw;
+    }
     m_chains[0].side.join();
     m_chains[1].side.join();
-    PairLists lists{};
-    for(int i = 0; i < JudgedLists; ++i)
-        lists.list[i].count = m_dummy_counts.data() + i;
-    lists.list[2]            = {m_raw_ees.data(),
-                                m_judge_flags.data(),
-                                ees.m_pairs.data(),
-                                ees.m_cpNum.data(),
-                                static_cast<int>(ne),
-                                0};
-    lists.list[3]            = {m_raw_pts.data(),
-                                m_judge_flags.data() + ne,
-                                pts.m_pairs.data(),
-                                pts.m_cpNum.data(),
-                                static_cast<int>(np),
-                                et};
-    lists.list[4].first_tile = tiles;
+    m_aux_side.join();
     compact(lists,
             m_tile_counts.cview(),
             m_tile_offsets.view(),
@@ -1268,63 +1789,70 @@ void SingleEFBVHQuery::Impl::judge(InfoStacklessBVH&              tree,
         hook();
     CUDA_TOOL_CHECK(cudaEventSynchronize(m_ready));
     if(!gated || !m_control[0])
-    {
-        pts.m_size = m_counts[3];
-        ees.m_size = m_counts[2];
-    }
+        for(int i = 0; i < 4; ++i)
+            if(outputs[i])
+                outputs[i]->m_size = m_counts[i];
 }
 
-SingleEFBVHQuery::SingleEFBVHQuery()
+SimplexBVHQuery::SimplexBVHQuery()
     : m_impl(std::make_unique<Impl>())
 {
 }
-SingleEFBVHQuery::~SingleEFBVHQuery() = default;
-SizeT SingleEFBVHQuery::refresh_count() const noexcept
+SimplexBVHQuery::~SimplexBVHQuery() = default;
+SizeT SimplexBVHQuery::refresh_count() const noexcept
 {
     return m_impl->m_stats.refreshes;
 }
-SizeT SingleEFBVHQuery::reuse_count() const noexcept
+SizeT SimplexBVHQuery::reuse_count() const noexcept
 {
     return m_impl->m_stats.reuses;
 }
-SizeT SingleEFBVHQuery::isolated_point_count() const noexcept
+SizeT SimplexBVHQuery::isolated_point_count() const noexcept
 {
-    return m_impl->m_eligibility == Impl::Eligibility::Supported ?
+    return m_impl->m_eligibility == Impl::Eligibility::Supported && m_impl->m_use_ef ?
                m_impl->m_owned_vertices.size() - m_impl->m_edge_count :
                0;
 }
-SizeT SingleEFBVHQuery::standalone_edge_count() const noexcept
+SizeT SimplexBVHQuery::standalone_edge_count() const noexcept
 {
-    return m_impl->m_eligibility == Impl::Eligibility::Supported ?
+    return m_impl->m_eligibility == Impl::Eligibility::Supported && m_impl->m_use_ef ?
                m_impl->m_owned_edges.size() - m_impl->m_triangle_count :
                0;
 }
-SingleEFBVHQuery::Statistics SingleEFBVHQuery::statistics() const noexcept
+SimplexBVHQuery::Statistics SimplexBVHQuery::statistics() const noexcept
 {
     return m_impl->m_stats;
 }
 
-bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
-                              const PointTrianglePredicate&  pt,
-                              const EdgeEdgePredicate&       ee,
-                              const NodePredicate&           node,
-                              PrimitiveBounds                points,
-                              PrimitiveBounds                edges,
-                              PrimitiveBounds                faces,
-                              InfoStacklessBVH::QueryBuffer& pts,
-                              InfoStacklessBVH::QueryBuffer& ees,
-                              bool                           new_frame,
-                              const std::function<void()>&   hook,
-                              TrajectoryPrefix*              prefix)
+bool SimplexBVHQuery::detect(InfoStacklessBVH&              tree,
+                             const PointTrianglePredicate&  pt,
+                             const EdgeEdgePredicate&       ee,
+                             const NodePredicate&           node,
+                             PrimitiveBounds                points,
+                             PrimitiveBounds                edges,
+                             PrimitiveBounds                faces,
+                             InfoStacklessBVH::QueryBuffer& pts,
+                             InfoStacklessBVH::QueryBuffer& ees,
+                             bool                           new_frame,
+                             const std::function<void()>&   hook,
+                             TrajectoryPrefix*              prefix,
+                             const Codim*                   codim)
 {
     UIPC_ASSERT(pt.alpha == ee.alpha && pt.alpha >= 0.0,
-                "Single EF PT and EE queries must share a nonnegative alpha");
+                "Simplex PT and EE queries must share a nonnegative alpha");
     UIPC_ASSERT(points.aabbs.size() == pt.Vs.size()
                     && edges.aabbs.size() == ee.Es.size()
                     && faces.aabbs.size() == pt.Fs.size(),
-                "Single EF primitive bounds do not match topology");
+                "Simplex primitive bounds do not match topology");
+    UIPC_ASSERT(!codim
+                    || (codim->pps && codim->pes
+                        && codim->points.aabbs.size() == codim->pp.codimVs.size()
+                        && codim->pp.alpha == pt.alpha && codim->pe.alpha == pt.alpha),
+                "Codimensional queries must bind matching bounds, motion and outputs");
     auto& s = *m_impl;
     s.init();
+    const Bounds cp        = codim ? codim->points : Bounds{};
+    const auto cp_vertices = codim ? codim->pp.codimVs : CBufferView<IndexT>{};
     if(new_frame)
     {
         ++s.m_frames;
@@ -1334,49 +1862,63 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
         s.m_other_uniform    = s.m_frame_other_left;
         s.m_frame_cover_left = s.m_frame_other_left = false;
     }
+    const bool method_changed = s.m_method != method;
     const bool topology_shape =
-        s.m_eligibility == Impl::Eligibility::Supported
+        !method_changed && s.m_eligibility == Impl::Eligibility::Supported
         && s.m_vertex_count == pt.Vs.size() && s.m_edge_count == ee.Es.size()
-        && s.m_triangle_count == pt.Fs.size() && s.m_position_count == pt.Ps.size();
-    const Metadata metadata(pt, ee, node, points, edges, faces);
+        && s.m_triangle_count == pt.Fs.size() && s.m_position_count == pt.Ps.size()
+        && s.m_codim_count == cp_vertices.size();
+    const Metadata metadata(pt, ee, node, points, edges, faces, codim);
     const bool     metadata_shape =
         s.m_previous_metadata && metadata.same_shape(*s.m_previous_metadata);
     const bool policy_change = s.m_skip_pt != pt.skip_position_free
                                || s.m_skip_ee != ee.skip_position_free;
-    const SizeT prospective_leaves = topology_shape ? s.m_owned_edges.size() : 0;
+    const SizeT prospective_leaves =
+        topology_shape && s.m_use_ef ? s.m_owned_edges.size() : 0;
     const SizeT chunk_size = prospective_leaves ?
                                  std::min({s.m_owned_vertices.size(),
                                            std::max(SizeT{1}, max_chunk_edges),
                                            PairLimit / prospective_leaves}) :
                                  0;
+    const Float skin_scale = std::max(Float{0}, cache_skin_scale);
     const bool  known_refresh =
         force_fresh || !s.m_cache_valid || !topology_shape || !metadata_shape
-        || policy_change || s.m_cached_chunk_size != chunk_size || s.m_tree != &tree;
+        || policy_change || s.m_cached_skin_scale != skin_scale
+        || s.m_cached_chunk_size != chunk_size || s.m_tree != &tree;
     const IndexT initial[6] = {known_refresh ? 1 : 0,
                                topology_shape ? 0 : 1,
-                               metadata_shape && !policy_change ? 0 : 1,
+                               metadata_shape && !policy_change && !method_changed ? 0 : 1,
                                0,
                                0,
                                0};
-    Validation validation{
-        pt.Vs,
-        s.m_previous_vertices.cview(),
-        ee.Es,
-        s.m_previous_edges.cview(),
-        pt.Fs,
-        s.m_previous_triangles.cview(),
-        metadata,
-        s.m_metadata.cview(),
-        {points.aabbs, edges.aabbs, faces.aabbs},
-        {s.m_grown[0].cview(), s.m_grown[1].cview(), s.m_grown[2].cview()},
-        {s.m_groups[0].cview(), s.m_groups[1].cview(), s.m_groups[2].cview()},
-        {s.m_shrink[0].cview(), s.m_shrink[1].cview(), s.m_shrink[2].cview()},
-        topology_shape,
-        metadata_shape,
-        !known_refresh};
+    Validation validation{pt.Vs,
+                          s.m_previous_vertices.cview(),
+                          ee.Es,
+                          s.m_previous_edges.cview(),
+                          pt.Fs,
+                          s.m_previous_triangles.cview(),
+                          cp_vertices,
+                          s.m_previous_codim.cview(),
+                          metadata,
+                          s.m_metadata.cview(),
+                          {points.aabbs, edges.aabbs, faces.aabbs, cp.aabbs},
+                          {s.m_grown[0].cview(),
+                           s.m_grown[1].cview(),
+                           s.m_grown[2].cview(),
+                           s.m_grown[3].cview()},
+                          {s.m_groups[0].cview(),
+                           s.m_groups[1].cview(),
+                           s.m_groups[2].cview(),
+                           s.m_groups[3].cview()},
+                          {s.m_shrink[0].cview(),
+                           s.m_shrink[1].cview(),
+                           s.m_shrink[2].cview(),
+                           s.m_shrink[3].cview()},
+                          topology_shape,
+                          metadata_shape,
+                          !known_refresh};
     if(prefix)
     {
-        // A caller may reuse the POD after a shape change or cache refresh.
         for(auto& family : prefix->family)
         {
             family.previous_vertices  = nullptr;
@@ -1387,23 +1929,31 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
             family.cached_grown       = nullptr;
             family.cached_groups      = nullptr;
             family.cached_shrink      = nullptr;
+            family.grown              = nullptr;
+            family.is_query           = nullptr;
         }
-        auto& check            = prefix->validation;
-        check                  = {};
-        check.invalid          = s.m_control_device.data();
-        check.topology_changed = s.m_control_device.data() + 1;
-        check.metadata_changed = s.m_control_device.data() + 2;
-        check.group_escaped[0] = s.m_control_device.data() + 5;
-        check.group_escaped[1] = s.m_control_device.data() + 3;
-        check.group_escaped[2] = s.m_control_device.data() + 4;
-        check.initial_invalid  = initial[0];
-        check.initial_topology = initial[1];
-        check.initial_metadata = initial[2];
+        prefix->escaped                 = nullptr;
+        prefix->accepted_step_endpoints = true;
+        auto& check                     = prefix->validation;
+        check                           = {};
+        check.invalid                   = s.m_control_device.data();
+        check.topology_changed          = s.m_control_device.data() + 1;
+        check.metadata_changed          = s.m_control_device.data() + 2;
+        check.group_escaped[0]          = s.m_control_device.data() + 5;
+        check.group_escaped[1]          = s.m_control_device.data() + 3;
+        check.group_escaped[2]          = s.m_control_device.data() + 4;
+        check.initial_invalid           = initial[0];
+        check.initial_topology          = initial[1];
+        check.initial_metadata          = initial[2];
+        static_assert(int(Metadata::Arrays) + int(Metadata::Matrices) - 8
+                      <= PrefixValidation::MaxRanges);
         if(metadata_shape)
         {
-            // The six primitive BID/CID ranges are checked at their producer.
-            for(int a = 0; a < Metadata::PointBodies; ++a)
+            for(int a = 0; a < Metadata::Arrays; ++a)
             {
+                // These eight ranges are produced and checked by their own primitive threads.
+                if(a >= Metadata::PointBodies && a <= Metadata::CodimContacts)
+                    continue;
                 auto& range    = check.ranges[check.count++];
                 range.values   = metadata.arrays[a];
                 range.previous = s.m_metadata.data() + metadata.offsets[a];
@@ -1421,9 +1971,9 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
                 check.work      = std::max(check.work, range.n);
             }
         }
-        for(int family = 0; family < 3; ++family)
+        for(int family = 0; family < 4; ++family)
         {
-            auto& f = prefix->family[family + 1];
+            auto& f = prefix->family[(family + 1) % 4];
             if(metadata_shape)
             {
                 f.previous_bids = s.m_metadata.data()
@@ -1440,6 +1990,7 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
         }
         if(topology_shape)
         {
+            prefix->family[0].previous_vertices = s.m_previous_codim.data();
             prefix->family[1].previous_vertices = s.m_previous_vertices.data();
             prefix->family[2].previous_edges    = s.m_previous_edges.data();
             prefix->family[3].previous_triangles = s.m_previous_triangles.data();
@@ -1450,15 +2001,18 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
     else
     {
         s.m_control_device.view().copy_from(initial);
-        const SizeT work =
-            std::max({metadata.work, pt.Vs.size(), ee.Es.size(), pt.Fs.size()});
+        const SizeT work = std::max({metadata.work,
+                                     pt.Vs.size(),
+                                     ee.Es.size(),
+                                     pt.Fs.size(),
+                                     cp_vertices.size()});
         if(work)
             validate_cache<<<(work + Threads - 1) / Threads, Threads>>>(
                 validation, s.m_control_device.data(), work);
     }
     if(!known_refresh)
     {
-        s.judge(tree, pt, ee, points, edges, faces, pts, ees, true, hook);
+        s.judge(tree, pt, ee, points, edges, faces, pts, ees, true, hook, codim);
         if(!s.m_control[0])
         {
             s.m_frame_cover_left |= s.m_control[3] != 0;
@@ -1482,31 +2036,65 @@ bool SingleEFBVHQuery::detect(InfoStacklessBVH&              tree,
     s.m_frame_other_left |= s.m_control[4] != 0;
     s.m_cover_thick |= s.m_control[3] != 0;
     s.m_other_uniform |= s.m_control[4] != 0;
-    if(!s.prepare_topology(pt, ee, !topology_changed))
+    s.m_method     = method;
+    bool supported = topology_shape && !topology_changed;
+    if(!supported)
     {
-        // A speculative, gated judge can clear the device counts. Preserve
-        // the last published result when the caller must use its fallback.
+        s.m_use_ef = method == Method::SingleEF;
+        supported  = s.m_use_ef && s.prepare_topology(pt, ee, false);
+        if(!supported && (method == Method::InfoStackless || codim))
+            supported = s.prepare_direct_topology(pt, ee);
+    }
+    if(!supported)
+    {
         pts.m_cpNum.copy_from(static_cast<int>(pts.m_size));
         ees.m_cpNum.copy_from(static_cast<int>(ees.m_size));
+        if(codim)
+        {
+            codim->pps->m_cpNum.copy_from(static_cast<int>(codim->pps->m_size));
+            codim->pes->m_cpNum.copy_from(static_cast<int>(codim->pes->m_size));
+        }
         return false;
     }
-
+    s.m_codim_count = cp_vertices.size();
+    if(topology_changed)
+    {
+        s.m_previous_codim.resize_discard(cp_vertices.size());
+        s.m_previous_codim.view().copy_from(cp_vertices);
+        s.m_rebuild_topology = true;
+    }
     if(topology_changed || metadata_changed)
     {
         s.m_skip_pt = pt.skip_position_free;
         s.m_skip_ee = ee.skip_position_free;
         s.update_cover(metadata);
     }
-    if(topology_changed)
-        s.m_rebuild_topology = true;
-    s.prepare_proxies(pt, ee, points, edges, faces, std::max(Float{0}, cache_skin_scale));
-    const SizeT actual_chunk = std::min({s.m_owned_vertices.size(),
-                                         std::max(SizeT{1}, max_chunk_edges),
-                                         PairLimit / s.m_owned_edges.size()});
-    s.refresh(tree, pt, ee, node, points, edges, faces, actual_chunk, !topology_changed && !metadata_changed);
+    s.prepare_proxies(pt, ee, points, edges, faces, skin_scale, codim);
+    if(s.m_use_ef)
+    {
+        const SizeT actual_chunk = std::min({s.m_owned_vertices.size(),
+                                             std::max(SizeT{1}, max_chunk_edges),
+                                             PairLimit / s.m_owned_edges.size()});
+        s.refresh(tree, pt, ee, node, points, edges, faces, actual_chunk, !topology_changed && !metadata_changed);
+        if(codim && cp.aabbs.size())
+            s.refresh_direct(tree, pt, ee, node, points, edges, faces, codim, true);
+        else
+            s.m_stats.stored_pps = s.m_stats.stored_pes = 0;
+    }
+    else
+    {
+        s.refresh_direct(tree, pt, ee, node, points, edges, faces, codim, false);
+        s.m_cached_chunk_size = 0;
+    }
+    s.m_tree              = &tree;
+    s.m_rebuild_topology  = false;
+    s.m_tree_ready        = true;
+    s.m_cached_skin_scale = skin_scale;
+    s.m_cache_valid       = true;
+    ++s.m_stats.refreshes;
     CUDA_TOOL_CHECK(cudaMemsetAsync(
         s.m_control_device.data(), 0, 3 * sizeof(IndexT), default_stream()));
-    s.judge(tree, pt, ee, points, edges, faces, pts, ees, false, hook);
+    s.judge(tree, pt, ee, points, edges, faces, pts, ees, false, hook, codim);
     return true;
 }
 }  // namespace uipc::backend::cuda

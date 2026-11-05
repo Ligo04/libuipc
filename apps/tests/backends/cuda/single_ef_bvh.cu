@@ -1,10 +1,11 @@
 #include <type_define.h>
 #include <app/app.h>
-#include <collision_detection/filters/single_ef_bvh_query.h>
+#include <collision_detection/filters/simplex_bvh_query.h>
 #include <collision_detection/filters/trajectory_prefix.h>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -36,7 +37,7 @@ struct Bounds
         upload(d_bids, bids);
         upload(d_cids, cids);
     }
-    SingleEFBVHQuery::PrimitiveBounds view() const
+    SimplexBVHQuery::PrimitiveBounds view() const
     {
         return {d_boxes.view(), d_bids.view(), d_cids.view()};
     }
@@ -331,7 +332,7 @@ void check_mesh(Mesh& mesh, SizeT chunk, bool check_cpu = true)
     ees.m_pairs.release();
     pts.reserve(1);
     ees.reserve(1);
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
     query.max_chunk_edges = chunk;
     REQUIRE(query.detect(single_t,
                          mesh.pt(),
@@ -395,7 +396,7 @@ void check_unsupported(Mesh& mesh)
         out->m_size = 1;
         out->m_cpNum.copy_from(1);
     }
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
     CHECK_FALSE(query.detect(triangle_bvh,
                              mesh.pt(),
                              mesh.ee(),
@@ -609,7 +610,7 @@ TEST_CASE("single EF BVH retains reusable candidate output storage", "[cuda][sin
         output->m_pairs.release();
         output->reserve(reserved_slots);
     }
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
     query.max_chunk_edges = 2;
 
     auto check_dcd = [&](const std::vector<Pair>& expected_pts,
@@ -738,7 +739,7 @@ void check_swept_candidates(Mesh&                       mesh,
         output->m_pairs.release();
         output->reserve(1);
     }
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
     query.max_chunk_edges = 1;
     bool saw_swept_pt = false, saw_swept_ee = false;
     auto compare = [&](const std::vector<Vector3>& dxs, Float alpha)
@@ -949,12 +950,17 @@ TEST_CASE("single EF proxy expansion preserves EE hits after float cancellation"
     check_mesh(mesh, 1, false);
 }
 
-TEST_CASE("fat EF cache preserves fresh traversal across changes", "[cuda][single_ef_bvh][ef_cache]")
+TEST_CASE("Simplex cache preserves fresh traversal across changes",
+          "[cuda][single_ef_bvh][ef_cache][simplex_query_policy]")
 {
     using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    CAPTURE(method);
     Mesh mesh(4);
     mesh.add_codimensional_geometry();
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
+    query.method          = method;
     query.max_chunk_edges = 2;
     InfoStacklessBVH              tree, baseline_e, baseline_t;
     InfoStacklessBVH::QueryBuffer pts, ees, expected_pt, expected_ee;
@@ -1029,18 +1035,20 @@ TEST_CASE("fat EF cache preserves fresh traversal across changes", "[cuda][singl
     CHECK(query.refresh_count() == 5);
     query.max_chunk_edges = 1;
     compare(0.0, 0.0, Vector3::Zero());
-    CHECK(query.refresh_count() == 6);
+    // Chunk partitioning belongs to EF expansion; direct Info does not use it.
+    const SizeT after_chunk = method == SimplexBVHQuery::Method::SingleEF ? 6 : 5;
+    CHECK(query.refresh_count() == after_chunk);
     // The validation route bypasses containment and reruns the traversal.
     query.force_fresh = true;
     compare(0.0, 0.0, Vector3::Zero());
-    CHECK(query.refresh_count() == 7);
+    CHECK(query.refresh_count() == after_chunk + 1);
 }
 
 TEST_CASE("fat EF cache refreshes after leaf escape and topology growth", "[cuda][single_ef_bvh][ef_cache]")
 {
     using namespace test_single_ef_bvh;
     Mesh                          mesh(3);
-    SingleEFBVHQuery              query;
+    SimplexBVHQuery               query;
     InfoStacklessBVH              tree;
     InfoStacklessBVH::QueryBuffer pts, ees;
     auto                          run = [&]
@@ -1094,10 +1102,13 @@ TEST_CASE("fat EF cache refreshes after leaf escape and topology growth", "[cuda
     CHECK(read_pairs(ees, true) == previous_ee);
 }
 
-TEST_CASE("SingleEF cover chains retain mixed-CID pairs and canonical EE order",
-          "[cuda][single_ef_bvh][single_ef_queries][ef_cover]")
+TEST_CASE("Simplex cover chains retain mixed-CID pairs and canonical EE order",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_cover][simplex_query_policy]")
 {
     using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    CAPTURE(method);
     Mesh mesh(12);
     mesh.add_codimensional_geometry();
     mesh.d_contact_mask.resize(ct::Extent2D{4, 4});
@@ -1108,7 +1119,8 @@ TEST_CASE("SingleEF cover chains retain mixed-CID pairs and canonical EE order",
     for(SizeT f = 0; f < mesh.triangles.size(); ++f)
         for(IndexT k = 0; k < 3; ++k)
             mesh.contacts[mesh.triangles[f][k]] = f < 10 ? 2 + (f + k) % 2 : (f + k) % 2;
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
+    query.method          = method;
     query.max_chunk_edges = 1;
     InfoStacklessBVH              tree, baseline_e, baseline_t;
     InfoStacklessBVH::QueryBuffer pts, ees, expected_pt, expected_ee;
@@ -1183,9 +1195,12 @@ TEST_CASE("SingleEF cover chains retain mixed-CID pairs and canonical EE order",
     const auto stats = query.statistics();
     REQUIRE(stats.pt_cover);
     REQUIRE(stats.ee_cover);
-    CHECK(stats.primary_queries > 0);
-    CHECK(stats.primary_queries < mesh.edges.size());
-    CHECK(stats.reverse_queries > 0);
+    if(method == SimplexBVHQuery::Method::SingleEF)
+    {
+        CHECK(stats.primary_queries > 0);
+        CHECK(stats.primary_queries < mesh.edges.size());
+        CHECK(stats.reverse_queries > 0);
+    }
     CHECK(stats.stored_pts >= pts.size());
     CHECK(stats.stored_ees >= ees.size());
     CHECK_FALSE(read_pairs(ees, true).empty());
@@ -1215,14 +1230,20 @@ TEST_CASE("SingleEF cover chains retain mixed-CID pairs and canonical EE order",
     CHECK(query.refresh_count() == ++refreshes);
     CHECK(pts.size() == 0);
     CHECK(ees.size() == 0);
-    CHECK(query.statistics().primary_queries == 0);
-    CHECK(query.statistics().reverse_queries == 0);
+    if(method == SimplexBVHQuery::Method::SingleEF)
+    {
+        CHECK(query.statistics().primary_queries == 0);
+        CHECK(query.statistics().reverse_queries == 0);
+    }
 }
 
-TEST_CASE("SingleEF skins track primitive escapes and topology retention counts frames",
-          "[cuda][single_ef_bvh][single_ef_queries][ef_skin]")
+TEST_CASE("Simplex skins track primitive escapes and topology retention counts frames",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_skin][simplex_query_policy]")
 {
     using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    CAPTURE(method);
     Mesh mesh(10);
     mesh.contact_mask = {0, 1, 1, 0};
     for(SizeT f = 0; f < mesh.triangles.size(); ++f)
@@ -1231,7 +1252,8 @@ TEST_CASE("SingleEF skins track primitive escapes and topology retention counts 
     const auto corner         = mesh.triangles[0];
     mesh.positions[corner[1]] = Vector3{1, 1, 0};
     mesh.positions[corner[2]] = Vector3{2, 1, 0};
-    SingleEFBVHQuery              query;
+    SimplexBVHQuery query;
+    query.method = method;
     InfoStacklessBVH              tree;
     InfoStacklessBVH::QueryBuffer pts, ees;
     auto                          run = [&](bool frame = false)
@@ -1254,6 +1276,7 @@ TEST_CASE("SingleEF skins track primitive escapes and topology retention counts 
     run(true);
     REQUIRE(query.statistics().pt_cover);
     REQUIRE(query.statistics().ee_cover);
+    const auto initial_builds = query.statistics().topology_builds;
     CHECK(query.statistics().cover_skin == 1.0);
     CHECK(query.statistics().other_skin == 0.01);
     const auto old_edges = mesh.edge_bounds.boxes,
@@ -1303,16 +1326,16 @@ TEST_CASE("SingleEF skins track primitive escapes and topology retention counts 
     for(int i = 0; i < 4; ++i)
         run();
     query.force_fresh = false;
-    CHECK(query.statistics().topology_builds == 1);
+    CHECK(query.statistics().topology_builds == initial_builds);
     const auto before_frames = query.refresh_count();
     for(int frame = 6; frame <= 8; ++frame)
         run(true);
     CHECK(query.refresh_count() == before_frames);
-    CHECK(query.statistics().topology_builds == 1);
+    CHECK(query.statistics().topology_builds == initial_builds);
     CHECK(query.statistics().cross_frame_reuses >= 3);
     query.force_fresh = true;
     run();  // The pending eighth-frame topology rebuild is consumed here.
-    CHECK(query.statistics().topology_builds == 2);
+    CHECK(query.statistics().topology_builds > initial_builds);
     CHECK(cudaDeviceSynchronize() == cudaSuccess);
 }
 
@@ -1350,7 +1373,7 @@ TEST_CASE("SingleEF query bounds exclude unused long owner edges",
         mesh.positions[face[1]].x()                     = 100;
     }
     mesh.send();
-    SingleEFBVHQuery              query;
+    SimplexBVHQuery               query;
     InfoStacklessBVH              tree;
     InfoStacklessBVH::QueryBuffer pts, ees;
     REQUIRE(query.detect(tree,
@@ -1387,7 +1410,7 @@ TEST_CASE("SingleEF batches chunks and refills bounded typed outputs",
     const bool split = GENERATE(false, true);
     Mesh       mesh(160);
     mesh.send();
-    SingleEFBVHQuery query;
+    SimplexBVHQuery query;
     if(split)
         query.max_chunk_edges = 17;
     InfoStacklessBVH              tree;
@@ -1425,14 +1448,18 @@ TEST_CASE("SingleEF batches chunks and refills bounded typed outputs",
     CHECK(cudaDeviceSynchronize() == cudaSuccess);
 }
 
-TEST_CASE("SingleEF fused prefix validates new primitive metadata and large tables across frames",
-          "[cuda][single_ef_bvh][single_ef_queries][ef_prefix]")
+TEST_CASE("Simplex fused prefix validates new primitive metadata and large tables across frames",
+          "[cuda][single_ef_bvh][single_ef_queries][ef_prefix][simplex_query_policy]")
 {
     using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    CAPTURE(method);
     Mesh mesh(3);
     mesh.d_contact_mask.resize(ct::Extent2D{16, 16});
     mesh.contact_mask.assign(256, 1);
-    SingleEFBVHQuery              query;
+    SimplexBVHQuery query;
+    query.method = method;
     InfoStacklessBVH              tree;
     InfoStacklessBVH::QueryBuffer pts, ees;
     ct::DeviceBuffer<IndexT>      bodies;
@@ -1513,5 +1540,464 @@ TEST_CASE("SingleEF fused prefix validates new primitive metadata and large tabl
     run();  // Reuse the same prefix POD after its snapshots and fat buffers grow.
     CHECK(query.refresh_count() == 7);
     CHECK(query.statistics().fused_prefixes == 8);
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+namespace test_single_ef_bvh
+{
+struct IndependentPredicateInputs
+{
+    static constexpr int       MaskSize = 16;
+    std::vector<IndexT>        contacts, subscenes, self;
+    std::vector<IndexT>        contact_mask, subscene_mask;
+    ct::DeviceBuffer<IndexT>   d_contacts, d_subscenes, d_self;
+    ct::DeviceBuffer2D<IndexT> d_contact_mask{ct::Extent2D{MaskSize, MaskSize}};
+    ct::DeviceBuffer2D<IndexT> d_subscene_mask{ct::Extent2D{MaskSize, MaskSize}};
+
+    explicit IndependentPredicateInputs(const Mesh& mesh)
+        : contacts(mesh.contacts)
+        , subscenes(mesh.subscenes)
+        , self(mesh.self)
+        , contact_mask(MaskSize * MaskSize, 1)
+        , subscene_mask(MaskSize * MaskSize, 1)
+    {
+        // Independently bound ranges can exceed every primitive/vertex grid.
+        contacts.resize(257, 0);
+        subscenes.resize(257, 0);
+    }
+    void send()
+    {
+        upload(d_contacts, contacts);
+        upload(d_subscenes, subscenes);
+        upload(d_self, self);
+        d_contact_mask.view().copy_from(contact_mask.data());
+        d_subscene_mask.view().copy_from(subscene_mask.data());
+    }
+};
+
+struct AuxiliaryQueries
+{
+    std::vector<IndexT>           vertices, dimensions;
+    ct::DeviceBuffer<IndexT>      d_vertices, d_dimensions;
+    Bounds                        bounds;
+    IndependentPredicateInputs    pp_inputs, pe_inputs;
+    InfoStacklessBVH::QueryBuffer pps, pes;
+
+    AuxiliaryQueries(const Mesh& mesh, bool with_codim)
+        : dimensions(257, 3)
+        , pp_inputs(mesh)
+        , pe_inputs(mesh)
+    {
+        if(with_codim)
+            for(IndexT i = 0; i < 5; ++i)
+            {
+                const IndexT v = static_cast<IndexT>(mesh.positions.size()) - 1 - i;
+                vertices.push_back(v);
+                dimensions[v] = i == 4 ? 0 : 1;
+            }
+    }
+    void send(Mesh& mesh)
+    {
+        upload(d_vertices, vertices);
+        upload(d_dimensions, dimensions);
+        pp_inputs.send();
+        pe_inputs.send();
+        bounds.boxes.clear();
+        bounds.bids.clear();
+        bounds.cids.clear();
+        for(IndexT v : vertices)
+            mesh.add_bounds(bounds, std::array<IndexT, 1>{v}, {}, 0.0);
+        bounds.send();
+    }
+    SimplexBVHQuery::CodimQueries bind(const Mesh& mesh)
+    {
+        bvh_simplex_detail::PointPointPredicate pp;
+        pp.Vs                    = mesh.d_vertices.cview();
+        pp.codimVs               = d_vertices.cview();
+        pp.Ps                    = mesh.d_positions.cview();
+        pp.dxs                   = mesh.d_displacements.cview();
+        pp.thicknesses           = mesh.d_thicknesses.cview();
+        pp.dimensions            = d_dimensions.cview();
+        pp.contact_element_ids   = pp_inputs.d_contacts.cview();
+        pp.contact_mask_tabular  = pp_inputs.d_contact_mask.cviewer();
+        pp.subscene_element_ids  = pp_inputs.d_subscenes.cview();
+        pp.subscene_mask_tabular = pp_inputs.d_subscene_mask.cviewer();
+        pp.body_self_collision   = pp_inputs.d_self.cview();
+        pp.d_hats                = mesh.d_hats.cview();
+        pp.alpha                 = 0.0;
+        pp.skin                  = 0.0;
+        bvh_simplex_detail::PointEdgePredicate pe;
+        pe.codimVs               = d_vertices.cview();
+        pe.Es                    = mesh.d_edges.cview();
+        pe.Ps                    = mesh.d_positions.cview();
+        pe.dxs                   = mesh.d_displacements.cview();
+        pe.thicknesses           = mesh.d_thicknesses.cview();
+        pe.contact_element_ids   = pe_inputs.d_contacts.cview();
+        pe.contact_mask_tabular  = pe_inputs.d_contact_mask.cviewer();
+        pe.subscene_element_ids  = pe_inputs.d_subscenes.cview();
+        pe.subscene_mask_tabular = pe_inputs.d_subscene_mask.cviewer();
+        pe.body_self_collision   = pe_inputs.d_self.cview();
+        pe.d_hats                = mesh.d_hats.cview();
+        pe.alpha                 = 0.0;
+        pe.skin                  = 0.0;
+        return {bounds.view(), pp, pe, &pps, &pes};
+    }
+};
+
+using FourCandidates = std::array<std::vector<Pair>, 4>;
+FourCandidates fresh_candidates(Mesh& mesh, const SimplexBVHQuery::CodimQueries& codim)
+{
+    InfoStacklessBVH              e, t, p;
+    InfoStacklessBVH::QueryBuffer pps, pes, pts, ees;
+    if(!mesh.edges.empty())
+    {
+        e.build(mesh.edge_bounds.d_boxes,
+                mesh.edge_bounds.d_bids,
+                mesh.edge_bounds.d_cids);
+        e.detect(mesh.d_contact_mask.view(), mesh.node(), mesh.ee(), ees);
+        if(codim.pe.codimVs.size())
+            e.query(codim.points.aabbs,
+                    codim.points.bids,
+                    codim.points.cids,
+                    mesh.d_contact_mask.view(),
+                    mesh.node(),
+                    codim.pe,
+                    pes);
+    }
+    if(!mesh.triangles.empty())
+    {
+        t.build(mesh.triangle_bounds.d_boxes,
+                mesh.triangle_bounds.d_bids,
+                mesh.triangle_bounds.d_cids);
+        t.query(mesh.point_bounds.d_boxes,
+                mesh.point_bounds.d_bids,
+                mesh.point_bounds.d_cids,
+                mesh.d_contact_mask.view(),
+                mesh.node(),
+                mesh.pt(),
+                pts);
+    }
+    if(codim.pp.codimVs.size())
+    {
+        p.build(codim.points.aabbs, codim.points.bids, codim.points.cids);
+        p.query(mesh.point_bounds.d_boxes,
+                mesh.point_bounds.d_bids,
+                mesh.point_bounds.d_cids,
+                mesh.d_contact_mask.view(),
+                mesh.node(),
+                codim.pp,
+                pps);
+    }
+    return {read_pairs(pps, false),
+            read_pairs(pes, false),
+            read_pairs(pts, false),
+            read_pairs(ees, true)};
+}
+
+struct ReusedPrefix
+{
+    ct::DeviceBuffer<IndexT> bodies;
+    ct::DeviceBuffer<float4> positions, steps, ends;
+    TrajectoryPrefix         prefix;
+
+    TrajectoryPrefix* bind(Mesh& mesh, AuxiliaryQueries& auxiliary)
+    {
+        upload(bodies, mesh.bodies);
+        positions.resize_discard(mesh.positions.size());
+        steps.resize_discard(mesh.positions.size());
+        ends.resize_discard(mesh.positions.size());
+        prefix.accepted_step_endpoints      = true;
+        prefix.positions                    = mesh.d_positions.data();
+        prefix.displacements                = mesh.d_displacements.data();
+        prefix.d_hats                       = mesh.d_hats.data();
+        prefix.thicknesses                  = mesh.d_thicknesses.data();
+        prefix.v2bs                         = bodies.data();
+        prefix.contact_ids                  = mesh.d_contacts.data();
+        prefix.vertices                     = mesh.positions.size();
+        prefix.f32_positions                = positions.data();
+        prefix.f32_steps                    = steps.data();
+        prefix.f32_ends                     = ends.data();
+        const std::array<Bounds*, 4> bounds = {
+            &auxiliary.bounds, &mesh.point_bounds, &mesh.edge_bounds, &mesh.triangle_bounds};
+        for(SizeT f = 0; f < bounds.size(); ++f)
+        {
+            auto& family = prefix.family[f];
+            family.n     = bounds[f]->boxes.size();
+            family.aabbs = bounds[f]->d_boxes.data();
+            family.bids  = bounds[f]->d_bids.data();
+            family.cids  = bounds[f]->d_cids.data();
+            // The producer, rather than this stale output, must be validated.
+            bounds[f]->d_bids.fill(97);
+            bounds[f]->d_cids.fill(97);
+        }
+        prefix.family[0].vertices  = auxiliary.d_vertices.data();
+        prefix.family[1].vertices  = mesh.d_vertices.data();
+        prefix.family[2].edges     = mesh.d_edges.data();
+        prefix.family[3].triangles = mesh.d_triangles.data();
+        return &prefix;
+    }
+};
+}  // namespace test_single_ef_bvh
+
+TEST_CASE("Simplex query policy caches all four primitive families across frames",
+          "[cuda][single_ef_bvh][simplex_query_policy][simplex_codim_cache]")
+{
+    using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    const int  kind   = GENERATE(0, 1, 2);  // empty, pure codim, mixed
+    CAPTURE(method, kind);
+    Mesh mesh(kind == 2 ? 3 : 0);
+    if(kind)
+    {
+        mesh.add_codimensional_geometry();
+        const auto first          = mesh.positions.size() - 5;
+        mesh.positions[first + 1] = mesh.positions[first] + Vector3{0.02, 0, 0};
+    }
+    AuxiliaryQueries auxiliary(mesh, kind != 0);
+    SimplexBVHQuery  query;
+    query.method = method;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    auto                          run = [&]
+    {
+        mesh.send();
+        auxiliary.send(mesh);
+        auto       codim    = auxiliary.bind(mesh);
+        const auto expected = fresh_candidates(mesh, codim);
+        REQUIRE(query.detect(tree,
+                             mesh.pt(),
+                             mesh.ee(),
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees,
+                             true,
+                             {},
+                             nullptr,
+                             &codim));
+        const FourCandidates actual = {read_pairs(auxiliary.pps, false),
+                                       read_pairs(auxiliary.pes, false),
+                                       read_pairs(pts, false),
+                                       read_pairs(ees, true)};
+        CHECK(actual == expected);
+        if(query.method == SimplexBVHQuery::Method::InfoStackless || kind != 2)
+        {
+            CHECK(query.isolated_point_count() == 0);
+            CHECK(query.standalone_edge_count() == 0);
+        }
+        return actual;
+    };
+    const auto first = run();
+    CHECK(query.refresh_count() == 1);
+    if(kind)
+    {
+        REQUIRE_FALSE(first[0].empty());
+        REQUIRE_FALSE(first[1].empty());
+        CHECK(query.statistics().stored_pps >= first[0].size());
+        CHECK(query.statistics().stored_pes >= first[1].size());
+    }
+    CHECK(run() == first);
+    CHECK(query.refresh_count() == 1);
+    CHECK(query.statistics().cross_frame_reuses == 1);
+    auto refreshes = query.refresh_count();
+    query.method   = method == SimplexBVHQuery::Method::InfoStackless ?
+                         SimplexBVHQuery::Method::SingleEF :
+                         SimplexBVHQuery::Method::InfoStackless;
+    CHECK(run() == first);
+    CHECK(query.refresh_count() == ++refreshes);
+    query.method = method;
+    CHECK(run() == first);
+    CHECK(query.refresh_count() == ++refreshes);
+    if(kind == 2)
+    {
+        REQUIRE(query.detect(tree,
+                             mesh.pt(),
+                             mesh.ee(),
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees,
+                             true));
+        CHECK(read_pairs(pts, false) == first[2]);
+        CHECK(read_pairs(ees, true) == first[3]);
+        CHECK(query.statistics().stored_pps == 0);
+        CHECK(query.statistics().stored_pes == 0);
+        CHECK(query.refresh_count() == ++refreshes);
+        CHECK(run() == first);
+        CHECK(query.refresh_count() == ++refreshes);
+    }
+    if(kind)
+    {
+        std::reverse(auxiliary.vertices.begin(), auxiliary.vertices.end());
+        run();  // Same allocation/count, different PP/PE primitive ordinals.
+        CHECK(query.refresh_count() == ++refreshes);
+        mesh.positions[auxiliary.vertices.front()].z() += 1.0;
+        run();  // Only a codimensional point escapes its individual fat box.
+        CHECK(query.refresh_count() == ++refreshes);
+    }
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+TEST_CASE("Simplex query policy invalidates independently bound PP and PE metadata",
+          "[cuda][single_ef_bvh][simplex_query_policy][simplex_codim_metadata]")
+{
+    using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    const bool fused  = GENERATE(false, true);
+    CAPTURE(method, fused);
+    Mesh mesh(3);
+    mesh.add_codimensional_geometry();
+    const auto first          = mesh.positions.size() - 5;
+    mesh.positions[first + 1] = mesh.positions[first] + Vector3{0.02, 0, 0};
+    AuxiliaryQueries auxiliary(mesh, true);
+    SimplexBVHQuery  query;
+    query.method = method;
+    ReusedPrefix                  prefix;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    auto                          run = [&]
+    {
+        mesh.send();
+        auxiliary.send(mesh);
+        auto       codim    = auxiliary.bind(mesh);
+        const auto expected = fresh_candidates(mesh, codim);
+        REQUIRE(query.detect(tree,
+                             mesh.pt(),
+                             mesh.ee(),
+                             mesh.node(),
+                             mesh.point_bounds.view(),
+                             mesh.edge_bounds.view(),
+                             mesh.triangle_bounds.view(),
+                             pts,
+                             ees,
+                             true,
+                             {},
+                             fused ? prefix.bind(mesh, auxiliary) : nullptr,
+                             &codim));
+        const FourCandidates actual = {read_pairs(auxiliary.pps, false),
+                                       read_pairs(auxiliary.pes, false),
+                                       read_pairs(pts, false),
+                                       read_pairs(ees, true)};
+        CHECK(actual == expected);
+        return actual;
+    };
+    const auto initial = run();
+    REQUIRE_FALSE(initial[0].empty());
+    REQUIRE_FALSE(initial[1].empty());
+    run();
+    CHECK(query.refresh_count() == 1);
+    const auto* pp_ids          = auxiliary.pp_inputs.d_contacts.data();
+    const auto* pe_ids          = auxiliary.pe_inputs.d_contacts.data();
+    auto        refreshes       = query.refresh_count();
+    auxiliary.dimensions.back() = 1;
+    run();
+    CHECK(query.refresh_count() == ++refreshes);
+    for(auto* inputs : {&auxiliary.pp_inputs, &auxiliary.pe_inputs})
+    {
+        inputs->contacts.back() = 1;
+        run();
+        CHECK(query.refresh_count() == ++refreshes);
+        inputs->subscenes.back() = 1;
+        run();
+        CHECK(query.refresh_count() == ++refreshes);
+        inputs->self[0] = 0;
+        run();
+        CHECK(query.refresh_count() == ++refreshes);
+        inputs->contact_mask.back() = 0;
+        run();
+        CHECK(query.refresh_count() == ++refreshes);
+        inputs->subscene_mask.back() = 0;
+        run();
+        CHECK(query.refresh_count() == ++refreshes);
+    }
+    CHECK(auxiliary.pp_inputs.d_contacts.data() == pp_ids);
+    CHECK(auxiliary.pe_inputs.d_contacts.data() == pe_ids);
+    std::fill(auxiliary.pp_inputs.contact_mask.begin(),
+              auxiliary.pp_inputs.contact_mask.end(),
+              0);
+    CHECK(run()[0].empty());
+    CHECK(query.refresh_count() == ++refreshes);
+    std::fill(auxiliary.pp_inputs.contact_mask.begin(),
+              auxiliary.pp_inputs.contact_mask.end(),
+              1);
+    CHECK_FALSE(run()[0].empty());  // Re-enabled pairs must enter the cache again.
+    CHECK(query.refresh_count() == ++refreshes);
+    std::fill(auxiliary.pe_inputs.contact_mask.begin(),
+              auxiliary.pe_inputs.contact_mask.end(),
+              0);
+    CHECK(run()[1].empty());
+    CHECK(query.refresh_count() == ++refreshes);
+    std::fill(auxiliary.pe_inputs.contact_mask.begin(),
+              auxiliary.pe_inputs.contact_mask.end(),
+              1);
+    CHECK_FALSE(run()[1].empty());
+    CHECK(query.refresh_count() == ++refreshes);
+    auxiliary.dimensions.resize(300, 3);
+    run();  // Reuse the prefix after a snapshot-only shape change.
+    CHECK(query.refresh_count() == ++refreshes);
+    CHECK(cudaDeviceSynchronize() == cudaSuccess);
+}
+
+TEST_CASE("Both simplex query methods use accepted-step endpoint rounding",
+          "[cuda][single_ef_bvh][simplex_query_policy][step_rounding]")
+{
+    using namespace test_single_ef_bvh;
+    const auto method = GENERATE(SimplexBVHQuery::Method::InfoStackless,
+                                 SimplexBVHQuery::Method::SingleEF);
+    CAPTURE(method);
+    const Float delta = std::ldexp(Float{1}, -27);
+    const Float alpha = 1 + delta;
+    Mesh        mesh(1);
+    std::fill(mesh.positions.begin(), mesh.positions.end(), Vector3::Constant(-1));
+    std::fill(mesh.dhats.begin(), mesh.dhats.end(), 0.0);
+    const std::vector<Vector3> motion(mesh.positions.size(), Vector3::Constant(1 - delta));
+    mesh.send(motion, alpha);
+    AuxiliaryQueries auxiliary(mesh, false);
+    auxiliary.send(mesh);
+    ReusedPrefix prefix;
+    auto*        input = prefix.bind(mesh, auxiliary);
+    // The common owner must enable this contract for both methods. The generic
+    // prefix POD's default stays available to independent legacy callers.
+    CHECK_FALSE(TrajectoryPrefix{}.accepted_step_endpoints);
+    input->accepted_step_endpoints = false;
+    input->alpha                   = alpha;
+    SimplexBVHQuery query;
+    query.method = method;
+    InfoStacklessBVH              tree;
+    InfoStacklessBVH::QueryBuffer pts, ees;
+    auto                          pt = mesh.pt();
+    auto                          ee = mesh.ee();
+    pt.alpha = ee.alpha = alpha;
+    REQUIRE(query.detect(tree,
+                         pt,
+                         ee,
+                         mesh.node(),
+                         mesh.point_bounds.view(),
+                         mesh.edge_bounds.view(),
+                         mesh.triangle_bounds.view(),
+                         pts,
+                         ees,
+                         false,
+                         {},
+                         input));
+    CHECK(input->accepted_step_endpoints);
+    std::vector<float4> endpoints(mesh.positions.size());
+    prefix.ends.copy_to(endpoints.data());
+    for(const auto endpoint : endpoints)
+    {
+        CHECK(endpoint.x == 0.0f);
+        CHECK(endpoint.y == 0.0f);
+        CHECK(endpoint.z == 0.0f);
+    }
+    std::vector<AABB> boxes(mesh.vertices.size());
+    mesh.point_bounds.d_boxes.copy_to(boxes.data());
+    for(const auto& box : boxes)
+        CHECK((box.max().array() >= 0.0f).all());
     CHECK(cudaDeviceSynchronize() == cudaSuccess);
 }
